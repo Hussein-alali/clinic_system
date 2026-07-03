@@ -57,7 +57,8 @@
       "Bash([ -s \"C:\\\\\\\\Users\\\\\\\\bdalr\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\C--Users-bdalr-Desktop-clinksys\\\\\\\\31b85d16-190f-41b6-b6ef-f95d6294ead9\\\\\\\\tasks\\\\\\\\brysfs9lq.output\" ])",
       "Bash(grep -q \"passed ===\" \"C:\\\\\\\\Users\\\\\\\\bdalr\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\C--Users-bdalr-Desktop-clinksys\\\\\\\\31b85d16-190f-41b6-b6ef-f95d6294ead9\\\\\\\\tasks\\\\\\\\brysfs9lq.output\")",
       "Bash(cat \"C:\\\\\\\\Users\\\\\\\\bdalr\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\C--Users-bdalr-Desktop-clinksys\\\\\\\\31b85d16-190f-41b6-b6ef-f95d6294ead9\\\\\\\\tasks\\\\\\\\brysfs9lq.output\")",
-      "Bash(node *)"
+      "Bash(node *)",
+      "mcp__Claude_Code_Remote__send_later"
     ]
   }
 }
