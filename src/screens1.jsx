@@ -56,13 +56,13 @@ function Dashboard({ go }) {
 
   return (
     <Page>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:22}}>
+      <div className="page-head" style={{marginBottom:22}}>
         <div>
           <div className="crumb"><span>الرئيسية</span><I.Chevron size={11}/><span>لوحة التحكم</span></div>
           <div className="h1">صباح الخير، شريف <span style={{display:"inline-block",transform:"translateY(-2px)"}}>👋🏼</span></div>
           <div className="muted" style={{fontSize:13.5,marginTop:4}}>الأحد، 24 مايو — أداء فرع مصر الجديدة اليوم.</div>
         </div>
-        <div style={{display:"flex",gap:10,alignItems:"center"}}>
+        <div className="page-actions">
           <div className="seg">
             {["اليوم","هذا الأسبوع","الشهر","الربع"].map(r=>(
               <button key={r} className={range===r?"on":""} onClick={()=>setRange(r)}>{r}</button>
@@ -84,7 +84,7 @@ function Dashboard({ go }) {
       </div>
 
       {/* main two cols */}
-      <div style={{display:"grid",gridTemplateColumns:"1.5fr 1fr",gap:18,marginBottom:18}}>
+      <div className="rgrid c-lg" style={{"--gtc":"1.5fr 1fr",marginBottom:18}}>
         {/* Revenue */}
         <div className="card card-pad">
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18}}>
@@ -129,7 +129,7 @@ function Dashboard({ go }) {
       </div>
 
       {/* Bottom grid */}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:18}}>
+      <div className="rgrid half-lg c-sm" style={{"--gtc":"repeat(3,1fr)"}}>
         {/* Appointment trend */}
         <div className="card card-pad">
           <div className="h2" style={{marginBottom:4}}>حجم المواعيد</div>
@@ -282,13 +282,13 @@ function Patients({ go }) {
 
   return (
     <Page>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18}}>
+      <div className="page-head">
         <div>
           <div className="crumb"><span>الرئيسية</span><I.Chevron size={11}/><span>المرضى</span></div>
           <div className="h1">المرضى</div>
           <div className="muted" style={{fontSize:13.5,marginTop:4}}>{myPatients.length} سجل · {myPatients.filter(p=>p.status==="نشط").length} نشط</div>
         </div>
-        <div style={{display:"flex",gap:10}}>
+        <div className="page-actions">
           <input ref={csvRef} type="file" accept=".csv" style={{display:"none"}} onChange={e=>{
             if(e.target.files[0]){if(window.showToast)window.showToast(`تم استيراد ${e.target.files[0].name}`,"success");}
             e.target.value="";
@@ -321,6 +321,7 @@ function Patients({ go }) {
 
       {layout==="table" ? (
         <div className="card" style={{overflow:"hidden"}}>
+          <div className="tbl-scroll">
           <table className="tbl">
             <thead>
               <tr>
@@ -372,8 +373,9 @@ function Patients({ go }) {
               ))}
             </tbody>
           </table>
+          </div>
           {/* footer */}
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 18px",borderTop:"1px solid var(--ink-100)",background:"var(--ink-50)"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 18px",borderTop:"1px solid var(--ink-100)",background:"var(--ink-50)",flexWrap:"wrap",gap:10}}>
             <span className="muted" style={{fontSize:12}}>عرض 1–{filtered.length} من {myPatients.length}</span>
             <div style={{display:"flex",gap:6}}>
               <button className="btn btn-secondary" style={{padding:"5px 9px"}}><I.ArrowLeft size={12}/></button>
@@ -451,28 +453,28 @@ function PatientDetail({ p, onBack, go }) {
         <span>المرضى</span><I.Chevron size={11}/><span style={{color:"var(--ink-700)"}}>{p.name}</span>
       </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"1fr 340px",gap:24,marginTop:8}}>
+      <div className="rgrid c-lg" style={{"--gtc":"1fr 340px",gap:24,marginTop:8}}>
         <div>
           {/* hero */}
-          <div className="card" style={{padding:24,display:"flex",alignItems:"flex-start",gap:18,marginBottom:18,position:"relative",overflow:"hidden"}}>
+          <div className="card" style={{padding:24,display:"flex",alignItems:"flex-start",gap:18,marginBottom:18,position:"relative",overflow:"hidden",flexWrap:"wrap"}}>
             <div style={{position:"absolute",inset:0,background:"linear-gradient(120deg, var(--blue-100), transparent 60%)",opacity:.7,pointerEvents:"none"}}/>
             <div className="av lg" style={{width:64,height:64,fontSize:22,background:"var(--blue-500)",color:"#fff",position:"relative"}}>
               {p.name.split(" ").map(x=>x[0]).join("").slice(0,2)}
             </div>
-            <div style={{flex:1,position:"relative"}}>
-              <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{flex:1,position:"relative",minWidth:220}}>
+              <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
                 <h1 className="h1" style={{fontSize:24}}>{p.name}</h1>
                 <span className="badge b-green"><span className="dot"></span>{p.status}</span>
                 <span className="mono" style={{fontSize:11,color:"var(--ink-500)",border:"1px solid var(--ink-200)",padding:"2px 8px",borderRadius:6}}>{p.id}</span>
               </div>
-              <div style={{display:"flex",gap:18,marginTop:8,fontSize:12.5,color:"var(--ink-500)"}}>
+              <div style={{display:"flex",gap:"8px 18px",marginTop:8,fontSize:12.5,color:"var(--ink-500)",flexWrap:"wrap"}}>
                 <span style={{display:"flex",alignItems:"center",gap:6}}><I.User size={13}/> {p.age} y · {p.gender==="F"?"Female":"Male"}</span>
                 <span style={{display:"flex",alignItems:"center",gap:6}}><I.Phone size={13}/> {p.phone}</span>
                 <span style={{display:"flex",alignItems:"center",gap:6}}><I.MapPin size={13}/> مصر الجديدة، القاهرة</span>
                 <span style={{display:"flex",alignItems:"center",gap:6}}><I.Clock size={13}/> Reg. {p.registered}</span>
               </div>
             </div>
-            <div style={{display:"flex",gap:8,position:"relative"}}>
+            <div style={{display:"flex",gap:8,position:"relative",flexWrap:"wrap"}}>
               <button className="btn btn-secondary" onClick={()=>window.open(buildTelUrl(p.phone))}><I.Phone size={13}/> اتصال</button>
               <button className="btn btn-secondary" onClick={()=>window.open(buildWhatsAppUrl(p.phone, `مرحبًا+${p.name}`),"_blank")}><I.WhatsApp size={13}/> واتساب</button>
               <button className="btn btn-blue" onClick={()=>go("appointments")}><I.Plus size={13}/> حجز</button>
@@ -499,11 +501,11 @@ function PatientDetail({ p, onBack, go }) {
 
           {/* tabs */}
           <div className="card" style={{padding:0,overflow:"hidden"}}>
-            <div style={{display:"flex",borderBottom:"1px solid var(--ink-200)",padding:"0 18px",gap:4}}>
+            <div className="stepper" style={{borderBottom:"1px solid var(--ink-200)",padding:"0 18px",gap:4}}>
               {["نظرة عامة","السجل","خطة العلاج","الجلسات","الملفات","الفواتير"].map(t=>(
                 <button key={t} onClick={()=>setTab(t)} style={{
                   border:"none",background:"transparent",padding:"14px 12px",
-                  fontSize:13,fontWeight:500,
+                  fontSize:13,fontWeight:500,whiteSpace:"nowrap",flexShrink:0,
                   color: tab===t?"var(--ink-900)":"var(--ink-500)",
                   borderBottom: tab===t?"2px solid var(--blue-500)":"2px solid transparent",
                   cursor:"pointer", textTransform:"capitalize"
@@ -588,7 +590,7 @@ function InfoRow({ k, v }) {
 
 function PatientOverview({ p }) {
   return (
-    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18}}>
+    <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr"}}>
       <div>
         <div className="h3" style={{marginBottom:10}}>البيانات الشخصية</div>
         <InfoRow k="رقم الملف" v={<span className="mono">{p.id}</span>}/>
@@ -635,7 +637,7 @@ function PatientHistory() {
   ];
   return (
     <div>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,flexWrap:"wrap",gap:10}}>
         <div className="h3">السجل الزمني</div>
         <div className="seg">
           <button className="on">الكل</button>
@@ -669,7 +671,7 @@ function PatientTreatmentPlan() {
   return (
     <div>
       <div className="h3" style={{marginBottom:14}}>خطة العلاج النشطة</div>
-      <div style={{display:"grid",gridTemplateColumns:"1.4fr 1fr",gap:18}}>
+      <div className="rgrid c-lg" style={{"--gtc":"1.4fr 1fr"}}>
         <div>
           <div className="label">أهداف الخطة</div>
           <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:18}}>
@@ -764,7 +766,7 @@ function PatientFiles() {
       {/* Upload zone */}
       <div style={{
         border:"2px dashed var(--blue-300)",background:"var(--blue-50)",borderRadius:14,
-        padding:"22px 18px",display:"flex",alignItems:"center",gap:14,marginBottom:18
+        padding:"22px 18px",display:"flex",alignItems:"center",gap:14,marginBottom:18,flexWrap:"wrap"
       }}>
         <div style={{width:42,height:42,borderRadius:11,background:"#fff",border:"1px solid var(--blue-300)",display:"flex",alignItems:"center",justifyContent:"center",color:"var(--blue-700)"}}>
           <I.Upload size={18}/>
@@ -812,6 +814,7 @@ function PatientInvoices({ p }) {
         <div className="h3">سجل الفواتير</div>
         <button className="btn btn-blue" onClick={()=>setNewInvoiceOpen(true)}><I.Plus size={13}/> فاتورة جديدة</button>
       </div>
+      <div className="tbl-scroll">
       <table className="tbl">
         <thead><tr><th>فاتورة</th><th>التاريخ</th><th>المبلغ</th><th>مدفوع</th><th>الطريقة</th><th>الحالة</th><th></th></tr></thead>
         <tbody>
@@ -832,6 +835,7 @@ function PatientInvoices({ p }) {
           )) : <tr><td colSpan={7}><EmptyState icon={<I.FileText size={22}/>} title="لا توجد فواتير بعد" body="invoices appear here once you create them or a جلسة is checked out."/></td></tr>}
         </tbody>
       </table>
+      </div>
       {newInvoiceOpen && <NewInvoiceModal onClose={()=>setNewInvoiceOpen(false)}/>}
     </div>
   );
@@ -909,10 +913,10 @@ function PatientAdd({ onCancel, onSave }) {
       <div className="muted" style={{fontSize:13.5,marginBottom:24}}>خطوة {step+1} من {steps.length} — drafts autosave every 5 seconds.</div>
 
       {/* stepper */}
-      <div style={{display:"flex",alignItems:"center",gap:0,marginBottom:24}}>
+      <div className="stepper" style={{gap:0,marginBottom:24}}>
         {steps.map((s,i)=>(
           <React.Fragment key={i}>
-            <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
               <div style={{
                 width:28,height:28,borderRadius:999,
                 background:i<step?"var(--green)":i===step?"var(--blue-500)":"var(--ink-100)",
@@ -920,9 +924,9 @@ function PatientAdd({ onCancel, onSave }) {
                 display:"flex",alignItems:"center",justifyContent:"center",
                 fontSize:12,fontWeight:600
               }}>{i<step ? <I.Check size={14}/> : i+1}</div>
-              <span style={{fontSize:13,fontWeight:i===step?600:500,color:i===step?"var(--ink-900)":"var(--ink-500)"}}>{s}</span>
+              <span className="step-label" style={{fontSize:13,fontWeight:i===step?600:500,color:i===step?"var(--ink-900)":"var(--ink-500)"}}>{s}</span>
             </div>
-            {i<steps.length-1 && <div style={{flex:1,height:1,background:i<step?"var(--green)":"var(--ink-200)",margin:"0 16px"}}/>}
+            {i<steps.length-1 && <div style={{flex:1,minWidth:14,height:1,background:i<step?"var(--green)":"var(--ink-200)",margin:"0 16px"}}/>}
           </React.Fragment>
         ))}
       </div>
@@ -934,11 +938,11 @@ function PatientAdd({ onCancel, onSave }) {
         {step===3 && <FormReview form={form}/>}
       </div>
 
-      <div style={{display:"flex",justifyContent:"space-between",maxWidth:840}}>
+      <div style={{display:"flex",justifyContent:"space-between",maxWidth:840,flexWrap:"wrap",gap:10}}>
         <button className="btn btn-secondary" onClick={()=>step===0 ? onCancel() : setStep(step-1)}>
           <I.ArrowLeft size={13}/> {step===0?"إلغاء":"رجوع"}
         </button>
-        <div style={{display:"flex",gap:10}}>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
           <button className="btn btn-ghost" onClick={()=>{if(window.showToast)window.showToast("تم الحفظ كمسودة","success");onCancel&&onCancel();}}>حفظ كمسودة</button>
           {step<steps.length-1 ? (
             <button className="btn btn-blue" onClick={next}>متابعة <I.ArrowRight size={13}/></button>
@@ -964,7 +968,7 @@ function FormPersonal({ form, setField }) {
   return (
     <div>
       <div className="h3" style={{marginBottom:14}}>البيانات الشخصية</div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:14}}>
+      <div className="rgrid c-sm" style={{"--gtc":"repeat(2,1fr)",gap:14}}>
         <Field label="رقم الملف" required><input className="input" value={form.patient_id} onChange={e=>setField("patient_id", e.target.value)}/></Field>
         <Field label="تاريخ التسجيل"><input className="input" type="date" value={form.created_at} onChange={e=>setField("created_at", e.target.value)}/></Field>
         <Field label="الاسم الكامل" required span={2}><input className="input" placeholder="مثال: هناء مصطفى" value={form.name} onChange={e=>setField("name", e.target.value)}/></Field>
@@ -991,7 +995,7 @@ function FormMedical({ form, setField }) {
   return (
     <div>
       <div className="h3" style={{marginBottom:14}}>البيانات MedicalInformation</div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:14}}>
+      <div className="rgrid c-sm" style={{"--gtc":"repeat(2,1fr)",gap:14}}>
         <Field label="الشكوى الرئيسية" required span={2}><textarea className="input" style={{height:70,padding:10,resize:"vertical"}} placeholder="e.g. ألم أسفل الظهر يمتد إلى الساق اليسرى, worse in AM" value={form.complaint} onChange={e=>setField("complaint", e.target.value)}/></Field>
         <Field label="التشخيص" required span={2}><input className="input" placeholder="مثال: انزلاق غضروفي L4–L5" value={form.diagnosis} onChange={e=>setField("diagnosis", e.target.value)}/></Field>
         <Field label="أمراض مزمنة diseases"><input className="input" placeholder="النوع to add tags" value={form.chronic} onChange={e=>setField("chronic", e.target.value)}/></Field>
@@ -1093,13 +1097,13 @@ function Appointments({ go }) {
 
   return (
     <Page>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18}}>
+      <div className="page-head">
         <div>
           <div className="crumb"><span>الرئيسية</span><I.Chevron size={11}/><span>المواعيد</span></div>
           <div className="h1">{scoped ? "جدولي" : "المواعيد"}</div>
           <div className="muted" style={{fontSize:13.5,marginTop:4}}>{booked} اليوم · {free} متاح · {pending} بانتظار التأكيد</div>
         </div>
-        <div style={{display:"flex",gap:10}}>
+        <div className="page-actions">
           <div className="seg">
             {["التقويم","قائمة","حجز"].map(t=>(
               <button key={t} className={tab===t?"on":""} onClick={()=>setTab(t)} style={{textTransform:"capitalize"}}>
@@ -1143,9 +1147,9 @@ function CalendarView({ dateOffset, setDateOffset }) {
     <>
     <div className="card" style={{padding:0,overflow:"hidden"}}>
       {/* toolbar */}
-      <div style={{padding:"14px 18px",display:"flex",alignItems:"center",gap:12,borderBottom:"1px solid var(--ink-200)"}}>
+      <div style={{padding:"14px 18px",display:"flex",alignItems:"center",gap:12,borderBottom:"1px solid var(--ink-200)",flexWrap:"wrap"}}>
         <button className="btn btn-secondary btn-icon" onClick={()=>setDateOffset(Math.max(0,dateOffset-1))}><I.ArrowLeft size={14}/></button>
-        <div className="h3" style={{minWidth:220}}>{today}</div>
+        <div className="h3" style={{minWidth:"min(220px, 45vw)"}}>{today}</div>
         <button className="btn btn-secondary btn-icon" onClick={()=>setDateOffset(dateOffset+1)}><I.ArrowRight size={14}/></button>
         <button className="btn btn-ghost" style={{fontSize:12}} onClick={()=>setDateOffset(0)}>اليوم</button>
         <div className="seg" style={{marginLeft:12}}>
@@ -1158,7 +1162,8 @@ function CalendarView({ dateOffset, setDateOffset }) {
         <button className="btn btn-blue"><I.Plus size={14}/> حجز</button>
       </div>
 
-      <div style={{display:"grid",gridTemplateColumns:`80px repeat(${therapists.length},1fr)`,minHeight:660}}>
+      <div className="tbl-scroll">
+      <div style={{display:"grid",gridTemplateColumns:`80px repeat(${therapists.length},1fr)`,minHeight:660,minWidth:Math.max(320, 80 + therapists.length*160)}}>
         {/* header */}
         <div style={{borderRight:"1px solid var(--ink-200)",background:"var(--ink-50)"}}></div>
         {therapists.map((t,i)=>(
@@ -1274,6 +1279,7 @@ function CalendarView({ dateOffset, setDateOffset }) {
             })}
           </div>
         ))}
+      </div>
       </div>
     </div>
     {rescheduleModal && (
@@ -1498,7 +1504,7 @@ function AppointmentList() {
   const filtered = statusFilter==="الكل" ? all : all.filter(a => a.status === statusFilter);
   return (
     <div>
-      <div className="card" style={{padding:14,marginBottom:14,display:"flex",alignItems:"center",gap:10}}>
+      <div className="card" style={{padding:14,marginBottom:14,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
         <div style={{position:"relative",flex:"1 1 320px",maxWidth:380}}>
           <I.Search size={14} style={{position:"absolute",left:11,top:"50%",transform:"translateY(-50%)",color:"var(--ink-400)"}}/>
           <input className="input" placeholder="ابحث في المواعيد…" style={{paddingLeft:32}}/>
@@ -1510,6 +1516,7 @@ function AppointmentList() {
         </div>
       </div>
       <div className="card" style={{overflow:"hidden"}}>
+        <div className="tbl-scroll">
         <table className="tbl">
           <thead><tr><th>وقت</th><th>المريض</th><th>الطبيب</th><th>الأخصائي</th><th>الغرفة</th><th>النوع</th><th>الحالة</th><th></th></tr></thead>
           <tbody>
@@ -1557,6 +1564,7 @@ function AppointmentList() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   );
@@ -1573,10 +1581,10 @@ function BookingFlow({ onDone }) {
   return (
     <div>
       <div className="card" style={{padding:18,marginBottom:18,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-        <div style={{display:"flex",gap:0,alignItems:"center",flex:1}}>
+        <div className="stepper" style={{gap:0,flex:1}}>
           {steps.map((s,i)=>(
             <React.Fragment key={i}>
-              <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
                 <div style={{
                   width:24,height:24,borderRadius:999,
                   background:i+1<step?"var(--green)":i+1===step?"var(--blue-500)":"var(--ink-100)",
@@ -1584,9 +1592,9 @@ function BookingFlow({ onDone }) {
                   display:"flex",alignItems:"center",justifyContent:"center",
                   fontSize:11,fontWeight:600
                 }}>{i+1<step ? <I.Check size={12}/> : i+1}</div>
-                <span style={{fontSize:12.5,fontWeight:i+1===step?600:500,color:i+1===step?"var(--ink-900)":"var(--ink-500)"}}>{s}</span>
+                <span className="step-label" style={{fontSize:12.5,fontWeight:i+1===step?600:500,color:i+1===step?"var(--ink-900)":"var(--ink-500)"}}>{s}</span>
               </div>
-              {i<steps.length-1 && <div style={{flex:1,height:1,background:i+1<step?"var(--green)":"var(--ink-200)",margin:"0 14px"}}/>}
+              {i<steps.length-1 && <div style={{flex:1,minWidth:12,height:1,background:i+1<step?"var(--green)":"var(--ink-200)",margin:"0 14px"}}/>}
             </React.Fragment>
           ))}
         </div>
@@ -1625,7 +1633,7 @@ function BookingFlow({ onDone }) {
         {step===5 && <SlotPick onPick={v=>{ setPicks({...picks,slot:v}); next();}} picks={picks}/>}
       </div>
 
-      <div style={{display:"flex",justifyContent:"space-between"}}>
+      <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
         <button className="btn btn-secondary" disabled={step===1} onClick={()=>setStep(step-1)} style={{opacity:step===1?.5:1}}>
           <I.ArrowLeft size={13}/> رجوع
         </button>
@@ -1684,7 +1692,7 @@ function DatePick({ onPick }) {
   return (
     <div>
       <div className="h2" style={{marginBottom:18}}>اختر تاريخًا</div>
-      <div style={{display:"grid",gridTemplateColumns:"1.4fr 1fr",gap:24}}>
+      <div className="rgrid c-lg" style={{"--gtc":"1.4fr 1fr",gap:24}}>
         <div className="card" style={{padding:18,boxShadow:"none"}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
             <button className="btn btn-ghost btn-icon"><I.ArrowLeft size={14}/></button>

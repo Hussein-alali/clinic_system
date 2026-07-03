@@ -186,7 +186,7 @@ function AddBranchModal({ onClose, editing }) {
         <input className="input" placeholder="فرع المعادي" value={form.name} onChange={e=>set("name", e.target.value)}/>
       </Field>
       <div style={{height:12}}/>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+      <div className="rgrid half-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
         <Field label="عدد الأخصائيين">
           <input className="input" type="number" min="0" placeholder="4" value={form.therapists} onChange={e=>set("therapists", e.target.value)}/>
         </Field>
@@ -352,7 +352,7 @@ function TopBar({ title, crumb, right, onSearch, theme, setTheme }) {
         </div>
       </div>
 
-      <div style={{position:"relative",width:320}}>
+      <div className="search-wrap" style={{position:"relative",width:"min(320px, 34vw)"}}>
         <I.Search size={15} style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",color:"var(--ink-400)"}}/>
         <input className="input" placeholder="ابحث عن مرضى، مواعيد، فواتير…"
           style={{paddingLeft:34,height:36,background:"var(--ink-50)",border:"1px solid transparent"}}
@@ -444,22 +444,43 @@ function Page({ children }) {
 // { label, icon?, onClick, danger? }. Closes on outside click and Escape.
 function RowMenu({ items = [], size = 13, stopRowClick = true }) {
   const [open, setOpen] = React.useState(false);
+  // Fixed positioning (computed from the trigger) lets the popover escape
+  // horizontally-scrolling table wrappers on small screens.
+  const [pos, setPos] = React.useState({ top: 0, left: 0 });
   const ref = React.useRef(null);
   React.useEffect(() => {
     if (!open) return;
     const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
     const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    const onAway = () => setOpen(false);
     document.addEventListener("mousedown", onDoc);
     document.addEventListener("keydown", onKey);
-    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
+    window.addEventListener("scroll", onAway, true);
+    window.addEventListener("resize", onAway);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onAway, true);
+      window.removeEventListener("resize", onAway);
+    };
   }, [open]);
+  const MENU_W = 180;
   return (
     <div ref={ref} style={{position:"relative",display:"inline-block"}}>
-      <button className="btn btn-ghost btn-icon" title="المزيد" onClick={(e)=>{ if (stopRowClick) e.stopPropagation(); setOpen(o=>!o); }}>
+      <button className="btn btn-ghost btn-icon" title="المزيد" onClick={(e)=>{
+        if (stopRowClick) e.stopPropagation();
+        if (!open) {
+          const r = e.currentTarget.getBoundingClientRect();
+          const left = Math.max(8, Math.min(r.right - MENU_W, window.innerWidth - MENU_W - 8));
+          const top = Math.min(r.bottom + 4, window.innerHeight - 60);
+          setPos({ top, left });
+        }
+        setOpen(o=>!o);
+      }}>
         <I.More size={size}/>
       </button>
       {open && (
-        <div style={{position:"absolute",top:"calc(100% + 4px)",insetInlineEnd:0,minWidth:180,background:"#fff",border:"1px solid var(--ink-200)",borderRadius:10,boxShadow:"var(--shadow-md)",zIndex:20,padding:6}}>
+        <div className="row-menu-pop" style={{position:"fixed",top:pos.top,left:pos.left,minWidth:MENU_W,background:"#fff",border:"1px solid var(--ink-200)",borderRadius:10,boxShadow:"var(--shadow-md)",zIndex:120,padding:6}}>
           {items.map((it, i) => (
             <button key={i} onClick={(e)=>{ e.stopPropagation(); setOpen(false); if (it.onClick) it.onClick(); }}
               style={{display:"flex",alignItems:"center",gap:8,width:"100%",padding:"7px 10px",fontSize:13,textAlign:"start",background:"transparent",border:"none",borderRadius:6,cursor:"pointer",color:it.danger?"var(--red)":"var(--ink-700)",fontFamily:"inherit"}}
@@ -610,15 +631,12 @@ function AuthScreen({ onLogin, onBookAsGuest }) {
   const roles = ["مدير","موظف استقبال","طبيب","الأخصائي"];
 
   return (
-    <div style={{
-      minHeight:"100vh",display:"grid",gridTemplateColumns:"1fr 1.05fr",
-      background:"var(--ink-50)"
-    }}>
+    <div className="auth-grid">
       {/* Left — brand panel */}
       <div style={{
         background:"linear-gradient(155deg, #7BBDE8 0%, #BDD8E9 60%, #E8F1F7 100%)",
-        position:"relative",padding:"40px 48px",overflow:"hidden",
-        display:"flex",flexDirection:"column",justifyContent:"space-between",
+        position:"relative",padding:"clamp(24px, 4vw, 40px) clamp(20px, 5vw, 48px)",overflow:"hidden",
+        display:"flex",flexDirection:"column",justifyContent:"space-between",gap:28,
         color:"#fff"
       }}>
         {/* decorative blobs */}
@@ -642,7 +660,7 @@ function AuthScreen({ onLogin, onBookAsGuest }) {
         </div>
 
         <div style={{position:"relative",maxWidth:440}}>
-          <div className="serif" style={{fontSize:46,lineHeight:1.05,color:"#0F1E2B",letterSpacing:"-.01em",marginBottom:18}}>
+          <div className="serif" style={{fontSize:"clamp(30px, 5vw, 46px)",lineHeight:1.05,color:"#0F1E2B",letterSpacing:"-.01em",marginBottom:18}}>
             العيادة التي <em>تتحرك</em> مع مرضاك.
           </div>
           <p style={{fontSize:14.5,color:"#1E4A6E",lineHeight:1.55,opacity:.9}}>
@@ -671,7 +689,7 @@ function AuthScreen({ onLogin, onBookAsGuest }) {
       </div>
 
       {/* Right — form */}
-      <div style={{display:"flex",alignItems:"center",justifyContent:"center",padding:"40px"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"center",padding:"clamp(20px, 5vw, 40px)"}}>
         <div style={{width:"100%",maxWidth:420, animation: shake?"shake .35s":""}}>
           {mode==="login" && (
             <>
@@ -682,7 +700,7 @@ function AuthScreen({ onLogin, onBookAsGuest }) {
 
               {/* الدور picker */}
               <div className="label">سجّل الدخول بصفة</div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,marginBottom:18}}>
+              <div className="rgrid half-sm" style={{"--gtc":"repeat(4,1fr)",gap:6,marginBottom:18}}>
                 {roles.map(r=>(
                   <button key={r} type="button"
                     onClick={()=>handleRolePick(r)}
@@ -875,7 +893,7 @@ function CommandPalette({ open, onClose, onNav }) {
   }
 
   return (
-    <div className="modal-backdrop" style={{ alignItems: "flex-start", paddingTop: 90 }} onClick={onClose}>
+    <div className="modal-backdrop" style={{ alignItems: "flex-start", paddingTop: "min(90px, 10vh)" }} onClick={onClose}>
       <div className="modal" style={{ maxWidth: 640, width: "calc(100% - 40px)", padding: 0, overflow: "hidden" }} onClick={e => e.stopPropagation()}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px", borderBottom: "1px solid var(--ink-100)" }}>
           <I.Search size={16} style={{ color: "var(--ink-400)" }} />

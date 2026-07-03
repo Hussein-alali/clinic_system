@@ -173,7 +173,11 @@ function useContainerWidth(initialWidth) {
   const [w, setW] = React.useState(initialWidth);
   React.useEffect(() => {
     if (!ref.current) return;
-    const ro = new ResizeObserver(() => setW(ref.current.clientWidth));
+    const measure = () => { if (ref.current) setW(ref.current.clientWidth); };
+    // Measure synchronously on mount — the observer's initial notification
+    // can be missed, leaving the chart at its fallback width.
+    measure();
+    const ro = new ResizeObserver(measure);
     ro.observe(ref.current);
     return () => ro.disconnect();
   }, []);
@@ -206,7 +210,7 @@ function AreaChart({ data, height = 160, color = "#7BBDE8", fill = "rgba(123,189
   const ticks = Array.from({length:Y_TICKS+1},(_,i)=> min + (max-min)*(i/Y_TICKS));
   return (
     <div ref={ref} style={{width:"100%"}}>
-      <svg width={w} height={height}>
+      <svg width={w} height={height} style={{maxWidth:"100%",display:"block"}}>
         {showGrid && ticks.map((t,i) => {
           const y = padT + innerH - ((t-min)/(max-min))*innerH;
           return (
@@ -240,7 +244,7 @@ function BarChart({ data, height = 160, color = "#7BBDE8", showAxis = true, form
   const ticks = Array.from({length:Y_TICKS+1},(_,i)=> (max)*(i/Y_TICKS));
   return (
     <div ref={ref} style={{width:"100%"}}>
-      <svg width={w} height={height}>
+      <svg width={w} height={height} style={{maxWidth:"100%",display:"block"}}>
         {ticks.map((t,i) => {
           const y = padT + innerH - (t/max)*innerH;
           return (
@@ -281,8 +285,8 @@ function DonutChart({ data, size=160, thickness=22, centerLabel, centerValue }) 
     return { d:`M ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2}`, color: d.color, label:d.label, v:d.v };
   });
   return (
-    <div style={{display:"flex",gap:18,alignItems:"center"}}>
-      <svg width={size} height={size} style={{flexShrink:0}}>
+    <div style={{display:"flex",gap:18,alignItems:"center",flexWrap:"wrap"}}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{flexShrink:1,maxWidth:"100%"}}>
         <circle cx={cx} cy={cy} r={r} fill="none" stroke="#EEF2F6" strokeWidth={thickness} />
         {arcs.map((a,i)=>(
           <path key={i} d={a.d} fill="none" stroke={a.color} strokeWidth={thickness} strokeLinecap="butt" />
@@ -312,7 +316,7 @@ function Sparkline({ data, width=120, height=36, color="#7BBDE8" }) {
   const stepX = width / (data.length-1 || 1);
   const pts = data.map((v,i)=>`${i*stepX},${height - ((v-min)/((max-min)||1))*height}`);
   return (
-    <svg width={width} height={height} style={{display:"block"}}>
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} style={{display:"block",maxWidth:"100%"}}>
       <polyline points={pts.join(" ")} fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
     </svg>
   );

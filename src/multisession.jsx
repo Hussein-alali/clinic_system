@@ -138,7 +138,7 @@ function ConcurrentSessions(){
     <div>
       {/* Concurrency banner */}
       <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 16px",marginBottom:16,
-        background:"var(--blue-50)",border:"1px solid var(--blue-100)",borderRadius:14}}>
+        background:"var(--blue-50)",border:"1px solid var(--blue-100)",borderRadius:14,flexWrap:"wrap"}}>
         <span style={{position:"relative",width:10,height:10,flexShrink:0}}>
           <span className="live-pulse" style={{position:"absolute",inset:0,borderRadius:"50%",background:"var(--green)"}}/>
         </span>
@@ -269,10 +269,10 @@ function SessionDetail({ s, elapsed, update, onEnd, onTogglePause }){
   }
 
   return (
-    <div style={{display:"grid",gridTemplateColumns:"1.4fr 1fr",gap:18}}>
+    <div className="rgrid c-lg" style={{"--gtc":"1.4fr 1fr"}}>
       <div style={{display:"flex",flexDirection:"column",gap:18}}>
         {/* header */}
-        <div className="card card-pad" style={{display:"flex",alignItems:"center",gap:18,position:"relative",overflow:"hidden"}}>
+        <div className="card card-pad" style={{display:"flex",alignItems:"center",gap:18,position:"relative",overflow:"hidden",flexWrap:"wrap"}}>
           <div style={{position:"absolute",top:0,left:0,right:0,height:3,background:"linear-gradient(90deg, var(--blue-500), var(--blue-300))"}}/>
           <div className="av lg" style={{background:"var(--blue-500)",color:"#fff",width:54,height:54,fontSize:18}}>{initials2(p.name)}</div>
           <div style={{flex:1,minWidth:0}}>
@@ -298,14 +298,14 @@ function SessionDetail({ s, elapsed, update, onEnd, onTogglePause }){
         <div className="card card-pad">
           <div className="h3" style={{marginBottom:14}}>تسجيل الألم والمزاج</div>
           <div className="label">مستوى الألم (٠ – ١٠)</div>
-          <div style={{display:"flex",gap:5,marginBottom:6}}>
+          <div style={{display:"flex",gap:5,marginBottom:6,flexWrap:"wrap"}}>
             {Array.from({length:11},(_,i)=>i).map(n=>{
               const color = n<=3?"#3FA984":n<=6?"#D49044":"#D8665A";
               const selN = s.pain===n;
               return (
                 <button key={n} onClick={()=>update({pain:n})}
                   className="mono"
-                  style={{flex:1,height:44,borderRadius:8,border:`1px solid ${selN?color:"var(--ink-200)"}`,
+                  style={{flex:"1 0 36px",height:44,borderRadius:8,border:`1px solid ${selN?color:"var(--ink-200)"}`,
                     background:selN?color:"#fff",color:selN?"#fff":"var(--ink-700)",
                     fontWeight:600,fontSize:14,cursor:"pointer",transition:"all .12s"}}>{n}</button>
               );
@@ -316,12 +316,12 @@ function SessionDetail({ s, elapsed, update, onEnd, onTogglePause }){
           </div>
 
           <div className="label">المزاج اليوم</div>
-          <div style={{display:"flex",gap:8}}>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
             {moods.map((m,i)=>{
               const on = s.mood===i;
               return (
                 <button key={i} className="btn btn-secondary" onClick={()=>update({mood:i})}
-                  style={{flex:1,justifyContent:"center",fontSize:12,borderColor:on?m.c:"var(--ink-200)",
+                  style={{flex:"1 0 30%",justifyContent:"center",fontSize:12,borderColor:on?m.c:"var(--ink-200)",
                     background:on?`${m.c}22`:"#fff",color:on?m.c:"var(--ink-700)",fontWeight:on?600:500}}>{m.l}</button>
               );
             })}
@@ -339,9 +339,9 @@ function SessionDetail({ s, elapsed, update, onEnd, onTogglePause }){
           </div>
           <textarea className="input" style={{height:180,padding:14,resize:"vertical",fontSize:13.5,lineHeight:1.55}}
             value={s.notes} onChange={e=>update({notes:e.target.value})} placeholder="اكتب ملاحظات الجلسة لهذا المريض…"/>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:10}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:10,flexWrap:"wrap",gap:8}}>
             <div className="muted" style={{fontSize:11.5}}>محفوظ تلقائيًا لجلسة {p.name?.split(" ")[0]}</div>
-            <div style={{display:"flex",gap:6}}>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
               {["علاج يدوي","تسخين","تحفيز كهربي","تقوية"].map(t=>(
                 <span key={t} className="pill tag-blue">{t}</span>
               ))}

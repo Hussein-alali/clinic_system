@@ -37,13 +37,13 @@ function Treatments({ go }) {
 
   return (
     <Page>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18}}>
+      <div className="page-head">
         <div>
           <div className="crumb"><span>الرئيسية</span><I.Chevron size={11}/><span>خطط العلاج</span></div>
           <div className="h1">خطط العلاج</div>
           <div className="muted" style={{fontSize:13.5,marginTop:4}}>{plans.filter(p=>p.status==="نشط").length} نشط · {plans.filter(p=>p.status==="مسودة").length} مسودات · متوسط التقدم 42%</div>
         </div>
-        <div style={{display:"flex",gap:10}}>
+        <div className="page-actions">
           <button className="btn btn-secondary" onClick={()=>setTemplatesOpen(true)}><I.FileText size={14}/> القوالب</button>
           <button className="btn btn-blue" onClick={()=>setView("create")}><I.Plus size={14}/> خطة جديدة</button>
         </div>
@@ -56,6 +56,7 @@ function Treatments({ go }) {
       </div>
 
       <div className="card" style={{overflow:"hidden"}}>
+        <div className="tbl-scroll">
         <table className="tbl">
           <thead><tr><th>الخطة</th><th>المريض</th><th>التشخيص</th><th>الأخصائي</th><th>التقدّم</th><th>الجلسات</th><th>الحالة</th><th>آخر تحديث</th></tr></thead>
           <tbody>
@@ -84,6 +85,7 @@ function Treatments({ go }) {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
       {templatesOpen && (
         <Modal title="قوالب خطط العلاج" onClose={()=>setTemplatesOpen(false)}>
@@ -103,12 +105,12 @@ function TreatmentPlanDetail({ plan, onBack, onEdit }) {
   return (
     <Page>
       <div className="crumb" style={{cursor:"pointer"}} onClick={onBack}><span>خطط العلاج</span><I.Chevron size={11}/><span style={{color:"var(--ink-700)"}}>{plan.id}</span></div>
-      <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:18}}>
+      <div className="page-head" style={{alignItems:"flex-start"}}>
         <div>
           <div className="h1">{plan.diag}</div>
           <div className="muted" style={{fontSize:13.5,marginTop:4}}>المريض: {plan.patient} · الأخصائي: {plan.therapist} · Created Apr 30, 2026</div>
         </div>
-        <div style={{display:"flex",gap:10}}>
+        <div className="page-actions">
           <button className="btn btn-secondary" onClick={()=>window.print()}><I.Print size={13}/> طباعة</button>
           <button className="btn btn-blue" onClick={()=>onEdit&&onEdit()}><I.Edit size={13}/> تعديل الخطة</button>
         </div>
@@ -126,19 +128,19 @@ function TreatmentPlanCreate({ onCancel, onSave, template }) {
   return (
     <Page>
       <div className="crumb" style={{cursor:"pointer"}} onClick={onCancel}><span>خطط العلاج</span><I.Chevron size={11}/><span style={{color:"var(--ink-700)"}}>خطة جديدة</span></div>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18}}>
+      <div className="page-head">
         <div className="h1">إنشاء خطة علاج{template ? ` — ${template}` : ""}</div>
-        <div style={{display:"flex",gap:10}}>
+        <div className="page-actions">
           <button className="btn btn-ghost" onClick={onCancel}>إلغاء</button>
           <button className="btn btn-secondary" onClick={()=>{if(window.showToast)window.showToast("تم الحفظ كمسودة","success");onCancel();}}>حفظ كمسودة</button>
           <button className="btn btn-blue" onClick={onSave}><I.Check size={13}/> نشر الخطة</button>
         </div>
       </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"1.4fr 1fr",gap:18}}>
+      <div className="rgrid c-lg" style={{"--gtc":"1.4fr 1fr"}}>
         <div className="card card-pad">
           <div className="h3" style={{marginBottom:14}}>الخطة details</div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:14}}>
+          <div className="rgrid c-sm" style={{"--gtc":"repeat(2,1fr)",gap:14}}>
             <Field label="مريض" required><select className="input"><option>آية كريم (P-10243)</option><option>هناء مصطفى</option></select></Field>
             <Field label="الأخصائي المسؤول" required><select className="input"><option>كريم صالح</option><option>لينا فاروق</option></select></Field>
             <Field label="التشخيص" required span={2}><input className="input" value={diag} onChange={e=>setDiag(e.target.value)}/></Field>
@@ -189,7 +191,7 @@ function Sessions({ go }) {
 
   return (
     <Page>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18}}>
+      <div className="page-head">
         <div>
           <div className="crumb"><span>الرئيسية</span><I.Chevron size={11}/><span>جلسات العلاج</span></div>
           <div className="h1">جلسات العلاج</div>
@@ -219,18 +221,18 @@ function SessionCurrent({ p }) {
   ];
 
   return (
-    <div style={{display:"grid",gridTemplateColumns:"1.4fr 1fr",gap:18}}>
+    <div className="rgrid c-lg" style={{"--gtc":"1.4fr 1fr"}}>
       <div style={{display:"flex",flexDirection:"column",gap:18}}>
         {/* جلسة header */}
-        <div className="card card-pad" style={{display:"flex",alignItems:"center",gap:18,position:"relative",overflow:"hidden"}}>
+        <div className="card card-pad" style={{display:"flex",alignItems:"center",gap:18,position:"relative",overflow:"hidden",flexWrap:"wrap"}}>
           <div style={{position:"absolute",top:0,left:0,right:0,height:3,background:"linear-gradient(90deg, var(--blue-500), var(--blue-300))"}}/>
           <div className="av lg" style={{background:"var(--blue-500)",color:"#fff",width:54,height:54,fontSize:18}}>{p.name.split(" ").map(x=>x[0]).join("").slice(0,2)}</div>
-          <div style={{flex:1}}>
-            <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <div style={{flex:1,minWidth:200}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
               <div className="h2">{p.name}</div>
               <span className="badge b-violet"><span className="dot"></span>الجلسة #7 قيد التنفيذ</span>
             </div>
-            <div style={{display:"flex",gap:18,marginTop:6,fontSize:12.5,color:"var(--ink-500)"}}>
+            <div style={{display:"flex",gap:"4px 18px",marginTop:6,fontSize:12.5,color:"var(--ink-500)",flexWrap:"wrap"}}>
               <span>{p.diag}</span><span>·</span>
               <span>الخطة TP-2231</span><span>·</span>
               <span>بدأت 10:00 ص · مضى 32 دقيقة</span>
@@ -243,14 +245,14 @@ function SessionCurrent({ p }) {
         <div className="card card-pad">
           <div className="h3" style={{marginBottom:14}}>تسجيل الألم والمزاج</div>
           <div className="label">مستوى الألم (٠ – ١٠)</div>
-          <div style={{display:"flex",gap:5,marginBottom:6}}>
+          <div style={{display:"flex",gap:5,marginBottom:6,flexWrap:"wrap"}}>
             {Array.from({length:11},(_,i)=>i).map(n=>{
               const color = n<=3?"#3FA984":n<=6?"#D49044":"#D8665A";
               const sel = pain===n;
               return (
                 <button key={n} onClick={()=>setPain(n)}
                   style={{
-                    flex:1, height:44, borderRadius:8,
+                    flex:"1 0 36px", height:44, borderRadius:8,
                     border:`1px solid ${sel?color:"var(--ink-200)"}`,
                     background: sel?color:"#fff",
                     color: sel?"#fff":"var(--ink-700)",
@@ -265,7 +267,7 @@ function SessionCurrent({ p }) {
           </div>
 
           <div className="label">المزاج اليوم</div>
-          <div style={{display:"flex",gap:8}}>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
             {[
               {l:"أسوأ بكثير",c:"#D8665A"},
               {l:"أسوأ",c:"#D49044"},
@@ -273,7 +275,7 @@ function SessionCurrent({ p }) {
               {l:"أفضل",c:"#7BBDE8"},
               {l:"أفضل بكثير",c:"#3FA984"},
             ].map((m,i)=>(
-              <button key={i} className="btn btn-secondary" onClick={()=>setMood(i)} style={{flex:1,justifyContent:"center",fontSize:12,borderColor:i===mood?m.c:"var(--ink-200)",background:i===mood?`${m.c}22`:"#fff",color:i===mood?m.c:"var(--ink-700)",fontWeight:i===mood?600:500}}>{m.l}</button>
+              <button key={i} className="btn btn-secondary" onClick={()=>setMood(i)} style={{flex:"1 0 30%",justifyContent:"center",fontSize:12,borderColor:i===mood?m.c:"var(--ink-200)",background:i===mood?`${m.c}22`:"#fff",color:i===mood?m.c:"var(--ink-700)",fontWeight:i===mood?600:500}}>{m.l}</button>
             ))}
           </div>
         </div>
@@ -293,9 +295,9 @@ function SessionCurrent({ p }) {
             </div>
           </div>
           <textarea className="input" style={{height:200,padding:14,resize:"vertical",fontSize:13.5,lineHeight:1.55}} value={notes} onChange={e=>setNotes(e.target.value)}/>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:10}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:10,flexWrap:"wrap",gap:8}}>
             <div className="muted" style={{fontSize:11.5}}>محفوظ تلقائيًا منذ 12 ث</div>
-            <div style={{display:"flex",gap:6}}>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
               {["علاج يدوي","تسخين","تحفيز كهربي","تقوية"].map(t=>(
                 <span key={t} className="pill tag-blue">{t}</span>
               ))}
@@ -411,13 +413,13 @@ function PainTrendChart() {
 function SessionHistoryList() {
   return (
     <div>
-      <div className="card" style={{padding:14,marginBottom:14,display:"flex",alignItems:"center",gap:10}}>
+      <div className="card" style={{padding:14,marginBottom:14,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
         <div style={{position:"relative",flex:"1 1 320px",maxWidth:380}}>
           <I.Search size={14} style={{position:"absolute",left:11,top:"50%",transform:"translateY(-50%)",color:"var(--ink-400)"}}/>
           <input className="input" placeholder="ابحث بالمريض أو الملاحظة…" style={{paddingLeft:32}}/>
         </div>
-        <select className="input" style={{width:180}}><option>كل الأخصائيين</option><option>كريم صالح</option></select>
-        <select className="input" style={{width:180}}><option>آخر 30 يوم</option><option>هذا الأسبوع</option></select>
+        <select className="input" style={{width:"auto",minWidth:150,flex:"0 1 180px"}}><option>كل الأخصائيين</option><option>كريم صالح</option></select>
+        <select className="input" style={{width:"auto",minWidth:150,flex:"0 1 180px"}}><option>آخر 30 يوم</option><option>هذا الأسبوع</option></select>
       </div>
 
       <SessionTimeline/>
@@ -430,9 +432,9 @@ function SessionTimeline({ mini }) {
   return (
     <div className="card" style={{padding:0,overflow:"hidden"}}>
       {DATA.sessions.map((s,i)=>(
-        <div key={i} style={{
+        <div key={i} className="rgrid sess-row" style={{
           padding:"16px 22px", borderBottom:i<DATA.sessions.length-1?"1px solid var(--ink-100)":"none",
-          display:"grid", gridTemplateColumns:"56px 1fr 110px 130px", gap:16, alignItems:"center"
+          "--gtc":"56px 1fr 110px 130px", gap:16, alignItems:"center"
         }}>
           <div style={{textAlign:"center"}}>
             <div className="mono" style={{fontSize:20,fontWeight:600,color:"var(--blue-700)"}}>#{s.session}</div>
@@ -502,13 +504,13 @@ function Payments({ go }) {
 
   return (
     <Page>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18}}>
+      <div className="page-head">
         <div>
           <div className="crumb"><span>الرئيسية</span><I.Chevron size={11}/><span>المدفوعات والفواتير</span></div>
           <div className="h1">المدفوعات والفواتير</div>
           <div className="muted" style={{fontSize:13.5,marginTop:4}}>نقدي، بطاقة، إنستاباي، فودافون كاش، تحويل بنكي</div>
         </div>
-        <div style={{display:"flex",gap:10}}>
+        <div className="page-actions">
           <button className="btn btn-secondary" onClick={()=>{
             const rows=["الفاتورة,المريض,التاريخ,المبلغ,مدفوع,الطريقة,الحالة",...scoped.map(p=>`${p.id},${p.patient},${p.date},${p.amount},${p.paid},${p.method},${p.status}`)];
             downloadCsv(rows, "payments.csv");
@@ -549,6 +551,7 @@ function Payments({ go }) {
           </div>
 
           <div className="card" style={{overflow:"hidden"}}>
+            <div className="tbl-scroll">
             <table className="tbl">
               <thead><tr>
                 <th>فاتورة</th><th>المريض</th><th>التاريخ</th><th>المبلغ</th><th>مدفوع</th><th>الطريقة</th><th>الحالة</th><th></th>
@@ -615,6 +618,7 @@ function Payments({ go }) {
                 })}
               </tbody>
             </table>
+            </div>
           </div>
         </>
       )}
@@ -638,7 +642,7 @@ function PaymentMethodsView() {
     { label:"تحويل بنكي", v:8,  color:"#3FA984", revenue:"32,800" },
   ];
   return (
-    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18}}>
+    <div className="rgrid c-lg" style={{"--gtc":"1fr 1fr"}}>
       <div className="card card-pad">
         <div className="h2" style={{marginBottom:18}}>الطريقة mix · this month</div>
         <DonutChart data={data} size={200} centerLabel="ج.م محصلة" centerValue="410K"/>
@@ -678,9 +682,9 @@ function InvoiceModal({ invoice, onClose }) {
           window.open(`https://wa.me/201002341180?text=فاتورة+${invoice.id}+بمبلغ+${invoice.amount}+جنيه+مصري`,"_blank");
         }}><I.Send size={13}/> Send via واتساب</button>
       </>}>
-      <div style={{padding:24,background:"var(--ink-50)",border:"1px solid var(--ink-200)",borderRadius:12}}>
+      <div style={{padding:"clamp(14px, 3vw, 24px)",background:"var(--ink-50)",border:"1px solid var(--ink-200)",borderRadius:12}}>
         {/* header */}
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24,flexWrap:"wrap",gap:14}}>
           <div>
             <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
               <I.Logo size={26}/>
@@ -701,7 +705,7 @@ function InvoiceModal({ invoice, onClose }) {
         </div>
 
         {/* bill to */}
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18,marginBottom:24}}>
+        <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",marginBottom:24}}>
           <div>
             <div className="muted" style={{fontSize:11,textTransform:"uppercase",letterSpacing:".05em",marginBottom:4}}>فاتورة لـ</div>
             <div style={{fontWeight:600}}>{invoice.patient}</div>
@@ -715,8 +719,8 @@ function InvoiceModal({ invoice, onClose }) {
         </div>
 
         {/* line items */}
-        <div style={{background:"#fff",borderRadius:10,border:"1px solid var(--ink-200)",overflow:"hidden",marginBottom:16}}>
-          <table className="tbl" style={{fontSize:12.5}}>
+        <div className="tbl-scroll" style={{background:"#fff",borderRadius:10,border:"1px solid var(--ink-200)",marginBottom:16}}>
+          <table className="tbl" style={{fontSize:12.5,minWidth:420}}>
             <thead><tr><th>البند</th><th style={{textAlign:"right"}}>الكمية</th><th style={{textAlign:"right"}}>السعر</th><th style={{textAlign:"right"}}>الإجمالي</th></tr></thead>
             <tbody>
               <tr><td>الأساسية 10 — باقة علاج يدوي</td><td style={{textAlign:"right"}}>1</td><td style={{textAlign:"right"}} className="mono">7,250.00</td><td style={{textAlign:"right"}} className="mono">7,250.00</td></tr>
@@ -783,7 +787,7 @@ function NewInvoiceModal({ onClose }) {
         <button className="btn btn-secondary" onClick={()=>{ if (window.showToast) window.showToast("تم حفظ المسودة","success"); onClose(); }}>حفظ المسودة</button>
         <button className="btn btn-blue" onClick={create}><I.Check size={13}/> إنشاء الفاتورة</button>
       </>}>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
+      <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:14,marginBottom:14}}>
         <Field label="مريض" required>
           <select className="input" value={patientId} onChange={e=>setPatientId(e.target.value)}>
             {patients.length===0 && <option value="">لا يوجد مرضى</option>}
@@ -805,7 +809,7 @@ function NewInvoiceModal({ onClose }) {
       <div className="label">بنود الفاتورة</div>
       <div className="card" style={{padding:0,boxShadow:"none",marginBottom:10}}>
         {items.map((it,i)=>(
-          <div key={i} style={{padding:10,display:"grid",gridTemplateColumns:"1fr 80px 100px 100px 28px",gap:10,alignItems:"center",borderBottom:i<items.length-1?"1px solid var(--ink-100)":"none"}}>
+          <div key={i} className="rgrid inv-item-row" style={{padding:10,"--gtc":"1fr 80px 100px 100px 28px",gap:10,alignItems:"center",borderBottom:i<items.length-1?"1px solid var(--ink-100)":"none"}}>
             <input className="input" value={it.name} onChange={e=>setItems(items.map((x,j)=>j===i?{...x,name:e.target.value}:x))}/>
             <input className="input" type="number" value={it.qty} onChange={e=>setItems(items.map((x,j)=>j===i?{...x,qty:+e.target.value}:x))}/>
             <input className="input mono" type="number" value={it.price} onChange={e=>setItems(items.map((x,j)=>j===i?{...x,price:+e.target.value}:x))}/>
@@ -840,7 +844,7 @@ function Packages({ go }) {
   };
   return (
     <Page>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18}}>
+      <div className="page-head">
         <div>
           <div className="crumb"><span>الرئيسية</span><I.Chevron size={11}/><span>الباقات</span></div>
           <div className="h1">باقات العلاج</div>
@@ -906,7 +910,7 @@ function Packages({ go }) {
             <button className="btn btn-secondary" onClick={()=>setEditing(null)}>إلغاء</button>
             <button className="btn btn-blue" onClick={()=>setEditing(null)}><I.Check size={13}/> حفظ الباقة</button>
           </>}>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:14}}>
+          <div className="rgrid c-sm" style={{"--gtc":"repeat(2,1fr)",gap:14}}>
             <Field label="الاسم" required span={2}><input className="input" defaultValue={editing.name||""} placeholder="مثال: الباقة الأساسية 10"/></Field>
             <Field label="الجلسات"><input className="input" type="number" defaultValue={editing.sessions||""}/></Field>
             <Field label="السعر (ج.م)"><input className="input" type="number" defaultValue={editing.price||""}/></Field>
@@ -942,13 +946,13 @@ function Campaigns({ go }) {
 
   return (
     <Page>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18}}>
+      <div className="page-head">
         <div>
           <div className="crumb"><span>الرئيسية</span><I.Chevron size={11}/><span>حملات واتساب</span></div>
           <div className="h1">حملات واتساب</div>
           <div className="muted" style={{fontSize:13.5,marginTop:4}}>تواصل مع مرضاك عبر التذكيرات والمتابعات والإعلانات.</div>
         </div>
-        <div style={{display:"flex",gap:10}}>
+        <div className="page-actions">
           <button className="btn btn-secondary" onClick={()=>setTemplatesOpen(true)}><I.FileText size={14}/> القوالب</button>
           <button className="btn btn-blue" onClick={()=>setView("builder")}><I.Plus size={14}/> حملة جديدة</button>
         </div>
@@ -962,7 +966,7 @@ function Campaigns({ go }) {
       </div>
 
       <div className="card" style={{overflow:"hidden"}}>
-        <div style={{padding:"12px 18px",borderBottom:"1px solid var(--ink-200)",display:"flex",alignItems:"center",gap:10}}>
+        <div style={{padding:"12px 18px",borderBottom:"1px solid var(--ink-200)",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
           <div className="h3">الحملات</div>
           <div style={{flex:1}}/>
           <div className="seg">
@@ -972,6 +976,7 @@ function Campaigns({ go }) {
             <button>مكتمل</button>
           </div>
         </div>
+        <div className="tbl-scroll">
         <table className="tbl">
           <thead><tr><th>الحملة</th><th>الجمهور</th><th>مُرسلة</th><th>مقروءة</th><th>ردّ</th><th>القالب</th><th>الجدولة</th><th>الحالة</th><th></th></tr></thead>
           <tbody>
@@ -1037,6 +1042,7 @@ function Campaigns({ go }) {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
       {templatesOpen && (
         <Modal title="قوالب الحملات" onClose={()=>setTemplatesOpen(false)}>
@@ -1082,10 +1088,10 @@ function CampaignBuilder({ onCancel, onSave, initialTemplate }) {
       <div className="muted" style={{fontSize:13.5,marginBottom:22}}>ابنِ، استهدف وجدول في 4 خطوات.</div>
 
       <div className="card" style={{padding:18,marginBottom:18,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-        <div style={{display:"flex",gap:0,alignItems:"center",flex:1}}>
+        <div className="stepper" style={{gap:0,flex:1}}>
           {["أساسيات","الجمهور","الرسالة","الجدولة"].map((s,i)=>(
             <React.Fragment key={i}>
-              <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
                 <div style={{
                   width:24,height:24,borderRadius:999,
                   background:i+1<step?"var(--green)":i+1===step?"var(--blue-500)":"var(--ink-100)",
@@ -1093,15 +1099,15 @@ function CampaignBuilder({ onCancel, onSave, initialTemplate }) {
                   display:"flex",alignItems:"center",justifyContent:"center",
                   fontSize:11,fontWeight:600
                 }}>{i+1<step ? <I.Check size={12}/> : i+1}</div>
-                <span style={{fontSize:12.5,fontWeight:i+1===step?600:500,color:i+1===step?"var(--ink-900)":"var(--ink-500)"}}>{s}</span>
+                <span className="step-label" style={{fontSize:12.5,fontWeight:i+1===step?600:500,color:i+1===step?"var(--ink-900)":"var(--ink-500)"}}>{s}</span>
               </div>
-              {i<3 && <div style={{flex:1,height:1,background:i+1<step?"var(--green)":"var(--ink-200)",margin:"0 14px"}}/>}
+              {i<3 && <div style={{flex:1,minWidth:12,height:1,background:i+1<step?"var(--green)":"var(--ink-200)",margin:"0 14px"}}/>}
             </React.Fragment>
           ))}
         </div>
       </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"1fr 360px",gap:18}}>
+      <div className="rgrid c-lg" style={{"--gtc":"1fr 360px"}}>
         <div className="card card-pad" style={{minHeight:540}}>
           {step===1 && (
             <div>
@@ -1109,7 +1115,7 @@ function CampaignBuilder({ onCancel, onSave, initialTemplate }) {
               <Field label="الاسم" required><input className="input" value={name} onChange={e=>setName(e.target.value)}/></Field>
               <div style={{height:14}}/>
               <Field label="الهدف">
-                <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
+                <div className="rgrid half-sm" style={{"--gtc":"repeat(4,1fr)",gap:8}}>
                   {["حجوزات","إعادة تفاعل","تذكيرات","إعلانات"].map((g,i)=>(
                     <button key={g} className="btn btn-secondary" style={{justifyContent:"flex-start",padding:12,background:i===1?"var(--blue-50)":"#fff",borderColor:i===1?"var(--blue-500)":"var(--ink-200)"}}>
                       {g}
@@ -1125,7 +1131,7 @@ function CampaignBuilder({ onCancel, onSave, initialTemplate }) {
           {step===2 && (
             <div>
               <div className="h2" style={{marginBottom:18}}>الجمهور المستهدف</div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:14}}>
+              <div className="rgrid c-sm" style={{"--gtc":"repeat(2,1fr)",gap:14}}>
                 <Field label="التشخيص"><input className="input" value={filters.diag} onChange={e=>setFilters({...filters,diag:e.target.value})}/></Field>
                 <Field label="الحالة/نوع الإصابة"><select className="input"><option>أي</option><option>بعد العمليات</option><option>أمراض مزمنة pain</option></select></Field>
                 <Field label="الفئة العمرية"><input className="input" defaultValue="35 – 75"/></Field>
@@ -1138,11 +1144,11 @@ function CampaignBuilder({ onCancel, onSave, initialTemplate }) {
                 <Field label="الدفع status"><select className="input"><option>أي</option><option>مدفوع</option><option>معلّق</option><option>متأخر</option></select></Field>
               </div>
 
-              <div style={{padding:14,background:"var(--blue-50)",border:"1px solid var(--blue-100)",borderRadius:12,marginTop:18,display:"flex",alignItems:"center",gap:14}}>
-                <div style={{width:42,height:42,borderRadius:11,background:"var(--blue-500)",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center"}}>
+              <div style={{padding:14,background:"var(--blue-50)",border:"1px solid var(--blue-100)",borderRadius:12,marginTop:18,display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+                <div style={{width:42,height:42,borderRadius:11,background:"var(--blue-500)",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
                   <I.Users size={18}/>
                 </div>
-                <div style={{flex:1}}>
+                <div style={{flex:1,minWidth:200}}>
                   <div style={{fontWeight:600,fontSize:13.5,color:"var(--blue-900)"}}>هذا الجمهور يشمل <span className="mono">312 مريض</span></div>
                   <div className="muted" style={{fontSize:12,marginTop:2}}>L4–L5 diagnosis · 35–75 yrs · last visit 30+ days · est. cost EGP 156</div>
                 </div>
@@ -1155,7 +1161,7 @@ function CampaignBuilder({ onCancel, onSave, initialTemplate }) {
             <div>
               <div className="h2" style={{marginBottom:18}}>الرسالة</div>
               <div className="label">القالب</div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,marginBottom:18}}>
+              <div className="rgrid c-sm" style={{"--gtc":"repeat(2,1fr)",gap:10,marginBottom:18}}>
                 {templates.map((t,i)=>(
                   <button key={i} onClick={()=>setTemplate(i)} style={{
                     padding:14,textAlign:"left",cursor:"pointer",
@@ -1171,7 +1177,7 @@ function CampaignBuilder({ onCancel, onSave, initialTemplate }) {
               <Field label="الرسالة body"><textarea className="input" style={{height:160,padding:14,resize:"vertical",fontSize:13.5,lineHeight:1.55}} defaultValue={templates[template].body}/></Field>
               <div className="muted" style={{fontSize:11.5,marginTop:6}}>استخدم <span className="mono">{"{{first_name}}"}</span>, <span className="mono">{"{{therapist}}"}</span>, <span className="mono">{"{{condition}}"}</span> للتخصيص.</div>
 
-              <div style={{display:"flex",gap:8,marginTop:14}}>
+              <div style={{display:"flex",gap:8,marginTop:14,flexWrap:"wrap"}}>
                 <button className="btn btn-secondary" style={{fontSize:12}}><I.Image size={13}/> إرفاق صورة</button>
                 <button className="btn btn-secondary" style={{fontSize:12}}><I.FileText size={13}/> إرفاق PDF</button>
                 <button className="btn btn-secondary" style={{fontSize:12}}><I.Plus size={13}/> زر رد سريع</button>
@@ -1183,7 +1189,7 @@ function CampaignBuilder({ onCancel, onSave, initialTemplate }) {
             <div>
               <div className="h2" style={{marginBottom:18}}>الجدولة</div>
               <Field label="متى ترسل">
-                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
+                <div className="rgrid c-sm" style={{"--gtc":"repeat(3,1fr)",gap:10}}>
                   {[
                     {l:"إرسال الآن",sub:"خلال 5 دقائق"},
                     {l:"الجدولة one-shot",sub:"اختر تاريخًا ووقتًا"},
@@ -1196,7 +1202,7 @@ function CampaignBuilder({ onCancel, onSave, initialTemplate }) {
                   ))}
                 </div>
               </Field>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:14,marginTop:14}}>
+              <div className="rgrid c-sm" style={{"--gtc":"repeat(2,1fr)",gap:14,marginTop:14}}>
                 <Field label="التاريخ"><input className="input" type="date" defaultValue="2026-06-02"/></Field>
                 <Field label="الوقت"><input className="input" type="time" defaultValue="09:00"/></Field>
                 <Field label="المنطقة الزمنية" span={2}><select className="input"><option>Cairo (GMT+2)</option></select></Field>
@@ -1212,7 +1218,7 @@ function CampaignBuilder({ onCancel, onSave, initialTemplate }) {
             </div>
           )}
 
-          <div style={{display:"flex",justifyContent:"space-between",marginTop:24}}>
+          <div style={{display:"flex",justifyContent:"space-between",marginTop:24,flexWrap:"wrap",gap:10}}>
             <button className="btn btn-secondary" disabled={step===1} onClick={()=>setStep(step-1)} style={{opacity:step===1?.5:1}}>
               <I.ArrowLeft size={13}/> رجوع
             </button>
@@ -1322,16 +1328,16 @@ function CampaignAnalytics({ c, onBack }) {
   return (
     <Page>
       <div className="crumb" style={{cursor:"pointer"}} onClick={onBack}><span>الحملات</span><I.Chevron size={11}/><span style={{color:"var(--ink-700)"}}>{c.name}</span></div>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18}}>
+      <div className="page-head">
         <div>
-          <div className="h1" style={{display:"flex",alignItems:"center",gap:10}}>
+          <div className="h1" style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
             {c.name}
             {c.best && <span className="badge b-green"><I.Sparkle size={12}/>الأفضل أداءً</span>}
             <span className={"badge " + (status==="جارٍ"?"b-green":status==="مجدول"?"b-blue":status==="مكتمل"?"b-grey":"b-amber")}><span className="dot"></span>{status}</span>
           </div>
           <div className="muted" style={{fontSize:13.5,marginTop:4}}>{c.id} · {c.schedule} · template "{c.template}"</div>
         </div>
-        <div style={{display:"flex",gap:10}}>
+        <div className="page-actions">
           {status==="جارٍ"
             ? <button className="btn btn-secondary" onClick={()=>flipStatus("مجدول","تم إيقاف الحملة مؤقتًا")}><I.X size={13}/> إيقاف مؤقت</button>
             : <button className="btn btn-secondary" onClick={()=>flipStatus("جارٍ","تم استئناف الحملة")}><I.Send size={13}/> استئناف</button>}
@@ -1347,7 +1353,7 @@ function CampaignAnalytics({ c, onBack }) {
         <StatCard label="تحويلات" value="42" delta="+12" deltaKind="up" accent="#3FA984" icon={<I.Check size={15}/>}/>
       </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"1.5fr 1fr",gap:18,marginBottom:18}}>
+      <div className="rgrid c-lg" style={{"--gtc":"1.5fr 1fr",marginBottom:18}}>
         <div className="card card-pad">
           <div className="h2" style={{marginBottom:18}}>الرسائل بمرور الوقت</div>
           <AreaChart data={timeSeries} height={220} formatY={v=>v}/>
@@ -1373,7 +1379,7 @@ function CampaignAnalytics({ c, onBack }) {
         </div>
       </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18}}>
+      <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr"}}>
         <div className="card card-pad">
           <div className="h2" style={{marginBottom:14}}>أفضل الردود</div>
           {[
@@ -1424,14 +1430,14 @@ function Reports({ go }) {
 
   return (
     <Page>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18}}>
+      <div className="page-head">
         <div>
           <div className="crumb"><span>الرئيسية</span><I.Chevron size={11}/><span>التقارير</span></div>
           <div className="h1">التقارير</div>
           <div className="muted" style={{fontSize:13.5,marginTop:4}}>طبي, تحليلات مالية وتشغيلية.</div>
         </div>
-        <div style={{display:"flex",gap:10}}>
-          <select className="input" style={{width:180}}><option>آخر 30 يوم</option><option>هذا الشهر</option><option>هذا الربع</option><option>منذ بداية السنة</option></select>
+        <div className="page-actions">
+          <select className="input" style={{width:"auto",minWidth:150,flex:"0 1 180px"}}><option>آخر 30 يوم</option><option>هذا الشهر</option><option>هذا الربع</option><option>منذ بداية السنة</option></select>
           <button className="btn btn-secondary" onClick={()=>{
             const rows=["التقرير,القيمة","الإيرادات الشهرية,410200","مرضى نشطون,248","جلسات هذا الشهر,892","متوسط الفاتورة,7600"];
             downloadCsv(rows, "report.csv");
@@ -1441,8 +1447,8 @@ function Reports({ go }) {
         </div>
       </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"220px 1fr",gap:18}}>
-        <div className="card" style={{padding:8,height:"fit-content"}}>
+      <div className="rgrid c-lg" style={{"--gtc":"220px 1fr"}}>
+        <div className="card side-tabs" style={{padding:8,height:"fit-content"}}>
           {[
             { id:"financial", l:"المالية",       icon:<I.Dollar size={14}/>, items:["إيرادات يومية","الإيرادات الشهرية","مدفوعات معلقة","توزيع طرق الدفع"]},
             { id:"medical",   l:"طبي",         icon:<I.Heart size={14}/>,  items:["المريض history","تقدّم العلاج","الأخصائي activity","التشخيص trends"]},
@@ -1489,7 +1495,7 @@ function FinancialReport() {
         <StatCard label="معلّق"        value="EGP 18.4K"  delta="4.5%" deltaKind="down" accent="#D49044" icon={<I.Clock size={15}/>}/>
       </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"1.5fr 1fr",gap:18,marginBottom:18}}>
+      <div className="rgrid c-lg" style={{"--gtc":"1.5fr 1fr",marginBottom:18}}>
         <div className="card card-pad">
           <div className="h2" style={{marginBottom:14}}>اتجاه الإيرادات الشهري</div>
           <AreaChart data={monthly} height={240} formatY={v=>`${v}K`}/>
@@ -1543,7 +1549,7 @@ function MedicalReport() {
         <StatCard label="تحقيق الأهداف"        value="68%" delta="+4%" deltaKind="up" accent="#7E6BD3" icon={<I.Check size={15}/>}/>
       </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18,marginBottom:18}}>
+      <div className="rgrid c-lg" style={{"--gtc":"1fr 1fr",marginBottom:18}}>
         <div className="card card-pad">
           <div className="h2" style={{marginBottom:18}}>التشخيص breakdown</div>
           <DonutChart data={diagData} size={180} centerLabel="مريض" centerValue="184"/>
@@ -1591,7 +1597,7 @@ function OperationalReport() {
         <StatCard label="استخدام الغرف"    value="78%"   delta="+5%" deltaKind="up" accent="#7E6BD3" icon={<I.MapPin size={15}/>}/>
       </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18,marginBottom:18}}>
+      <div className="rgrid c-lg" style={{"--gtc":"1fr 1fr",marginBottom:18}}>
         <div className="card card-pad">
           <div className="h2" style={{marginBottom:14}}>Appointments بواسطة day من week</div>
           <BarChart data={[
@@ -1663,8 +1669,8 @@ function SettingsPage({ go }) {
       <div className="crumb"><span>الرئيسية</span><I.Chevron size={11}/><span>الإعدادات</span></div>
       <div className="h1" style={{marginBottom:18}}>الإعدادات</div>
 
-      <div style={{display:"grid",gridTemplateColumns:"220px 1fr",gap:18}}>
-        <div className="card" style={{padding:8,height:"fit-content"}}>
+      <div className="rgrid c-lg" style={{"--gtc":"220px 1fr"}}>
+        <div className="card side-tabs" style={{padding:8,height:"fit-content"}}>
           {[
             { id:"clinic",   l:"بيانات العيادة",   ic:<I.MapPin size={14}/>},
             { id:"branding", l:"الهوية البصرية",         ic:<I.Image size={14}/>},
@@ -1686,6 +1692,7 @@ function SettingsPage({ go }) {
           {tab==="users" && (
             <div>
               <div className="h2" style={{marginBottom:14}}>المستخدمون والأدوار</div>
+              <div className="tbl-scroll">
               <table className="tbl">
                 <thead><tr><th>الاسم</th><th>البريد الإلكتروني</th><th>الدور</th><th>Last نشط</th><th></th></tr></thead>
                 <tbody>
@@ -1722,6 +1729,7 @@ function SettingsPage({ go }) {
                   ))}
                 </tbody>
               </table>
+              </div>
               <button className="btn btn-blue" style={{marginTop:14}} onClick={()=>setInviteOpen(true)}><I.Plus size={13}/> دعوة مستخدم</button>
             </div>
           )}
@@ -1814,7 +1822,7 @@ function ClinicDetailsPanel() {
   return (
     <div>
       <div className="h2" style={{marginBottom:18}}>بيانات العيادة</div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:14,maxWidth:720}}>
+      <div className="rgrid c-sm" style={{"--gtc":"repeat(2,1fr)",gap:14,maxWidth:720}}>
         <Field label="اسم العيادة" span={2}><input className="input" value={form.name} onChange={e=>set("name", e.target.value)}/></Field>
         <Field label="الفرع" span={2}><input className="input" value={form.branch} onChange={e=>set("branch", e.target.value)}/></Field>
         <Field label="الهاتف"><input className="input" value={form.phone} onChange={e=>set("phone", e.target.value)}/></Field>
@@ -1869,7 +1877,7 @@ function BrandingPanel() {
       <div className="h2" style={{marginBottom:6}}>الهوية البصرية</div>
       <div className="muted" style={{fontSize:13,marginBottom:18}}>خصّص شعار العيادة واسمها الظاهر في كل الشاشات.</div>
 
-      <div style={{display:"grid",gridTemplateColumns:"180px 1fr",gap:24,alignItems:"start",maxWidth:720}}>
+      <div className="rgrid c-sm" style={{"--gtc":"180px 1fr",gap:24,alignItems:"start",maxWidth:720}}>
         <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:10}}>
           <div style={{width:140,height:140,borderRadius:20,border:"1px dashed var(--ink-300)",background:"var(--ink-50)",display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden"}}>
             {clinic.logo
@@ -1890,7 +1898,7 @@ function BrandingPanel() {
           <div className="muted" style={{fontSize:11,textAlign:"center"}}>PNG/JPG · حتى 512KB</div>
         </div>
 
-        <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:14}}>
+        <div className="rgrid c-sm" style={{"--gtc":"repeat(2,1fr)",gap:14}}>
           <Field label="اسم العيادة" span={2}>
             <input className="input" value={clinic.name||""} onChange={e=>setClinic(c=>({...c,name:e.target.value}))}/>
           </Field>
@@ -1933,7 +1941,7 @@ function CustomSectionsPanel() {
 
   return (
     <div>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+      <div className="page-head" style={{marginBottom:12}}>
         <div>
           <div className="h2" style={{marginBottom:4}}>أقسام مخصصة</div>
           <div className="muted" style={{fontSize:13}}>أضف أقسامًا تظهر في الشريط الجانبي للمدير وعدّل محتواها.</div>
@@ -1944,6 +1952,7 @@ function CustomSectionsPanel() {
       {sections.length === 0 ? (
         <EmptyState icon={<I.Layers size={22}/>} title="لا توجد أقسام مخصصة بعد" body="اضغط «قسم جديد» لإضافة قسم يظهر في القائمة الجانبية."/>
       ) : (
+        <div className="tbl-scroll">
         <table className="tbl">
           <thead><tr><th>القسم</th><th>المجموعة</th><th>الحالة</th><th></th></tr></thead>
           <tbody>
@@ -1973,6 +1982,7 @@ function CustomSectionsPanel() {
             })}
           </tbody>
         </table>
+        </div>
       )}
 
       {editing && <SectionEditorModal draft={editing} onClose={()=>setEditing(null)}/>}
@@ -2011,7 +2021,7 @@ function SectionEditorModal({ draft, onClose }) {
           <I.Check size={13}/> {saving ? "جاري الحفظ…" : "حفظ"}
         </button>
       </>}>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:12}}>
+      <div className="rgrid c-sm" style={{"--gtc":"repeat(2,1fr)",gap:12}}>
         <Field label="اسم القسم" required span={2}>
           <input className="input" value={d.label||""} onChange={e=>set("label",e.target.value)} placeholder="مثال: العلاج المائي"/>
         </Field>
@@ -2210,13 +2220,17 @@ function App() {
             <span className="badge b-green" style={{marginLeft:6}}><span className="dot"></span>متصل</span>
           </div>
           <button type="button" className="search-wrap" onClick={()=>setPaletteOpen(true)}
-            style={{position:"relative",width:340,height:36,padding:"0 34px",borderRadius:10,
+            style={{position:"relative",width:"min(340px, 32vw)",height:36,padding:"0 34px",borderRadius:10,
               border:"1px solid transparent",background:"var(--ink-50)",cursor:"pointer",
-              display:"flex",alignItems:"center",gap:8,color:"var(--ink-500)",fontSize:13,fontFamily:"inherit"}}
+              alignItems:"center",gap:8,color:"var(--ink-500)",fontSize:13,fontFamily:"inherit"}}
             aria-label="فتح البحث الشامل">
             <I.Search size={15} style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",color:"var(--ink-400)"}}/>
             <span style={{flex:1,textAlign:"right"}}>ابحث عن مرضى، مواعيد، فواتير…</span>
             <span className="mono" style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",fontSize:10,color:"var(--ink-400)",background:"#fff",border:"1px solid var(--ink-200)",borderRadius:5,padding:"1px 5px"}}>⌘K</span>
+          </button>
+          {/* Phone: the full search bar collapses to this icon (opens the same palette) */}
+          <button type="button" className="btn btn-ghost btn-icon mobile-search-btn" title="بحث" aria-label="فتح البحث الشامل" onClick={()=>setPaletteOpen(true)}>
+            <I.Search size={17}/>
           </button>
           <div style={{position:"relative"}}>
             <button className="btn btn-ghost btn-icon" title="الإشعارات" style={{position:"relative"}} onClick={()=>setNotifsOpen(o=>!o)}>
@@ -2224,7 +2238,7 @@ function App() {
               <span style={{position:"absolute",top:6,right:6,width:7,height:7,background:"var(--red)",borderRadius:"50%",border:"2px solid #fff"}}></span>
             </button>
             {notifsOpen && (
-              <div style={{position:"absolute",top:"calc(100% + 8px)",left:0,width:320,background:"#fff",border:"1px solid var(--ink-200)",borderRadius:14,boxShadow:"0 8px 32px rgba(0,0,0,.12)",zIndex:999,padding:"12px 0"}}>
+              <div style={{position:"fixed",top:60,insetInlineEnd:"max(8px, min(56px, 4vw))",width:"min(320px, calc(100vw - 16px))",background:"#fff",border:"1px solid var(--ink-200)",borderRadius:14,boxShadow:"0 8px 32px rgba(0,0,0,.12)",zIndex:999,padding:"12px 0"}}>
                 <div style={{padding:"4px 16px 10px",fontWeight:600,fontSize:13,borderBottom:"1px solid var(--ink-100)"}}>الإشعارات</div>
                 {[
                   {title:"موعد جديد — هناء مصطفى", time:"منذ 5 دقائق", dot:"var(--blue-500)"},
@@ -2349,7 +2363,7 @@ function PatientPortal({ onLogout }) {
   return (
     <div style={{minHeight:"100vh",background:"var(--blue-50)"}}>
       <PatientTopbar onNav={go} active={route}/>
-      <main style={{maxWidth: 980, margin:"0 auto", padding:"28px 24px 80px"}}>
+      <main style={{maxWidth: 980, margin:"0 auto", padding:"clamp(16px, 3vw, 28px) clamp(14px, 3vw, 24px) 110px"}}>
         {route==="home"         && <PatientHome onBook={()=>setBookingOpen(true)} go={go}/>}
         {route==="appointments" && <PatientAppointments onBook={()=>setBookingOpen(true)}/>}
         {route==="plan"         && <PatientPlanView/>}
@@ -2364,7 +2378,7 @@ function PatientPortal({ onLogout }) {
       <div style={{
         position:"fixed",bottom:0,left:0,right:0,
         background:"#fff",borderTop:"1px solid var(--ink-200)",
-        padding:"8px 12px 12px",display:"flex",justifyContent:"space-around",
+        padding:"8px 12px calc(12px + env(safe-area-inset-bottom, 0px))",display:"flex",justifyContent:"space-around",
         boxShadow:"0 -2px 14px rgba(15,30,43,.05)", zIndex: 20
       }}>
         {[
@@ -2406,15 +2420,15 @@ function PatientTopbar({ onNav, active }) {
       background:"#fff",borderBottom:"1px solid var(--ink-200)",
       position:"sticky",top:0,zIndex:10
     }}>
-      <div style={{maxWidth:980,margin:"0 auto",padding:"14px 24px",display:"flex",alignItems:"center",gap:14}}>
-        <div style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}} onClick={()=>onNav("home")}>
+      <div style={{maxWidth:980,margin:"0 auto",padding:"12px clamp(12px, 3vw, 24px)",display:"flex",alignItems:"center",gap:"clamp(8px, 1.5vw, 14px)"}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",flexShrink:0}} onClick={()=>onNav("home")}>
           <I.Logo size={30}/>
           <div style={{display:"flex",flexDirection:"column",lineHeight:1.1}}>
             <span style={{fontWeight:600,fontSize:15,letterSpacing:"-.01em"}}>Kinetic</span>
             <span style={{fontSize:10,color:"var(--ink-500)",letterSpacing:".06em",textTransform:"uppercase"}}>بوابة المريض</span>
           </div>
         </div>
-        <nav style={{display:"flex",gap:4,marginLeft:24,flex:1}}>
+        <nav className="pt-nav" style={{marginLeft:12}}>
           {[
             { id:"home", l:"الرئيسية" },
             { id:"appointments", l:"زياراتي" },
@@ -2493,7 +2507,7 @@ function PatientHome({ onBook, go }) {
       {/* Greeting */}
       <div style={{marginBottom:24}}>
         <div className="muted" style={{fontSize:13.5,marginBottom:4}}>الأحد، 24 مايو</div>
-        <h1 style={{fontSize:32,fontWeight:600,letterSpacing:"-.015em",margin:0}}>
+        <h1 style={{fontSize:"clamp(24px, 5.5vw, 32px)",fontWeight:600,letterSpacing:"-.015em",margin:0}}>
           أهلاً <span className="serif" style={{fontWeight:400, fontStyle:"italic"}}>هناء</span> — تشعرين بتحسّن؟
         </h1>
       </div>
@@ -2515,13 +2529,13 @@ function PatientHome({ onBook, go }) {
                 <span style={{width:6,height:6,borderRadius:999,background:"#1E4A6E",animation:"pulse 1.8s infinite"}}></span>
                 Your next جلسة
               </div>
-              <div className="serif" style={{fontSize:40,lineHeight:1.05,letterSpacing:"-.01em"}}>
+              <div className="serif" style={{fontSize:"clamp(28px, 6vw, 40px)",lineHeight:1.05,letterSpacing:"-.01em"}}>
                 {PATIENT_ME.next.date}
               </div>
               <div className="mono" style={{fontSize:18,marginTop:6,color:"#1E4A6E",fontWeight:600}}>
                 {nextTime} · {PATIENT_ME.next.dur} min
               </div>
-              <div style={{display:"flex",alignItems:"center",gap:14,marginTop:14,fontSize:13}}>
+              <div style={{display:"flex",alignItems:"center",gap:"6px 14px",marginTop:14,fontSize:13,flexWrap:"wrap"}}>
                 <span style={{display:"flex",alignItems:"center",gap:6}}>
                   <div className="av sm" style={{background:"#fff",color:"var(--blue-700)"}}>KS</div>
                   مع {PATIENT_ME.next.with}
@@ -2570,7 +2584,7 @@ function PatientHome({ onBook, go }) {
       )}
 
       {/* إجراءات سريعة */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:14,marginBottom:24}}>
+      <div className="rgrid c-sm" style={{"--gtc":"repeat(3,1fr)",gap:14,marginBottom:24}}>
         {[
           { l:"احجز زيارة",   sub:"45 ثانية للحجز",       ic:<I.Calendar size={20}/>, color:"#7BBDE8", onClick:onBook },
           { l:"الرسالة therapist", sub:"الرد عادةً خلال ساعتين", ic:<I.WhatsApp size={20}/>, color:"#25D366", onClick:()=>go("messages") },
@@ -2598,7 +2612,7 @@ function PatientHome({ onBook, go }) {
       </div>
 
       {/* التقدّم + recovery */}
-      <div style={{display:"grid",gridTemplateColumns:"1.3fr 1fr",gap:18,marginBottom:24}}>
+      <div className="rgrid c-sm" style={{"--gtc":"1.3fr 1fr",marginBottom:24}}>
         <div className="card card-pad">
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
             <div>
@@ -2653,7 +2667,7 @@ function PatientHome({ onBook, go }) {
       {/* فريق الرعاية */}
       <div className="card card-pad" style={{marginBottom:24}}>
         <div className="h2" style={{marginBottom:14}}>فريق الرعاية</div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+        <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:14}}>
           {[
             { name:PATIENT_ME.doctor, role:"الطبيب المسؤول", spec:"تأهيل عظام", color:"#7E6BD3" },
             { name:PATIENT_ME.therapist, role:"الأخصائي الأساسي", spec:"علاج يدوي", color:"#7BBDE8" },
@@ -2728,9 +2742,9 @@ function PatientAppointments({ onBook }) {
 
   return (
     <div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:18}}>
+      <div className="page-head" style={{alignItems:"flex-end"}}>
         <div>
-          <h1 style={{fontSize:28,fontWeight:600,letterSpacing:"-.01em",margin:0}}>زياراتي</h1>
+          <h1 style={{fontSize:"clamp(22px, 5vw, 28px)",fontWeight:600,letterSpacing:"-.01em",margin:0}}>زياراتي</h1>
           <div className="muted" style={{fontSize:13.5,marginTop:4}}>{upcoming.length} قادمة · {past.length} مكتملة</div>
         </div>
         <button className="btn btn-blue" onClick={onBook}><I.Plus size={13}/> احجز زيارة</button>
@@ -2739,7 +2753,7 @@ function PatientAppointments({ onBook }) {
       <div className="h3" style={{marginBottom:10,marginTop:8}}>قادمة</div>
       <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:30}}>
         {upcoming.map((a,i)=>(
-          <div key={i} className="card" style={{padding:16,display:"flex",alignItems:"center",gap:16}}>
+          <div key={i} className="card" style={{padding:16,display:"flex",alignItems:"center",gap:16,flexWrap:"wrap"}}>
             <div style={{
               width:64,height:64,borderRadius:14,
               background: i===0?"linear-gradient(135deg, var(--blue-500), var(--blue-700))":"var(--blue-50)",
@@ -2750,8 +2764,8 @@ function PatientAppointments({ onBook }) {
               <div className="mono" style={{fontSize:11,opacity:.8,fontWeight:500}}>{a.date.split(",")[0].slice(0,3).toUpperCase()}</div>
               <div className="mono" style={{fontSize:22,fontWeight:600,lineHeight:1}}>{a.date.includes("Tomorrow") ? "25" : a.date.match(/\d+/)?.[0]}</div>
             </div>
-            <div style={{flex:1,minWidth:0}}>
-              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:4}}>
+            <div style={{flex:1,minWidth:200}}>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:4,flexWrap:"wrap"}}>
                 <span style={{fontWeight:600,fontSize:14.5}}>{a.date} · {a.time}</span>
                 <ApptBadge s={a.status}/>
               </div>
@@ -2770,7 +2784,7 @@ function PatientAppointments({ onBook }) {
       <div className="h3" style={{marginBottom:10}}>سابقة</div>
       <div className="card" style={{padding:0,overflow:"hidden"}}>
         {past.map((a,i)=>(
-          <div key={i} style={{padding:"14px 18px",display:"grid",gridTemplateColumns:"140px 1fr 100px 110px 90px",alignItems:"center",gap:12,borderBottom:i<past.length-1?"1px solid var(--ink-100)":"none"}}>
+          <div key={i} className="rgrid pvisit-row" style={{padding:"14px 18px","--gtc":"140px 1fr 100px 110px 90px",alignItems:"center",gap:12,borderBottom:i<past.length-1?"1px solid var(--ink-100)":"none"}}>
             <div>
               <div style={{fontSize:13,fontWeight:500}}>{a.date}</div>
               <div className="mono" style={{fontSize:11.5,color:"var(--ink-500)"}}>{a.time} · {a.dur}m</div>
@@ -2816,7 +2830,7 @@ function PatientAppointments({ onBook }) {
 function PatientPlanView() {
   return (
     <div>
-      <h1 style={{fontSize:28,fontWeight:600,letterSpacing:"-.01em",margin:"0 0 4px"}}>خطة علاجك</h1>
+      <h1 style={{fontSize:"clamp(22px, 5vw, 28px)",fontWeight:600,letterSpacing:"-.01em",margin:"0 0 4px"}}>خطة علاجك</h1>
       <div className="muted" style={{fontSize:13.5,marginBottom:20}}>{PATIENT_ME.diag} · بدأت 30 أبريل 2026</div>
       <PatientTreatmentPlan/>
     </div>
@@ -2826,11 +2840,11 @@ function PatientPlanView() {
 function PatientMessages() {
   return (
     <div>
-      <h1 style={{fontSize:28,fontWeight:600,letterSpacing:"-.01em",margin:"0 0 4px"}}>الرسائل</h1>
+      <h1 style={{fontSize:"clamp(22px, 5vw, 28px)",fontWeight:600,letterSpacing:"-.01em",margin:"0 0 4px"}}>الرسائل</h1>
       <div className="muted" style={{fontSize:13.5,marginBottom:20}}>تحدّث مع فريق الرعاية — الردود عادةً خلال ساعتين.</div>
 
-      <div style={{display:"grid",gridTemplateColumns:"260px 1fr",gap:18}}>
-        <div className="card" style={{padding:0,overflow:"hidden",height:560}}>
+      <div className="rgrid c-sm" style={{"--gtc":"260px 1fr"}}>
+        <div className="card chat-list" style={{padding:0}}>
           {[
             { n:"كريم صالح", r:"الأخصائي", last:"أراك غدًا 09:00", time:"2h", unread:1, active:true },
             { n:"د. ياسمين عادل", r:"طبيب", last:"كيف البرنامج الجديد؟", time:"أمس", unread:0 },
@@ -2854,7 +2868,7 @@ function PatientMessages() {
           ))}
         </div>
 
-        <div className="card" style={{padding:0,display:"flex",flexDirection:"column",height:560}}>
+        <div className="card chat-pane" style={{padding:0,display:"flex",flexDirection:"column"}}>
           <div style={{padding:"14px 18px",borderBottom:"1px solid var(--ink-100)",display:"flex",alignItems:"center",gap:10}}>
             <div className="av md" style={{background:"var(--blue-100)",color:"var(--blue-700)"}}>KS</div>
             <div style={{flex:1}}>
@@ -2886,10 +2900,10 @@ function PatientBills() {
   ];
   return (
     <div>
-      <h1 style={{fontSize:28,fontWeight:600,letterSpacing:"-.01em",margin:"0 0 4px"}}>الفواتير</h1>
+      <h1 style={{fontSize:"clamp(22px, 5vw, 28px)",fontWeight:600,letterSpacing:"-.01em",margin:"0 0 4px"}}>الفواتير</h1>
       <div className="muted" style={{fontSize:13.5,marginBottom:20}}>Your full payment history مع Kinetic.</div>
 
-      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:14,marginBottom:24}}>
+      <div className="rgrid c-sm" style={{"--gtc":"repeat(3,1fr)",gap:14,marginBottom:24}}>
         <div className="card card-pad">
           <div className="muted" style={{fontSize:11,textTransform:"uppercase",letterSpacing:".05em"}}>مدفوع هذه السنة</div>
           <div className="mono" style={{fontSize:26,fontWeight:600,marginTop:4}}>EGP 8,100</div>
@@ -2905,6 +2919,7 @@ function PatientBills() {
       </div>
 
       <div className="card" style={{overflow:"hidden"}}>
+        <div className="tbl-scroll">
         <table className="tbl">
           <thead><tr><th>فاتورة</th><th>التاريخ</th><th>البند</th><th>المبلغ</th><th>الطريقة</th><th>الحالة</th><th></th></tr></thead>
           <tbody>
@@ -2925,6 +2940,7 @@ function PatientBills() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   );
@@ -2935,10 +2951,10 @@ function PatientProfile() {
   const [form, setForm] = React.useState({ name:PATIENT_ME.name, phone:PATIENT_ME.phone, email:"hana.m@gmail.com", address:"١٤ ش صلاح سالم، مصر الجديدة" });
   return (
     <div>
-      <h1 style={{fontSize:28,fontWeight:600,letterSpacing:"-.01em",margin:"0 0 4px"}}>ملفي الشخصي</h1>
+      <h1 style={{fontSize:"clamp(22px, 5vw, 28px)",fontWeight:600,letterSpacing:"-.01em",margin:"0 0 4px"}}>ملفي الشخصي</h1>
       <div className="muted" style={{fontSize:13.5,marginBottom:20}}>بياناتك on file مع Kinetic.</div>
 
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18}}>
+      <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr"}}>
         <div className="card card-pad">
           <div className="h3" style={{marginBottom:14}}>البيانات الشخصية</div>
           <InfoRow k="رقم الملف" v={<span className="mono">{PATIENT_ME.file}</span>}/>
@@ -3085,7 +3101,7 @@ function PatientBookingFlow({ onClose, onDone }) {
               <div className="serif" style={{fontSize:26,marginBottom:6}}>ما الذي يحضرك إلينا؟</div>
               <div className="muted" style={{fontSize:13.5,marginBottom:22}}>This helps us match you مع the right therapist.</div>
 
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+              <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:10}}>
                 {[
                   { id:"continue", l:"متابعة my plan",     sub:`${PATIENT_ME.remaining} Sessions left · انزلاق غضروفي L4–L5`, ic:<I.Heart size={18}/>, primary:true },
                   { id:"new",      l:"مشكلة جديدة",            sub:"شيء جديد يضايقك",                                  ic:<I.Plus size={18}/> },
@@ -3115,7 +3131,7 @@ function PatientBookingFlow({ onClose, onDone }) {
               <div className="serif" style={{fontSize:26,marginBottom:6}}>من تود زيارته؟</div>
               <div className="muted" style={{fontSize:13.5,marginBottom:22}}>أخصائيك المعتاد أو شخص جديد — الخيار لك.</div>
 
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+              <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:10}}>
                 {[
                   { name:"كريم صالح",  spec:"علاج يدوي",     yourUsual:true,  color:"#7BBDE8", rating:"4.9", nextSlot:"Tomorrow 09:00" },
                   { name:"لينا فاروق",  spec:"تأهيل بعد العمليات",      color:"#7E6BD3", rating:"4.8", nextSlot:"Tue 14:30" },
@@ -3155,7 +3171,7 @@ function PatientBookingFlow({ onClose, onDone }) {
               <div className="muted" style={{fontSize:13.5,marginBottom:22}}>Showing live availability for {picks.therapist}.</div>
 
               <div className="label">اختيار سريع</div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:18}}>
+              <div className="rgrid quarter-sm" style={{"--gtc":"repeat(4,1fr)",gap:8,marginBottom:18}}>
                 {[
                   { l:"غدًا", sub:"25 مايو", slots:3 },
                   { l:"ثلا", sub:"26 مايو", slots:5 },
@@ -3219,7 +3235,7 @@ function PatientBookingFlow({ onClose, onDone }) {
                   <I.Calendar size={28} style={{color:"var(--blue-500)"}}/>
                 </div>
                 <hr className="sep" style={{margin:"14px 0"}}/>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,fontSize:13}}>
+                <div className="rgrid half-sm" style={{"--gtc":"1fr 1fr",gap:12,fontSize:13}}>
                   <div>
                     <div className="muted" style={{fontSize:11}}>الأخصائي</div>
                     <div style={{fontWeight:500}}>{picks.therapist}</div>
@@ -3249,7 +3265,7 @@ function PatientBookingFlow({ onClose, onDone }) {
 
         {/* Footer */}
         {!confirming && (
-          <div style={{padding:"14px 24px",borderTop:"1px solid var(--ink-100)",display:"flex",alignItems:"center",justifyContent:"space-between",background:"#fff"}}>
+          <div style={{padding:"14px 24px",borderTop:"1px solid var(--ink-100)",display:"flex",alignItems:"center",justifyContent:"space-between",background:"#fff",flexWrap:"wrap",gap:8}}>
             <button className="btn btn-ghost" onClick={step===1?onClose:()=>setStep(step-1)}>
               <I.ArrowLeft size={13}/> {step===1?"إلغاء":"رجوع"}
             </button>
@@ -3302,7 +3318,7 @@ function PublicBookingScreen({ onBack, onDone }) {
   return (
     <div style={{minHeight:"100vh",background:"var(--blue-50)",display:"flex",flexDirection:"column"}}>
       {/* Top */}
-      <header style={{background:"#fff",borderBottom:"1px solid var(--ink-200)",padding:"14px 24px",display:"flex",alignItems:"center",gap:14}}>
+      <header style={{background:"#fff",borderBottom:"1px solid var(--ink-200)",padding:"12px clamp(12px, 3vw, 24px)",display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
           <I.Logo size={30}/>
           <div style={{display:"flex",flexDirection:"column",lineHeight:1.1}}>
@@ -3321,7 +3337,7 @@ function PublicBookingScreen({ onBack, onDone }) {
           {!confirming && (
             <div style={{textAlign:"center",marginBottom:28}}>
               <div className="muted" style={{fontSize:13,letterSpacing:".06em",textTransform:"uppercase",marginBottom:8}}>احجز زيارة</div>
-              <div className="serif" style={{fontSize:44,lineHeight:1.05,letterSpacing:"-.01em",color:"var(--ink-900)",maxWidth:560,margin:"0 auto"}}>
+              <div className="serif" style={{fontSize:"clamp(28px, 6.5vw, 44px)",lineHeight:1.05,letterSpacing:"-.01em",color:"var(--ink-900)",maxWidth:560,margin:"0 auto"}}>
                 {step===1 && <>هيا بنا نعيدك إلى <em>الحركة</em> من جديد.</>}
                 {step===2 && <>اختر من تود زيارته.</>}
                 {step===3 && <>ما الوقت المناسب لك؟</>}
@@ -3355,7 +3371,7 @@ function PublicBookingScreen({ onBack, onDone }) {
 
           {/* Card */}
           <div className="card" style={{padding:0,boxShadow:"0 20px 50px rgba(15,30,43,.06)",overflow:"hidden"}}>
-            <div style={{padding:"32px 36px",minHeight:380}}>
+            <div style={{padding:"clamp(18px, 4vw, 32px) clamp(14px, 4vw, 36px)",minHeight:380}}>
 
               {confirming && (
                 <div style={{textAlign:"center",padding:"40px 0"}}>
@@ -3391,7 +3407,7 @@ function PublicBookingScreen({ onBack, onDone }) {
               {!confirming && step===1 && (
                 <div>
                   <div className="label" style={{marginBottom:10}}>ما الذي يحضرك إلينا؟</div>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                  <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:10}}>
                     {[
                       { id:"existing-pain",  l:"ألم أو إصابة موجودة", sub:"ظهر، رقبة، ركبة، كتف، إلخ.",      ic:<I.Heart size={18}/> },
                       { id:"post-op",        l:"التعافي بعد جراحة",  sub:"رباط صليبي، استبدال مفصل، إلخ.",          ic:<I.Activity size={18}/> },
@@ -3419,7 +3435,7 @@ function PublicBookingScreen({ onBack, onDone }) {
                     ))}
                   </div>
 
-                  <div style={{marginTop:22,padding:14,background:"var(--ink-50)",borderRadius:11,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+                  <div style={{marginTop:22,padding:14,background:"var(--ink-50)",borderRadius:11,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
                     <div style={{display:"flex",alignItems:"center",gap:10,fontSize:13}}>
                       <I.User size={15} style={{color:"var(--ink-500)"}}/>
                       <span>هل أنت مريض حالي؟</span>
@@ -3436,7 +3452,7 @@ function PublicBookingScreen({ onBack, onDone }) {
               {!confirming && step===2 && (
                 <div>
                   <div className="label" style={{marginBottom:10}}>اختر أخصائيًا</div>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                  <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:10}}>
                     {[
                       { name:"أي أخصائي",  spec:"أقرب موعد",        color:"#BDD8E9", rating:"—",   nextSlot:"Today 16:30", any:true, recommended:true },
                       ...DATA.therapists.map(t=>({ name:t.name, spec:t.spec, color:t.color, rating:"4.8", nextSlot:"Tomorrow 09:00" }))
@@ -3474,7 +3490,7 @@ function PublicBookingScreen({ onBack, onDone }) {
               {!confirming && step===3 && (
                 <div>
                   <div className="label" style={{marginBottom:10}}>اختر يومًا</div>
-                  <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:6,marginBottom:22}}>
+                  <div className="rgrid quarter-sm" style={{"--gtc":"repeat(7,1fr)",gap:6,marginBottom:22}}>
                     {[
                       { l:"غدًا", sub:"25 مايو", slots:3 },
                       { l:"ثلا", sub:"26 مايو", slots:5 },
@@ -3565,7 +3581,7 @@ function PublicBookingScreen({ onBack, onDone }) {
                       <I.Calendar size={30} style={{color:"var(--blue-500)"}}/>
                     </div>
                     <hr className="sep" style={{margin:"14px 0"}}/>
-                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,fontSize:13}}>
+                    <div className="rgrid half-sm" style={{"--gtc":"1fr 1fr",gap:14,fontSize:13}}>
                       <div>
                         <div className="muted" style={{fontSize:11}}>الأخصائي</div>
                         <div style={{fontWeight:500}}>{picks.therapist || "أي متاح"}</div>
@@ -3609,7 +3625,7 @@ function PublicBookingScreen({ onBack, onDone }) {
 
             {/* Footer */}
             {!confirming && (
-              <div style={{padding:"14px 24px",borderTop:"1px solid var(--ink-100)",display:"flex",justifyContent:"space-between",background:"var(--ink-50)"}}>
+              <div style={{padding:"14px 24px",borderTop:"1px solid var(--ink-100)",display:"flex",justifyContent:"space-between",background:"var(--ink-50)",flexWrap:"wrap",gap:8}}>
                 <button className="btn btn-secondary" onClick={step===1?onBack:()=>setStep(step-1)}>
                   <I.ArrowLeft size={13}/> {step===1?"إلغاء":"رجوع"}
                 </button>

@@ -174,7 +174,7 @@ function ReceptionDashboard({ go, user }){
         <StatCard label="مستحقات معلّقة" value={`EGP ${(outstanding/1000).toFixed(1)}K`} accent="#D8665A" icon={<I.CreditCard size={15}/>}/>
       </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"1.4fr 1fr",gap:18}}>
+      <div className="rgrid c-lg" style={{"--gtc":"1.4fr 1fr"}}>
         {/* Check-in queue */}
         <div className="card card-pad">
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
@@ -266,7 +266,7 @@ function DoctorDashboard({ go, user }){
         <StatCard label="نشطون"          value={String(active.length)} accent="#3FA984" icon={<I.Activity size={15}/>}/>
       </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1.3fr",gap:18}}>
+      <div className="rgrid c-lg" style={{"--gtc":"1fr 1.3fr"}}>
         {/* My clinic today */}
         <div className="card card-pad">
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
@@ -286,6 +286,7 @@ function DoctorDashboard({ go, user }){
               <div className="h2">قائمة مرضاي</div>
               <button className="btn btn-ghost" style={{fontSize:12}} onClick={()=>go("patients")}>عرض الكل <I.ArrowRight size={12}/></button>
             </div>
+            <div className="tbl-scroll">
             <table className="tbl" style={{margin:"-4px 0"}}>
               <thead><tr><th>المريض</th><th>التشخيص</th><th>متبقٍ</th><th>الدفع</th></tr></thead>
               <tbody>
@@ -299,6 +300,7 @@ function DoctorDashboard({ go, user }){
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
           <div className="card card-pad">
             <div className="h2" style={{marginBottom:4}}>توزيع الحالات</div>
@@ -340,7 +342,7 @@ function TherapistDashboard({ go, user }){
         <StatCard label="حِملي اليوم"  value={`${meT.load}/${meT.max}`} accent="#3A7FB5" icon={<I.Activity size={15}/>}/>
       </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"1.3fr 1fr",gap:18}}>
+      <div className="rgrid c-lg" style={{"--gtc":"1.3fr 1fr"}}>
         {/* Schedule timeline */}
         <div className="card card-pad">
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
