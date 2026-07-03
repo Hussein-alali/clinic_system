@@ -197,6 +197,58 @@
     font-family:var(--font-mono);font-size:11px;color:var(--blue-900);
     border:1px solid var(--blue-100);
   }
+
+  /* mobile hamburger (hidden on desktop) */
+  .mobile-menu-btn{display:none;background:transparent;border:none;padding:8px;border-radius:8px;cursor:pointer;color:var(--ink-700)}
+  .mobile-menu-btn:hover{background:var(--ink-100)}
+  .sidebar-backdrop{display:none;position:fixed;inset:0;background:rgba(15,30,43,.42);backdrop-filter:blur(3px);z-index:90;animation:fadein .15s ease}
+
+  /* ── Tablet (<= 1024px) ─────────────────────────────────────── */
+  @media (max-width: 1024px){
+    .sidebar{width:220px}
+    .page{padding:22px 22px 60px}
+    .topbar{padding:0 18px;gap:10px}
+    .grid-4{grid-template-columns:repeat(2,1fr)}
+    .grid-3{grid-template-columns:repeat(2,1fr)}
+  }
+
+  /* ── Phone (<= 768px) ───────────────────────────────────────── */
+  @media (max-width: 768px){
+    .mobile-menu-btn{display:inline-flex;align-items:center;justify-content:center}
+    /* Sidebar becomes an off-canvas drawer sliding from the inline-start edge */
+    .sidebar{
+      position:fixed;top:0;bottom:0;inset-inline-start:0;
+      width:min(84vw, 300px);z-index:100;
+      transform:translateX(100%);       /* RTL: hide off the right edge */
+      transition:transform .22s ease;
+      box-shadow:none;
+    }
+    html[dir="ltr"] .sidebar{transform:translateX(-100%)}
+    .sidebar.open{transform:translateX(0);box-shadow:var(--shadow-lg)}
+    .sidebar-backdrop.open{display:block}
+
+    .topbar{height:56px;padding:0 12px;gap:8px}
+    .topbar .search-wrap{display:none}        /* hide inline search on phone */
+    .page{padding:16px 14px 80px}
+    .h1{font-size:22px}
+    .h2{font-size:16px}
+    .grid-2, .grid-3, .grid-4{grid-template-columns:1fr;gap:12px}
+    .grid-stats{grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+    .card-pad{padding:14px !important}
+
+    /* Tables scroll horizontally instead of overflowing the screen */
+    .card{overflow-x:auto;-webkit-overflow-scrolling:touch}
+    .tbl{min-width:560px}
+    .tbl th,.tbl td{padding:10px 10px;font-size:12.5px}
+
+    .modal{width:calc(100% - 20px);max-width:100%;border-radius:14px}
+    .seg{flex-wrap:wrap}
+    .btn{padding:8px 12px;font-size:12.5px}
+    .btn.btn-blue, .btn.btn-secondary{white-space:nowrap}
+
+    /* Row menu popover: keep on-screen */
+    .row-menu-pop{inset-inline-end:0 !important;min-width:180px !important}
+  }
 </style>
 
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>

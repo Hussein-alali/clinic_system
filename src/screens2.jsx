@@ -2100,6 +2100,7 @@ function App() {
   const [toast, setToast] = React.useState(null);
   const [notifsOpen, setNotifsOpen] = React.useState(false);
   const [paletteOpen, setPaletteOpen] = React.useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
 
   // ⌘K / Ctrl+K opens the global command palette (PRD 5.10)
   React.useEffect(() => {
@@ -2194,17 +2195,21 @@ function App() {
 
   return (
     <div style={{display:"flex",minHeight:"100vh",background:"var(--ink-50)"}}>
-      <Sidebar active={route} onNav={go} role={acct.role} user={acct}/>
+      <div className={"sidebar-backdrop" + (mobileNavOpen ? " open" : "")} onClick={()=>setMobileNavOpen(false)}/>
+      <Sidebar active={route} onNav={(id)=>{ setMobileNavOpen(false); go(id); }} role={acct.role} user={acct} isOpen={mobileNavOpen}/>
       <div style={{flex:1,minWidth:0,display:"flex",flexDirection:"column"}}>
         {/* Inline topbar replaced — pages own their own headers for richer context */}
         <div className="topbar">
-          <div style={{flex:1,display:"flex",alignItems:"center",gap:12}}>
+          <button type="button" className="mobile-menu-btn" aria-label="فتح القائمة" onClick={()=>setMobileNavOpen(o=>!o)}>
+            <I.Menu size={18}/>
+          </button>
+          <div style={{flex:1,display:"flex",alignItems:"center",gap:12,minWidth:0}}>
             <span className="mono" style={{fontSize:11,color:"var(--ink-400)",letterSpacing:".05em",textTransform:"uppercase"}}>{acct.role}</span>
             <span style={{color:"var(--ink-300)"}}>·</span>
-            <span style={{fontSize:13,color:"var(--ink-700)"}}>فرع مصر الجديدة</span>
+            <span style={{fontSize:13,color:"var(--ink-700)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>فرع مصر الجديدة</span>
             <span className="badge b-green" style={{marginLeft:6}}><span className="dot"></span>متصل</span>
           </div>
-          <button type="button" onClick={()=>setPaletteOpen(true)}
+          <button type="button" className="search-wrap" onClick={()=>setPaletteOpen(true)}
             style={{position:"relative",width:340,height:36,padding:"0 34px",borderRadius:10,
               border:"1px solid transparent",background:"var(--ink-50)",cursor:"pointer",
               display:"flex",alignItems:"center",gap:8,color:"var(--ink-500)",fontSize:13,fontFamily:"inherit"}}

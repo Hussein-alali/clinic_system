@@ -7,14 +7,22 @@
 // so the app remains fully functional offline / in demo mode.
 
 // ── Config ────────────────────────────────────────────────────
-const SUPABASE_URL = window.SUPABASE_URL || "https://yjtyvtyqyiqnqdctxpyz.supabase.co/rest/v1/";
+const SUPABASE_URL = window.SUPABASE_URL || "https://yjtyvtyqyiqnqdctxpyz.supabase.co";
 const SUPABASE_ANON_KEY = window.SUPABASE_ANON_KEY || "sb_publishable_doulZchKq9zleY_fTGhq-Q_5l3KTAv9";
 const LS_CLINIC = "kinetic.clinic";
 const LS_SECTIONS = "kinetic.sections";
+const LS_BRANCHES = "kinetic.branches";
+const LS_ACTIVE_BRANCH = "kinetic.active_branch";
 
 // ── Supabase client (nullable) ────────────────────────────────
+// Demo mode (?demo=1) forces the localStorage fallback so the app stays
+// interactive without a live Supabase backend (schema/RLS may not match).
+function __isDemo() {
+  try { return new URLSearchParams(window.location.search).get("demo") === "1"; }
+  catch { return false; }
+}
 let sb = null;
-if (SUPABASE_URL && SUPABASE_ANON_KEY && window.supabase && window.supabase.createClient) {
+if (!__isDemo() && SUPABASE_URL && SUPABASE_ANON_KEY && window.supabase && window.supabase.createClient) {
   sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 }
 window.SB = sb;
@@ -145,11 +153,103 @@ async function removeSection(id) {
   window.dispatchEvent(new CustomEvent("kinetic:sections-updated", { detail: next }));
 }
 
+// ── Branches (multi-branch support, LS-backed) ────────────────
+const DEFAULT_BRANCHES = [
+  { id: "br_heliopolis", name: "فرع مصر الجديدة", therapists: 4, rooms: 5, address: "14 ش صلاح سالم، مصر الجديدة، القاهرة", phone: "+20 2 2638 1100" },
+];
+
+function nextBranchId() {
+  return "br_" + Math.random().toString(36).slice(2, 9);
+}
+
+async function loadBranches() {
+  if (sb) {
+    const { data, error } = await sb.from("branches").select("*").order("created_at", { ascending: true });
+    if (!error && Array.isArray(data) && data.length) {
+      window.BRANCHES = data;
+      writeLS(LS_BRANCHES, data);
+      window.dispatchEvent(new CustomEvent("kinetic:branches-updated", { detail: data }));
+      return data;
+    }
+    if (error) console.warn("loadBranches failed", error.message || error);
+  }
+  const cached = readLS(LS_BRANCHES, DEFAULT_BRANCHES);
+  window.BRANCHES = cached;
+  return cached;
+}
+
+async function addBranch(branch) {
+  const list = window.BRANCHES || [];
+  const item = {
+    id: branch.id || nextBranchId(),
+    name: (branch.name || "فرع جديد").trim(),
+    therapists: Number(branch.therapists) || 0,
+    rooms: Number(branch.rooms) || 0,
+    address: branch.address || "",
+    phone: branch.phone || "",
+    created_at: new Date().toISOString(),
+  };
+  const next = [...list, item];
+  window.BRANCHES = next;
+  writeLS(LS_BRANCHES, next);
+  if (sb) {
+    const { error } = await sb.from("branches").insert(item);
+    if (error) console.warn("addBranch insert failed", error.message || error);
+  }
+  window.dispatchEvent(new CustomEvent("kinetic:branches-updated", { detail: next }));
+  return item;
+}
+
+async function updateBranch(id, patch) {
+  const list = window.BRANCHES || [];
+  const cleanPatch = { ...patch, updated_at: new Date().toISOString() };
+  if (cleanPatch.therapists !== undefined) cleanPatch.therapists = Number(cleanPatch.therapists) || 0;
+  if (cleanPatch.rooms !== undefined) cleanPatch.rooms = Number(cleanPatch.rooms) || 0;
+  if (typeof cleanPatch.name === "string") cleanPatch.name = cleanPatch.name.trim();
+  const next = list.map(b => b.id === id ? { ...b, ...cleanPatch } : b);
+  window.BRANCHES = next;
+  writeLS(LS_BRANCHES, next);
+  if (sb) {
+    const { error } = await sb.from("branches").update(cleanPatch).eq("id", id);
+    if (error) console.warn("updateBranch failed", error.message || error);
+  }
+  window.dispatchEvent(new CustomEvent("kinetic:branches-updated", { detail: next }));
+  return next.find(b => b.id === id);
+}
+
+function setActiveBranch(id) {
+  const list = window.BRANCHES || [];
+  if (!list.some(b => b.id === id)) return;
+  window.ACTIVE_BRANCH_ID = id;
+  writeLS(LS_ACTIVE_BRANCH, id);
+  window.dispatchEvent(new CustomEvent("kinetic:branches-updated", { detail: { activeId: id } }));
+}
+
+async function removeBranch(id) {
+  const list = window.BRANCHES || [];
+  if (list.length <= 1) return; // never allow removing the last branch
+  const next = list.filter(b => b.id !== id);
+  window.BRANCHES = next;
+  writeLS(LS_BRANCHES, next);
+  if (window.ACTIVE_BRANCH_ID === id) {
+    window.ACTIVE_BRANCH_ID = next[0].id;
+    writeLS(LS_ACTIVE_BRANCH, next[0].id);
+  }
+  if (sb) {
+    const { error } = await sb.from("branches").delete().eq("id", id);
+    if (error) console.warn("removeBranch failed", error.message || error);
+  }
+  window.dispatchEvent(new CustomEvent("kinetic:branches-updated", { detail: next }));
+}
+
 // ── Kick off initial hydration (fire-and-forget, but log failures) ─
 window.CLINIC = readLS(LS_CLINIC, DEFAULT_CLINIC);
 window.CUSTOM_SECTIONS = readLS(LS_SECTIONS, DEFAULT_SECTIONS);
+window.BRANCHES = readLS(LS_BRANCHES, DEFAULT_BRANCHES);
+window.ACTIVE_BRANCH_ID = readLS(LS_ACTIVE_BRANCH, window.BRANCHES[0]?.id || null);
 loadClinic().catch(e => console.warn("loadClinic failed", e));
 loadSections().catch(e => console.warn("loadSections failed", e));
+loadBranches().catch(e => console.warn("loadBranches failed", e));
 
 // ══════════════════════════════════════════════════════════════
 // Supabase Auth wrappers (PRD 4.3)
@@ -387,6 +487,7 @@ const KineticData = {
 Object.assign(window, {
   loadClinic, saveClinic,
   loadSections, addSection, updateSection, removeSection,
+  loadBranches, addBranch, updateBranch, setActiveBranch, removeBranch,
   signInEmail, signOut, getSession, onAuthChange,
   startDictation, printHTML, escHtml,
   KineticData,

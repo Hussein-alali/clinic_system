@@ -12,7 +12,201 @@ const CUSTOM_ICON_WHITELIST = new Set([
   "Stethoscope","Megaphone","Sparkle","Pin","Sun","Moon","Dashboard",
 ]);
 
-function Sidebar({ active, onNav, role, user }) {
+function BranchSwitcher({ role }) {
+  const [branches, setBranches] = React.useState(window.BRANCHES || []);
+  const [activeId, setActiveId] = React.useState(window.ACTIVE_BRANCH_ID || null);
+  const [open, setOpen] = React.useState(false);
+  const [adding, setAdding] = React.useState(false);
+  const [editing, setEditing] = React.useState(null);
+  const ref = React.useRef(null);
+
+  React.useEffect(()=>{
+    const onUpd = ()=>{
+      setBranches(window.BRANCHES || []);
+      setActiveId(window.ACTIVE_BRANCH_ID || null);
+    };
+    window.addEventListener("kinetic:branches-updated", onUpd);
+    return ()=> window.removeEventListener("kinetic:branches-updated", onUpd);
+  },[]);
+
+  React.useEffect(()=>{
+    if (!open) return;
+    const onDoc = (e)=>{ if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const onKey = (e)=>{ if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return ()=>{
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  },[open]);
+
+  const active = branches.find(b => b.id === activeId) || branches[0] || { name:"—", therapists:0, rooms:0 };
+  const isAdmin = role === "مدير";
+  const toArDigits = (n) => String(n).replace(/\d/g, d => "٠١٢٣٤٥٦٧٨٩"[+d]);
+
+  return (
+    <div ref={ref} style={{position:"relative",margin:"4px 14px 10px"}}>
+      <button
+        onClick={()=>setOpen(o=>!o)}
+        style={{
+          width:"100%", padding:"9px 11px", background:"var(--ink-50)",
+          border:"1px solid var(--ink-200)", borderRadius:11, display:"flex",
+          alignItems:"center", gap:10, cursor:"pointer", textAlign:"right"
+        }}>
+        <div style={{width:26,height:26,borderRadius:7,background:"var(--blue-100)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <I.MapPin size={13} style={{color:"var(--blue-700)"}}/>
+        </div>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:12.5,fontWeight:600,color:"var(--ink-900)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{active.name}</div>
+          <div style={{fontSize:10.5,color:"var(--ink-500)"}}>{toArDigits(active.therapists||0)} أخصائيين · {toArDigits(active.rooms||0)} غرف</div>
+        </div>
+        <I.ChevronDown size={13} style={{color:"var(--ink-400)",transform:open?"rotate(180deg)":"none",transition:"transform .15s"}}/>
+      </button>
+
+      {open && (
+        <div style={{
+          position:"absolute", top:"calc(100% + 6px)", insetInlineStart:0, insetInlineEnd:0,
+          background:"#fff", border:"1px solid var(--ink-200)", borderRadius:11,
+          boxShadow:"var(--shadow-md)", zIndex:30, padding:6, maxHeight:280, overflowY:"auto"
+        }}>
+          {branches.map(b => (
+            <div key={b.id}
+              onClick={()=>{ if (window.setActiveBranch) window.setActiveBranch(b.id); setOpen(false); if (window.showToast) window.showToast(`تم التبديل إلى ${b.name}`, "success"); }}
+              style={{
+                display:"flex",alignItems:"center",gap:8,padding:"8px 10px",
+                borderRadius:8, cursor:"pointer",
+                background: b.id === activeId ? "var(--blue-50)" : "transparent"
+              }}
+              onMouseEnter={(e)=>{ if (b.id !== activeId) e.currentTarget.style.background = "var(--ink-50)"; }}
+              onMouseLeave={(e)=>{ if (b.id !== activeId) e.currentTarget.style.background = "transparent"; }}
+            >
+              <I.MapPin size={12} style={{color:"var(--blue-700)"}}/>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:12.5,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{b.name}</div>
+                <div style={{fontSize:10.5,color:"var(--ink-500)"}}>{toArDigits(b.therapists||0)} · {toArDigits(b.rooms||0)} غرف</div>
+              </div>
+              {b.id === activeId && <I.Check size={12} style={{color:"var(--blue-700)"}}/>}
+              {isAdmin && (
+                <button
+                  title="تعديل الفرع"
+                  onClick={(e)=>{ e.stopPropagation(); setOpen(false); setEditing(b); }}
+                  style={{border:"none",background:"transparent",padding:4,borderRadius:6,cursor:"pointer",color:"var(--ink-500)"}}
+                  onMouseEnter={(e)=>e.currentTarget.style.background="var(--ink-100)"}
+                  onMouseLeave={(e)=>e.currentTarget.style.background="transparent"}
+                >
+                  <I.Edit size={12}/>
+                </button>
+              )}
+              {isAdmin && branches.length > 1 && b.id !== activeId && (
+                <button
+                  title="حذف الفرع"
+                  onClick={async (e)=>{
+                    e.stopPropagation();
+                    if (!window.confirm(`حذف ${b.name}؟`)) return;
+                    if (window.removeBranch) await window.removeBranch(b.id);
+                    if (window.showToast) window.showToast(`تم حذف ${b.name}`, "success");
+                  }}
+                  style={{border:"none",background:"transparent",padding:4,borderRadius:6,cursor:"pointer",color:"var(--red)"}}
+                  onMouseEnter={(e)=>e.currentTarget.style.background="var(--red-50, #fee2e2)"}
+                  onMouseLeave={(e)=>e.currentTarget.style.background="transparent"}
+                >
+                  <I.X size={12}/>
+                </button>
+              )}
+            </div>
+          ))}
+          {isAdmin && (
+            <>
+              <div style={{height:1,background:"var(--ink-100)",margin:"6px 4px"}}/>
+              <button
+                onClick={()=>{ setOpen(false); setAdding(true); }}
+                style={{
+                  width:"100%", display:"flex", alignItems:"center", gap:8, padding:"8px 10px",
+                  border:"none", background:"transparent", borderRadius:8, cursor:"pointer",
+                  color:"var(--blue-700)", fontSize:12.5, fontWeight:600
+                }}
+                onMouseEnter={(e)=>e.currentTarget.style.background="var(--blue-50)"}
+                onMouseLeave={(e)=>e.currentTarget.style.background="transparent"}
+              >
+                <I.Plus size={13}/> إضافة فرع جديد
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {adding && <AddBranchModal onClose={()=>setAdding(false)}/>}
+      {editing && <AddBranchModal editing={editing} onClose={()=>setEditing(null)}/>}
+    </div>
+  );
+}
+
+function AddBranchModal({ onClose, editing }) {
+  const isEdit = !!editing;
+  const [form, setForm] = React.useState({
+    name: editing?.name || "",
+    therapists: editing?.therapists ?? "",
+    rooms: editing?.rooms ?? "",
+    address: editing?.address || "",
+    phone: editing?.phone || "",
+  });
+  const [saving, setSaving] = React.useState(false);
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  async function onSave() {
+    const name = form.name.trim();
+    if (!name) { if (window.showToast) window.showToast("اسم الفرع مطلوب", "error"); return; }
+    setSaving(true);
+    try {
+      if (isEdit) {
+        if (window.updateBranch) await window.updateBranch(editing.id, form);
+        if (window.showToast) window.showToast(`تم تحديث ${name}`, "success");
+      } else {
+        const branch = window.addBranch ? await window.addBranch(form) : null;
+        if (branch && window.setActiveBranch) window.setActiveBranch(branch.id);
+        if (window.showToast) window.showToast(`تم إضافة ${name}`, "success");
+      }
+      onClose();
+    } catch (e) {
+      console.warn("branch save failed", e);
+      if (window.showToast) window.showToast("تعذّر حفظ الفرع", "error");
+    } finally { setSaving(false); }
+  }
+
+  return (
+    <Modal title={isEdit ? `تعديل ${editing.name}` : "إضافة فرع جديد"} onClose={onClose} footer={<>
+      <button className="btn btn-ghost" onClick={onClose}>إلغاء</button>
+      <button className="btn btn-blue" disabled={saving} onClick={onSave}>
+        {isEdit ? <I.Check size={13}/> : <I.Plus size={13}/>}
+        {saving ? "جارٍ الحفظ…" : (isEdit ? "حفظ التغييرات" : "إضافة الفرع")}
+      </button>
+    </>}>
+      <Field label="اسم الفرع" required>
+        <input className="input" placeholder="فرع المعادي" value={form.name} onChange={e=>set("name", e.target.value)}/>
+      </Field>
+      <div style={{height:12}}/>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <Field label="عدد الأخصائيين">
+          <input className="input" type="number" min="0" placeholder="4" value={form.therapists} onChange={e=>set("therapists", e.target.value)}/>
+        </Field>
+        <Field label="عدد الغرف">
+          <input className="input" type="number" min="0" placeholder="5" value={form.rooms} onChange={e=>set("rooms", e.target.value)}/>
+        </Field>
+      </div>
+      <div style={{height:12}}/>
+      <Field label="العنوان">
+        <input className="input" placeholder="14 ش صلاح سالم، القاهرة" value={form.address} onChange={e=>set("address", e.target.value)}/>
+      </Field>
+      <div style={{height:12}}/>
+      <Field label="الهاتف">
+        <input className="input" placeholder="+20 2 xxxx xxxx" value={form.phone} onChange={e=>set("phone", e.target.value)}/>
+      </Field>
+    </Modal>
+  );
+}
+
+function Sidebar({ active, onNav, role, user, isOpen }) {
   // ── Live clinic + custom sections (re-render on updates) ──────
   const [clinic, setClinic] = React.useState(window.CLINIC || { name:"Kinetic", subtitle:"نظام العيادة", logo:null });
   const [customs, setCustoms] = React.useState(window.CUSTOM_SECTIONS || []);
@@ -89,7 +283,7 @@ function Sidebar({ active, onNav, role, user }) {
   const uInit = window.initialsOf ? window.initialsOf(u.name) : "ش ع";
 
   return (
-    <aside className="sidebar">
+    <aside className={"sidebar" + (isOpen ? " open" : "")}>
       {/* Brand */}
       <div style={{padding:"18px 20px 14px",display:"flex",alignItems:"center",gap:10}}>
         {clinic.logo
@@ -102,20 +296,7 @@ function Sidebar({ active, onNav, role, user }) {
       </div>
 
       {/* Clinic switcher */}
-      <button style={{
-        margin:"4px 14px 10px", padding:"9px 11px", background:"var(--ink-50)",
-        border:"1px solid var(--ink-200)", borderRadius:11, display:"flex",
-        alignItems:"center", gap:10, cursor:"pointer", textAlign:"left"
-      }}>
-        <div style={{width:26,height:26,borderRadius:7,background:"var(--blue-100)",display:"flex",alignItems:"center",justifyContent:"center"}}>
-          <I.MapPin size={13} style={{color:"var(--blue-700)"}}/>
-        </div>
-        <div style={{flex:1,minWidth:0}}>
-          <div style={{fontSize:12.5,fontWeight:600,color:"var(--ink-900)"}}>فرع مصر الجديدة</div>
-          <div style={{fontSize:10.5,color:"var(--ink-500)"}}>٤ أخصائيين · ٥ غرف</div>
-        </div>
-        <I.ChevronDown size={13} style={{color:"var(--ink-400)"}}/>
-      </button>
+      <BranchSwitcher role={role}/>
 
       <nav style={{flex:1, overflowY:"auto", paddingBottom:14}}>
         {groups.map((g,gi)=>(
@@ -219,7 +400,7 @@ function SkeletonRow({ count=5 }) {
 
 // ── Modal ──────────────────────────────────────────────────────
 function Modal({ open, onClose, children, title, footer, width=560 }) {
-  if (!open) return null;
+  if (open === false) return null;
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" style={{width,maxWidth:`calc(100% - 40px)`}} onClick={e=>e.stopPropagation()}>
