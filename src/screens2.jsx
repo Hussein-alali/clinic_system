@@ -21,11 +21,11 @@ function Treatments({ go }) {
   const plans = [
     { id:"TP-2231", patient:"هناء مصطفى",   diag:"انزلاق غضروفي L4–L5",     therapist:"كريم صالح", goals:5,  progress:42, sessions:"5/12", status:"نشط",   updated:"اليوم" },
     { id:"TP-2232", patient:"عمر السيد",  diag:"كتف متجمدة (يمين)",        therapist:"لينا فاروق",goals:3,  progress:62, sessions:"5/8",  status:"نشط",   updated:"أمس" },
-    { id:"TP-2233", patient:"آية كريم",     diag:"ألم الرضفة الفخذية",        therapist:"كريم صالح", goals:4,  progress:0,  Sessions:"0/10", status:"مسودة",    updated:"منذ يومين" },
+    { id:"TP-2233", patient:"آية كريم",     diag:"ألم الرضفة الفخذية",        therapist:"كريم صالح", goals:4,  progress:0,  sessions:"0/10", status:"مسودة",    updated:"منذ يومين" },
     { id:"TP-2234", patient:"وليد حسن",   diag:"خشونة الفقرات العنقية",       therapist:"منى حلمي", goals:4,  progress:27, sessions:"4/15", status:"نشط",   updated:"منذ 3 أيام" },
     { id:"TP-2235", patient:"نور عبدالرحمن",diag:"تأهيل بعد جراحة الرباط الصليبي",         therapist:"لينا فاروق",goals:6,  progress:25, sessions:"6/24", status:"نشط",   updated:"اليوم" },
     { id:"TP-2236", patient:"سلمى رضا",     diag:"التهاب اللفافة الأخمصية",          therapist:"كريم صالح", goals:3,  progress:38, sessions:"3/8",  status:"نشط",   updated:"منذ 4 أيام" },
-    { id:"TP-2237", patient:"تامر إبراهيم",  diag:"عرق النسا (يسار)",               therapist:"منى حلمي", goals:3,  progress:100,Sessions:"6/6",  status:"مكتمل",updated:"منذ أسبوعين" },
+    { id:"TP-2237", patient:"تامر إبراهيم",  diag:"عرق النسا (يسار)",               therapist:"منى حلمي", goals:3,  progress:100,sessions:"6/6",  status:"مكتمل",updated:"منذ أسبوعين" },
   ];
 
   if (view === "detail" && selected) return <TreatmentPlanDetail plan={selected} onBack={()=>setView("list")} onEdit={()=>{setView("create");}}/>;
@@ -546,7 +546,7 @@ function Payments({ go }) {
               ))}
             </div>
             <select className="input" style={{width:160}} value={methodFilter} onChange={e=>setMethodFilter(e.target.value)}>
-              <option>الكل</option><option>نقدي</option><option>فيزا</option><option>إنستاباي</option><option>Vodafone نقدي</option><option>تحويل بنكي</option>
+              <option>الكل</option><option>نقدي</option><option>فيزا</option><option>إنستاباي</option><option>فودافون كاش</option><option>تحويل بنكي</option>
             </select>
           </div>
 
@@ -584,7 +584,7 @@ function Payments({ go }) {
                         <span className="pill" style={{fontSize:11}}>
                           {p.method==="نقدي" && <I.Dollar size={11}/>}
                           {p.method==="فيزا" && <I.CreditCard size={11}/>}
-                          {(p.method==="إنستاباي" || p.method==="Vodafone نقدي") && <I.Phone size={11}/>}
+                          {(p.method==="إنستاباي" || p.method==="فودافون كاش") && <I.Phone size={11}/>}
                           {p.method==="تحويل بنكي" && <I.Layers size={11}/>}
                           {p.method}
                         </span>
@@ -801,7 +801,7 @@ function NewInvoiceModal({ onClose }) {
         <Field label="تاريخ الاستحقاق"><input className="input" type="date" value={due} onChange={e=>setDue(e.target.value)}/></Field>
         <Field label="الدفع method">
           <select className="input" value={method} onChange={e=>setMethod(e.target.value)}>
-            <option>نقدي</option><option>فيزا</option><option>إنستاباي</option><option>Vodafone نقدي</option><option>تحويل بنكي</option>
+            <option>نقدي</option><option>فيزا</option><option>إنستاباي</option><option>فودافون كاش</option><option>تحويل بنكي</option>
           </select>
         </Field>
       </div>

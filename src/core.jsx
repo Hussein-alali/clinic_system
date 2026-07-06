@@ -113,12 +113,12 @@ const seedTherapists = [
 ];
 
 const seedPackages = [
-  { id:"PKG-1", name:"جلسة واحدة",      Sessions:1,  price:850,  active:true,  popular:false, color:"#BDD8E9", sold:48 },
-  { id:"PKG-2", name:"باقة البداية — 6 جلسات",Sessions:6,  price:4650, active:true,  popular:false, color:"#7BBDE8", sold:33 },
-  { id:"PKG-3", name:"الباقة الأساسية — 10 جلسات",  Sessions:10, price:7250, active:true,  popular:true,  color:"#3A7FB5", sold:62 },
-  { id:"PKG-4", name:"التعافي — 15 جلسة", Sessions:15, price:10100,active:true,  popular:false, color:"#1E4A6E", sold:21 },
-  { id:"PKG-5", name:"بعد العمليات — 24 جلسة",  Sessions:24, price:15400,active:true,  popular:false, color:"#7E6BD3", sold:14 },
-  { id:"PKG-6", name:"الكلاسيكية — 30 جلسة",   Sessions:30, price:18500,active:false, popular:false, color:"#8898A8", sold:0  },
+  { id:"PKG-1", name:"جلسة واحدة",      sessions:1,  price:850,  active:true,  popular:false, color:"#BDD8E9", sold:48 },
+  { id:"PKG-2", name:"باقة البداية — 6 جلسات",sessions:6,  price:4650, active:true,  popular:false, color:"#7BBDE8", sold:33 },
+  { id:"PKG-3", name:"الباقة الأساسية — 10 جلسات",  sessions:10, price:7250, active:true,  popular:true,  color:"#3A7FB5", sold:62 },
+  { id:"PKG-4", name:"التعافي — 15 جلسة", sessions:15, price:10100,active:true,  popular:false, color:"#1E4A6E", sold:21 },
+  { id:"PKG-5", name:"بعد العمليات — 24 جلسة",  sessions:24, price:15400,active:true,  popular:false, color:"#7E6BD3", sold:14 },
+  { id:"PKG-6", name:"الكلاسيكية — 30 جلسة",   sessions:30, price:18500,active:false, popular:false, color:"#8898A8", sold:0  },
 ];
 
 const seedPayments = [
