@@ -339,7 +339,7 @@ function Patients({ go }) {
             </thead>
             <tbody>
               {filtered.map(p=>(
-                <tr key={p.id} style={{cursor:"pointer"}} onClick={()=>{setSelected(p);setView("detail")}}>
+                <tr key={p.id} data-clickable="true" tabIndex={0} onClick={()=>{setSelected(p);setView("detail")}} onKeyDown={e=>{ if(e.key==="Enter"||e.key===" "){e.preventDefault();setSelected(p);setView("detail");} }}>
                   <td onClick={e=>e.stopPropagation()}><input type="checkbox"/></td>
                   <td>
                     <div style={{display:"flex",alignItems:"center",gap:10}}>
@@ -668,6 +668,40 @@ function PatientHistory() {
 }
 
 function PatientTreatmentPlan() {
+  const [plan, setPlan] = React.useState({
+    goals: [
+      { g:"تقليل ألم أسفل الظهر إلى ≤ 2/10", done:false },
+      { g:"استعادة انحناء القطنية إلى 90°+", done:false },
+      { g:"العودة للجري 5 كم/أسبوع", done:false },
+      { g:"إيقاف المسكنات", done:true },
+      { g:"تأسيس القياسات المرجعية", done:true },
+    ],
+    modalities: ["علاج يدوي","تمدد ماكنزي","تحفيز كهربي","برنامج ثيراباند","تثبيت الجذع","علاج حراري"],
+    notes: "المريض is responding well to تمدد ماكنزي protocol. متابعة gradual loading on TheraBand red. Re-assess L4–L5 ROM at جلسة 10. Advise against prolonged sitting; suggest standing desk.",
+    therapist: { initials:"KS", name:"كريم صالح", spec:"علاج يدوي" },
+    diagnosis: "انزلاق غضروفي L4–L5, مع radiculopathy to left L5 dermatome",
+    schedule: { frequency:"2× / week", duration:"6 weeks", total:12 },
+  });
+  const [editing, setEditing] = React.useState(null);
+
+  function toggleGoal(i) {
+    setPlan(p => ({ ...p, goals: p.goals.map((g,idx)=> idx===i ? {...g, done:!g.done} : g) }));
+  }
+  function openEditor() {
+    setEditing(JSON.parse(JSON.stringify(plan)));
+  }
+  function saveEditor() {
+    const clean = {
+      ...editing,
+      goals: editing.goals.map(g => ({ ...g, g: g.g.trim() })).filter(g => g.g),
+      modalities: editing.modalities.map(m => m.trim()).filter(Boolean),
+      schedule: { ...editing.schedule, total: Number(editing.schedule.total) || 0 },
+    };
+    setPlan(clean);
+    setEditing(null);
+    if (window.showToast) window.showToast("تم حفظ خطة العلاج","success");
+  }
+
   return (
     <div>
       <div className="h3" style={{marginBottom:14}}>خطة العلاج النشطة</div>
@@ -675,15 +709,9 @@ function PatientTreatmentPlan() {
         <div>
           <div className="label">أهداف الخطة</div>
           <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:18}}>
-            {[
-              { g:"تقليل ألم أسفل الظهر إلى ≤ 2/10", done:false },
-              { g:"استعادة انحناء القطنية إلى 90°+", done:false },
-              { g:"العودة للجري 5 كم/أسبوع", done:false },
-              { g:"إيقاف المسكنات", done:true },
-              { g:"تأسيس القياسات المرجعية", done:true },
-            ].map((g,i)=>(
-              <label key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",border:"1px solid var(--ink-200)",borderRadius:10,fontSize:13}}>
-                <input type="checkbox" defaultChecked={g.done}/>
+            {plan.goals.map((g,i)=>(
+              <label key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",border:"1px solid var(--ink-200)",borderRadius:10,fontSize:13,cursor:"pointer"}}>
+                <input type="checkbox" checked={g.done} onChange={()=>toggleGoal(i)}/>
                 <span style={{flex:1,textDecoration:g.done?"line-through":"none",color:g.done?"var(--ink-500)":"var(--ink-900)"}}>{g.g}</span>
               </label>
             ))}
@@ -691,47 +719,129 @@ function PatientTreatmentPlan() {
 
           <div className="label">طرق العلاج</div>
           <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:14}}>
-            {["علاج يدوي","تمدد ماكنزي","تحفيز كهربي","برنامج ثيراباند","تثبيت الجذع","علاج حراري"].map(m=>(
+            {plan.modalities.map(m=>(
               <span key={m} className="pill tag-blue">{m}</span>
             ))}
           </div>
 
           <div className="label">ملاحظات</div>
-          <div style={{padding:14,background:"var(--ink-50)",borderRadius:12,fontSize:13,lineHeight:1.55}}>
-            المريض is responding well to تمدد ماكنزي protocol. متابعة gradual loading on TheraBand red.
-            Re-assess L4–L5 ROM at جلسة 10. Advise against prolonged sitting; suggest standing desk.
+          <div style={{padding:14,background:"var(--ink-50)",borderRadius:12,fontSize:13,lineHeight:1.55,whiteSpace:"pre-wrap"}}>
+            {plan.notes}
           </div>
         </div>
         <div>
           <div className="label">الأخصائي</div>
           <div style={{display:"flex",alignItems:"center",gap:10,padding:12,border:"1px solid var(--ink-200)",borderRadius:10,marginBottom:14}}>
-            <div className="av md" style={{background:"var(--blue-100)",color:"var(--blue-700)"}}>KS</div>
+            <div className="av md" style={{background:"var(--blue-100)",color:"var(--blue-700)"}}>{plan.therapist.initials}</div>
             <div style={{flex:1}}>
-              <div style={{fontSize:13,fontWeight:500}}>كريم صالح</div>
-              <div className="muted" style={{fontSize:11.5}}>علاج يدوي</div>
+              <div style={{fontSize:13,fontWeight:500}}>{plan.therapist.name}</div>
+              <div className="muted" style={{fontSize:11.5}}>{plan.therapist.spec}</div>
             </div>
-            <button className="btn btn-ghost btn-icon"><I.Edit size={13}/></button>
+            <button className="btn btn-ghost btn-icon" onClick={openEditor} aria-label="تعديل"><I.Edit size={13}/></button>
           </div>
 
           <div className="label">التشخيص</div>
-          <div style={{padding:12,border:"1px solid var(--ink-200)",borderRadius:10,fontSize:13,marginBottom:14}}>انزلاق غضروفي L4–L5, مع radiculopathy to left L5 dermatome</div>
+          <div style={{padding:12,border:"1px solid var(--ink-200)",borderRadius:10,fontSize:13,marginBottom:14}}>{plan.diagnosis}</div>
 
           <div className="label">الجدولة</div>
           <div style={{padding:14,border:"1px solid var(--ink-200)",borderRadius:10,marginBottom:14}}>
             <div style={{display:"flex",justifyContent:"space-between",fontSize:12.5,marginBottom:6}}>
-              <span className="muted">التكرار</span><span>2× / week</span>
+              <span className="muted">التكرار</span><span>{plan.schedule.frequency}</span>
             </div>
             <div style={{display:"flex",justifyContent:"space-between",fontSize:12.5,marginBottom:6}}>
-              <span className="muted">المدة</span><span>6 weeks</span>
+              <span className="muted">المدة</span><span>{plan.schedule.duration}</span>
             </div>
             <div style={{display:"flex",justifyContent:"space-between",fontSize:12.5}}>
-              <span className="muted">الإجمالي Sessions</span><span className="mono">12</span>
+              <span className="muted">الإجمالي Sessions</span><span className="mono">{plan.schedule.total}</span>
             </div>
           </div>
 
-          <button className="btn btn-blue" style={{width:"100%",justifyContent:"center"}}><I.Edit size={13}/> تعديل treatment plan</button>
+          <button className="btn btn-blue" style={{width:"100%",justifyContent:"center"}} onClick={openEditor}>
+            <I.Edit size={13}/> تعديل treatment plan
+          </button>
         </div>
       </div>
+
+      {editing && (
+        <Modal title="تعديل خطة العلاج" onClose={()=>setEditing(null)} width={640}
+          footer={<>
+            <button className="btn btn-ghost" onClick={()=>setEditing(null)}>إلغاء</button>
+            <button className="btn btn-blue" onClick={saveEditor}><I.Check size={13}/> حفظ</button>
+          </>}>
+          <Field label="التشخيص">
+            <input className="input" value={editing.diagnosis} onChange={e=>setEditing({...editing, diagnosis:e.target.value})}/>
+          </Field>
+
+          <div style={{height:14}}/>
+          <div className="label">أهداف الخطة</div>
+          <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:6}}>
+            {editing.goals.map((g,i)=>(
+              <div key={i} style={{display:"flex",alignItems:"center",gap:8}}>
+                <input type="checkbox" checked={g.done}
+                  onChange={()=>setEditing({...editing, goals: editing.goals.map((x,ix)=> ix===i ? {...x, done:!x.done} : x)})}/>
+                <input className="input" value={g.g} placeholder="اكتب هدفًا…"
+                  onChange={e=>setEditing({...editing, goals: editing.goals.map((x,ix)=> ix===i ? {...x, g:e.target.value} : x)})}/>
+                <button className="btn btn-ghost btn-icon" aria-label="حذف"
+                  onClick={()=>setEditing({...editing, goals: editing.goals.filter((_,ix)=>ix!==i)})}>
+                  <I.Trash size={13}/>
+                </button>
+              </div>
+            ))}
+          </div>
+          <button className="btn btn-secondary" style={{marginBottom:14}}
+            onClick={()=>setEditing({...editing, goals:[...editing.goals, {g:"", done:false}]})}>
+            <I.Plus size={13}/> إضافة هدف
+          </button>
+
+          <div className="label">طرق العلاج</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:8}}>
+            {editing.modalities.map((m,i)=>(
+              <span key={i} className="pill tag-blue" style={{gap:4}}>
+                {m}
+                <button type="button" onClick={()=>setEditing({...editing, modalities: editing.modalities.filter((_,ix)=>ix!==i)})}
+                  style={{background:"none",border:"none",color:"inherit",cursor:"pointer",padding:0,display:"inline-flex"}} aria-label="إزالة">
+                  <I.X size={12}/>
+                </button>
+              </span>
+            ))}
+          </div>
+          <ModalityAdder onAdd={m=>setEditing({...editing, modalities:[...editing.modalities, m]})}/>
+
+          <div style={{height:14}}/>
+          <div className="rgrid c-sm" style={{"--gtc":"repeat(3,1fr)",gap:10}}>
+            <Field label="التكرار"><input className="input" value={editing.schedule.frequency}
+              onChange={e=>setEditing({...editing, schedule:{...editing.schedule, frequency:e.target.value}})}/></Field>
+            <Field label="المدة"><input className="input" value={editing.schedule.duration}
+              onChange={e=>setEditing({...editing, schedule:{...editing.schedule, duration:e.target.value}})}/></Field>
+            <Field label="الإجمالي Sessions"><input className="input" type="number" min="0" value={editing.schedule.total}
+              onChange={e=>setEditing({...editing, schedule:{...editing.schedule, total:e.target.value}})}/></Field>
+          </div>
+
+          <div style={{height:14}}/>
+          <Field label="ملاحظات">
+            <textarea className="input" rows={4} style={{padding:10,resize:"vertical"}}
+              value={editing.notes} onChange={e=>setEditing({...editing, notes:e.target.value})}/>
+          </Field>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function ModalityAdder({ onAdd }) {
+  const [v, setV] = React.useState("");
+  function submit(){
+    const t = v.trim();
+    if (!t) return;
+    onAdd(t);
+    setV("");
+  }
+  return (
+    <div style={{display:"flex",gap:6}}>
+      <input className="input" placeholder="أضف طريقة علاج…" value={v}
+        onChange={e=>setV(e.target.value)}
+        onKeyDown={e=>{ if (e.key==="Enter") { e.preventDefault(); submit(); } }}/>
+      <button className="btn btn-secondary" onClick={submit}><I.Plus size={13}/></button>
     </div>
   );
 }
@@ -977,7 +1087,7 @@ function FormPersonal({ form, setField }) {
         <Field label="العمر"><input className="input" type="number" placeholder="34" value={form.age} onChange={e=>setField("age", e.target.value)}/></Field>
         <Field label="الجنس">
           <div style={{display:"flex",gap:6}}>
-            {["Female","Male","Other"].map(g=>(
+            {["Female","Male"].map(g=>(
               <button key={g} className={"btn " + (form.gender===g?"btn-primary":"btn-secondary")} style={{flex:1,justifyContent:"center"}} onClick={()=>setField("gender", g)}>{g}</button>
             ))}
           </div>
@@ -1236,7 +1346,7 @@ function CalendarView({ dateOffset, setDateOffset }) {
             )}
 
             {/* appointments */}
-            {appts.filter(a=>a.colIndex===col).map(a=>{
+            {appts.filter(a=>a.colIndex===col && a.status!=="متاح").map(a=>{
               const top = (minutesFromHour(a.time)/60)*54;
               const h = (a.dur/60)*54;
               const isAvail = a.status==="متاح";

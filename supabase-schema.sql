@@ -88,6 +88,45 @@ create table if not exists staff (
   auth_uid  uuid                                -- links to auth.users.id
 );
 
+-- ── Therapists (roster + workload) ──────────────────────────
+create table if not exists therapists (
+  id          text primary key,
+  name        text not null,
+  spec        text,
+  "load"      int default 0,
+  max         int default 8,
+  color       text default '#7BBDE8',
+  created_at  timestamptz default now()
+);
+
+-- ── Packages (treatment plans / pricing) ────────────────────
+create table if not exists packages (
+  id          text primary key,
+  name        text not null,
+  sessions    int default 1,
+  price       numeric default 0,
+  active      boolean default true,
+  popular     boolean default false,
+  color       text default '#7BBDE8',
+  sold        int default 0,
+  created_at  timestamptz default now()
+);
+
+-- ── WhatsApp campaigns ──────────────────────────────────────
+create table if not exists campaigns (
+  id          text primary key,
+  name        text not null,
+  audience    int default 0,
+  sent        int default 0,
+  "read"      int default 0,
+  replied     int default 0,
+  status      text default 'draft',
+  template    text,
+  schedule    text,
+  best        boolean default false,
+  created_at  timestamptz default now()
+);
+
 -- ── Audit log (PRD Section 8) ───────────────────────────────
 create table if not exists audit_events (
   id          bigserial primary key,
@@ -130,6 +169,9 @@ alter table bookings      enable row level security;
 alter table sessions      enable row level security;
 alter table invoices      enable row level security;
 alter table staff         enable row level security;
+alter table therapists    enable row level security;
+alter table packages      enable row level security;
+alter table campaigns     enable row level security;
 alter table audit_events  enable row level security;
 
 -- Helper: current role from JWT ('admin' | 'receptionist' | 'doctor' | 'therapist' | 'patient')
@@ -191,6 +233,36 @@ create policy "admin write staff" on staff for all using (
   auth.jwt() ->> 'role' = 'admin'
 ) with check (
   auth.jwt() ->> 'role' = 'admin'
+);
+
+-- ── therapists ───────────────────────────────────────────────
+create policy "staff read therapists" on therapists for select using (
+  auth.jwt() ->> 'role' in ('admin','receptionist','doctor','therapist')
+);
+create policy "admin write therapists" on therapists for all using (
+  auth.jwt() ->> 'role' = 'admin'
+) with check (
+  auth.jwt() ->> 'role' = 'admin'
+);
+
+-- ── packages ─────────────────────────────────────────────────
+create policy "staff read packages" on packages for select using (
+  auth.jwt() ->> 'role' in ('admin','receptionist','doctor','therapist')
+);
+create policy "admin/reception write packages" on packages for all using (
+  auth.jwt() ->> 'role' in ('admin','receptionist')
+) with check (
+  auth.jwt() ->> 'role' in ('admin','receptionist')
+);
+
+-- ── campaigns ────────────────────────────────────────────────
+create policy "staff read campaigns" on campaigns for select using (
+  auth.jwt() ->> 'role' in ('admin','receptionist','doctor')
+);
+create policy "admin/reception write campaigns" on campaigns for all using (
+  auth.jwt() ->> 'role' in ('admin','receptionist')
+) with check (
+  auth.jwt() ->> 'role' in ('admin','receptionist')
 );
 
 -- ── audit_events ─────────────────────────────────────────────

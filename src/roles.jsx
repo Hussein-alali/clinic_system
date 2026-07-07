@@ -291,7 +291,7 @@ function DoctorDashboard({ go, user }){
               <thead><tr><th>المريض</th><th>التشخيص</th><th>متبقٍ</th><th>الدفع</th></tr></thead>
               <tbody>
                 {myPatients.map(p=>(
-                  <tr key={p.id} style={{cursor:"pointer"}} onClick={()=>go("patients")}>
+                  <tr key={p.id} data-clickable="true" tabIndex={0} onClick={()=>go("patients")} onKeyDown={e=>{ if(e.key==="Enter"||e.key===" "){e.preventDefault();go("patients");} }}>
                     <td><div style={{display:"flex",alignItems:"center",gap:8}}><div className="av sm">{initialsOf(p.name)}</div><span style={{fontWeight:500}}>{p.name}</span></div></td>
                     <td style={{fontSize:12.5}}>{p.diag}</td>
                     <td className="mono" style={{fontWeight:600}}>{p.remain}</td>

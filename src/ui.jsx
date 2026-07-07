@@ -498,6 +498,379 @@ function RowMenu({ items = [], size = 13, stopRowClick = true }) {
 }
 window.RowMenu = RowMenu;
 
+// ── Searchable combobox ────────────────────────────────────────
+// Modern healthcare-SaaS style entity picker. Drop-in replacement for a
+// native <select> that renders two-line cards, filters with Arabic
+// normalisation, and supports full keyboard nav.
+//
+// EntityCombobox is the generic engine — parents pass accessors (getId,
+// getPrimary, renderSecondary, …) so the same component can power patient,
+// therapist, or any other picker. PatientCombobox and TherapistCombobox
+// are thin wrappers that preset the accessors for their domain.
+//
+// Features: instant filtering with Arabic normalisation, highlighted
+// matches, full keyboard nav (↑ ↓ Enter Esc Home End), fixed-positioned
+// panel so it escapes modal overflow clipping, virtualised list for
+// large datasets (>60 rows), soft shadow + slide/fade animation.
+function normalizeAr(s) {
+  if (s == null) return "";
+  return String(s)
+    .toLowerCase()
+    .replace(/[\u064B-\u0652\u0670]/g, "")   // strip Arabic diacritics
+    .replace(/[إأآٱا]/g, "ا")
+    .replace(/ى/g, "ي")
+    .replace(/ؤ/g, "و")
+    .replace(/ئ/g, "ي")
+    .replace(/ة/g, "ه")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+function initialsOf2(name) {
+  return (name || "?").trim().split(/\s+/).slice(0, 2).map(w => w[0] || "").join("").toUpperCase();
+}
+function highlightMatch(text, query) {
+  const raw = String(text == null ? "" : text);
+  const q = String(query || "").trim();
+  if (!q) return raw;
+  const lo = raw.toLowerCase();
+  const i = lo.indexOf(q.toLowerCase());
+  if (i < 0) return raw; // normalised-only match: safer to leave unhighlighted
+  return (
+    <>
+      {raw.slice(0, i)}
+      <mark className="pcombo-hl">{raw.slice(i, i + q.length)}</mark>
+      {raw.slice(i + q.length)}
+    </>
+  );
+}
+
+function EntityCombobox({
+  value,
+  onChange,
+  items = [],
+  // Accessors — every one has a sensible default so simple cases stay terse.
+  getId = it => it && (it.id || it.patient_id || it.staff_id || it.name),
+  getPrimary = it => (it && it.name) || "",
+  getSearchText,                                 // (item) => haystack; defaults to primary + id
+  getInitials,                                   // (item) => 2-char string; defaults to first 2 words
+  getAccent,                                     // (item) => color; overrides avatar background
+  renderSecondary,                               // (item, hl) => ReactNode; hl(text) highlights query
+  // Presentation
+  placeholder = "اختر…",
+  emptyMessage = "لا نتائج",
+  emptyHint,
+  ariaLabel = "قائمة",
+  disabled = false,
+  loading = false,
+  countLabel,                                    // (visible, total) => string
+}) {
+  const [open, setOpen] = React.useState(false);
+  const [query, setQuery] = React.useState("");
+  const [activeIndex, setActiveIndex] = React.useState(0);
+  const [rect, setRect] = React.useState(null);
+  const [scrollTop, setScrollTop] = React.useState(0);
+  const rootRef = React.useRef(null);
+  const inputRef = React.useRef(null);
+  const listRef = React.useRef(null);
+
+  const haystackOf = React.useCallback(it => {
+    if (getSearchText) return getSearchText(it);
+    return `${getPrimary(it) || ""} ${getId(it) || ""}`;
+  }, [getSearchText, getPrimary, getId]);
+
+  const filtered = React.useMemo(() => {
+    const q = normalizeAr(query);
+    if (!q) return items;
+    return items.filter(it => normalizeAr(haystackOf(it)).includes(q));
+  }, [items, query, haystackOf]);
+
+  const selected = React.useMemo(
+    () => items.find(it => getId(it) === value) || null,
+    [items, value, getId]
+  );
+
+  const updateRect = React.useCallback(() => {
+    if (rootRef.current) setRect(rootRef.current.getBoundingClientRect());
+  }, []);
+
+  // Open lifecycle: focus input, seed active index to the selection,
+  // wire outside-click / scroll / resize dismissal.
+  React.useEffect(() => {
+    if (!open) { setQuery(""); setActiveIndex(0); setScrollTop(0); return; }
+    updateRect();
+    const t = setTimeout(() => inputRef.current && inputRef.current.focus(), 20);
+    const selIdx = filtered.findIndex(it => getId(it) === value);
+    if (selIdx >= 0) setActiveIndex(selIdx);
+
+    const onDoc = e => { if (rootRef.current && !rootRef.current.contains(e.target)) setOpen(false); };
+    const onKey = e => { if (e.key === "Escape") setOpen(false); };
+    const onAway = () => setOpen(false);
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", onAway);
+    window.addEventListener("scroll", onAway, true);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", onAway);
+      window.removeEventListener("scroll", onAway, true);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  React.useEffect(() => {
+    if (activeIndex >= filtered.length) setActiveIndex(Math.max(0, filtered.length - 1));
+  }, [filtered.length, activeIndex]);
+
+  React.useEffect(() => {
+    if (!open || !listRef.current) return;
+    const el = listRef.current.querySelector(`[data-idx="${activeIndex}"]`);
+    if (el && typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ block: "nearest" });
+    }
+  }, [activeIndex, open]);
+
+  function pick(it) {
+    if (!it) return;
+    onChange && onChange(getId(it), it);
+    setOpen(false);
+  }
+
+  function onKeyDown(e) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIndex(i => Math.min(i + 1, Math.max(0, filtered.length - 1)));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIndex(i => Math.max(i - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      pick(filtered[activeIndex]);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      setOpen(false);
+    } else if (e.key === "Home") {
+      e.preventDefault(); setActiveIndex(0);
+    } else if (e.key === "End") {
+      e.preventDefault(); setActiveIndex(Math.max(0, filtered.length - 1));
+    }
+  }
+
+  // Virtualisation — kicks in for large lists to keep DOM light
+  const ITEM_H = 60;
+  const VIEW_H = 360;
+  const virt = filtered.length > 60;
+  const startIdx = virt ? Math.max(0, Math.floor(scrollTop / ITEM_H) - 4) : 0;
+  const endIdx = virt ? Math.min(filtered.length, Math.ceil((scrollTop + VIEW_H) / ITEM_H) + 4) : filtered.length;
+  const padTop = virt ? startIdx * ITEM_H : 0;
+  const padBot = virt ? (filtered.length - endIdx) * ITEM_H : 0;
+  const visible = filtered.slice(startIdx, endIdx);
+
+  const panelStyle = rect ? {
+    position: "fixed",
+    top: Math.min(rect.bottom + 6, window.innerHeight - 60),
+    insetInlineStart: rect.left,
+    width: rect.width,
+    zIndex: 200,
+  } : { display: "none" };
+
+  // Curried highlight for row renderers
+  const hlNoop = t => t;
+  const hlWith = q => t => highlightMatch(t, q);
+
+  // Renders the avatar. Accent color (if any) is applied inline.
+  function renderAvatar(it) {
+    const initials = getInitials ? getInitials(it) : initialsOf2(getPrimary(it));
+    const accent = getAccent ? getAccent(it) : null;
+    const style = accent ? { background: accent, color: "#fff" } : undefined;
+    return <div className="av sm pcombo-av" style={style}>{initials}</div>;
+  }
+
+  // Renders one row's secondary line. Uses renderSecondary if given, else
+  // falls back to the item id in muted mono.
+  function renderRowSecondary(it, hl) {
+    if (renderSecondary) return renderSecondary(it, hl);
+    return <span className="mono">{hl(getId(it) || "")}</span>;
+  }
+
+  return (
+    <div ref={rootRef} className="pcombo" style={{position:"relative", direction:"inherit"}}>
+      <button
+        type="button"
+        className={`pcombo-trigger${open ? " is-open" : ""}${disabled ? " is-disabled" : ""}`}
+        aria-haspopup="listbox" aria-expanded={open}
+        disabled={disabled}
+        onClick={() => { if (!disabled) { updateRect(); setOpen(o => !o); } }}
+      >
+        {selected ? (
+          <div className="pcombo-sel">
+            {renderAvatar(selected)}
+            <div style={{flex:1, minWidth:0, textAlign:"start"}}>
+              <div className="pcombo-name" title={getPrimary(selected)}>{getPrimary(selected)}</div>
+              <div className="pcombo-sub">{renderRowSecondary(selected, hlNoop)}</div>
+            </div>
+          </div>
+        ) : (
+          <span className="pcombo-placeholder">{placeholder}</span>
+        )}
+        <I.ChevronDown size={14}
+          style={{color:"var(--ink-500)", flexShrink:0, marginInlineStart:8,
+                  transition:"transform .18s ease", transform: open ? "rotate(180deg)" : "none"}}/>
+      </button>
+
+      {open && (
+        <div className="pcombo-panel" role="listbox" aria-label={ariaLabel} style={panelStyle}>
+          <div className="pcombo-search">
+            <I.Search size={14} style={{color:"var(--ink-400)", flexShrink:0}}/>
+            <input
+              ref={inputRef}
+              className="pcombo-input"
+              value={query}
+              onChange={e => { setQuery(e.target.value); setActiveIndex(0); }}
+              onKeyDown={onKeyDown}
+              placeholder={placeholder}
+              aria-label={ariaLabel}
+              aria-autocomplete="list"
+              aria-controls="pcombo-list"
+            />
+            {query && (
+              <button type="button" className="pcombo-clear" onClick={() => { setQuery(""); inputRef.current && inputRef.current.focus(); }} aria-label="مسح البحث">
+                <I.X size={12}/>
+              </button>
+            )}
+          </div>
+
+          <div
+            ref={listRef}
+            id="pcombo-list"
+            className="pcombo-list"
+            style={{maxHeight: VIEW_H}}
+            onScroll={virt ? e => setScrollTop(e.currentTarget.scrollTop) : undefined}
+          >
+            {loading && (
+              <div className="pcombo-empty">
+                <span className="spin" style={{width:16, height:16, border:"2px solid var(--ink-200)", borderTopColor:"var(--blue-500)", borderRadius:"50%"}}/>
+                <div>جارٍ التحميل…</div>
+              </div>
+            )}
+
+            {!loading && filtered.length === 0 && (
+              <div className="pcombo-empty">
+                <I.Search size={18}/>
+                <div>{emptyMessage}</div>
+                {query && emptyHint && <div style={{fontSize:11.5, color:"var(--ink-400)"}}>{emptyHint}</div>}
+              </div>
+            )}
+
+            {!loading && filtered.length > 0 && (
+              <>
+                {padTop > 0 && <div style={{height:padTop}}/>}
+                {visible.map((it, i) => {
+                  const idx = startIdx + i;
+                  const id = getId(it);
+                  const isSel = id === value;
+                  const isAct = idx === activeIndex;
+                  const hl = hlWith(query);
+                  return (
+                    <div
+                      key={id}
+                      data-idx={idx}
+                      role="option"
+                      aria-selected={isSel}
+                      className={`pcombo-item${isSel ? " is-selected" : ""}${isAct ? " is-active" : ""}`}
+                      onMouseEnter={() => setActiveIndex(idx)}
+                      onClick={() => pick(it)}
+                    >
+                      {renderAvatar(it)}
+                      <div style={{flex:1, minWidth:0}}>
+                        <div className="pcombo-name" title={getPrimary(it)}>{hl(getPrimary(it))}</div>
+                        <div className="pcombo-sub">{renderRowSecondary(it, hl)}</div>
+                      </div>
+                      {isSel && <I.Check size={14} style={{color:"var(--blue-700)", flexShrink:0}}/>}
+                    </div>
+                  );
+                })}
+                {padBot > 0 && <div style={{height:padBot}}/>}
+              </>
+            )}
+          </div>
+
+          {!loading && filtered.length > 0 && (
+            <div className="pcombo-foot">
+              <span>{countLabel ? countLabel(filtered.length, items.length) : `${filtered.length} من ${items.length}`}</span>
+              <span className="pcombo-kbd">↑↓ للتنقل · Enter للاختيار · Esc للإغلاق</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+window.EntityCombobox = EntityCombobox;
+
+// ── Domain wrappers ────────────────────────────────────────────
+// Each wrapper is deliberately tiny — it just presets accessors for its
+// domain. Callers keep the exact same API they had with the native <select>:
+// pass value + onChange + the array they already have.
+function PatientCombobox({ value, onChange, patients = [], placeholder, disabled, loading }) {
+  return (
+    <EntityCombobox
+      value={value}
+      onChange={onChange}
+      items={patients}
+      getId={p => p.patient_id || p.id}
+      getPrimary={p => p.name}
+      getInitials={p => initialsOf2(p.name)}
+      getSearchText={p => `${p.name || ""} ${p.patient_id || p.id || ""} ${p.phone || ""} ${p.diag || p.diagnosis || ""}`}
+      renderSecondary={(p, hl) => (
+        <>
+          <span className="mono">{hl(p.patient_id || p.id || "")}</span>
+          {p.phone && <> · <span className="mono">{hl(p.phone)}</span></>}
+          {p.age && <> · {p.age} سنة</>}
+        </>
+      )}
+      placeholder={placeholder || "ابحث عن مريض بالاسم أو الرقم…"}
+      emptyMessage="لا يوجد مرضى مطابقون"
+      emptyHint="جرّب اسمًا آخر أو رقم ملف"
+      ariaLabel="ابحث عن مريض"
+      disabled={disabled}
+      loading={loading}
+    />
+  );
+}
+window.PatientCombobox = PatientCombobox;
+
+function TherapistCombobox({ value, onChange, therapists = [], placeholder, disabled, loading }) {
+  return (
+    <EntityCombobox
+      value={value}
+      onChange={onChange}
+      items={therapists}
+      getId={t => t.staff_id || t.id || t.name}
+      getPrimary={t => t.name}
+      getInitials={t => initialsOf2(t.name)}
+      getAccent={t => t.color}
+      getSearchText={t => `${t.name || ""} ${t.spec || ""}`}
+      renderSecondary={(t, hl) => {
+        const hasLoad = typeof t.load === "number" && typeof t.max === "number";
+        return (
+          <>
+            {t.spec ? hl(t.spec) : null}
+            {hasLoad && <> · {t.load}/{t.max} حالة</>}
+          </>
+        );
+      }}
+      placeholder={placeholder || "اختر الأخصائي…"}
+      emptyMessage="لا يوجد أخصائيين مطابقون"
+      ariaLabel="ابحث عن الأخصائي"
+      disabled={disabled}
+      loading={loading}
+    />
+  );
+}
+window.TherapistCombobox = TherapistCombobox;
+
 // ── Stat card ──────────────────────────────────────────────────
 function StatCard({ label, value, delta, deltaKind, icon, accent="#7BBDE8", spark }) {
   const up = deltaKind === "up";

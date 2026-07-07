@@ -277,9 +277,7 @@ async function signOut() {
   try {
     for (const cfg of Object.values(DATA_TABLES)) {
       localStorage.removeItem(cfg.ls);
-      if (window.DATA) window.DATA[cfg.key === "bookings" ? "appts"
-                                 : cfg.key === "invoices" ? "payments"
-                                 : cfg.key] = [];
+      if (window.DATA) window.DATA[friendlyName(cfg.key)] = [];
     }
   } catch (e) { console.warn("signOut cache clear failed", e); }
   window.dispatchEvent(new CustomEvent("kinetic:data-updated", { detail: { table: "*" } }));
@@ -379,17 +377,32 @@ function printHTML(title, bodyHtml) {
 // else in the row is UI-only seed metadata (patient name, doctor, room…)
 // that would trip PGRST204 on the strict schema.
 const DATA_TABLES = {
-  patients: { key: "patients",  pk: "patient_id",  ls: "kinetic.patients",
-              cols: ["patient_id","name","phone","age","gender","diagnosis","notes","created_at"] },
-  appts:    { key: "bookings",  pk: "booking_id",  ls: "kinetic.bookings",
-              cols: ["booking_id","patient_id","therapist_id","date","time","status","notes","created_at"] },
-  sessions: { key: "sessions",  pk: "session_id",  ls: "kinetic.sessions",
-              cols: ["session_id","patient_id","therapist_id","date","pain_score","session_notes","session_number","created_at"] },
-  payments: { key: "invoices",  pk: "invoice_id",  ls: "kinetic.invoices",
-              cols: ["invoice_id","patient_id","amount","paid","payment_method","status","created_at"] },
-  staff:    { key: "staff",     pk: "staff_id",    ls: "kinetic.staff",
-              cols: ["staff_id","name","role","phone","email","auth_uid"] },
+  patients:   { key: "patients",   pk: "patient_id",  ls: "kinetic.patients",
+                cols: ["patient_id","name","phone","age","gender","diagnosis","notes","created_at"] },
+  appts:      { key: "bookings",   pk: "booking_id",  ls: "kinetic.bookings",
+                cols: ["booking_id","patient_id","therapist_id","date","time","status","notes","created_at"] },
+  sessions:   { key: "sessions",   pk: "session_id",  ls: "kinetic.sessions",
+                cols: ["session_id","patient_id","therapist_id","date","pain_score","session_notes","session_number","created_at"] },
+  payments:   { key: "invoices",   pk: "invoice_id",  ls: "kinetic.invoices",
+                cols: ["invoice_id","patient_id","amount","paid","payment_method","status","created_at"] },
+  staff:      { key: "staff",      pk: "staff_id",    ls: "kinetic.staff",
+                cols: ["staff_id","name","role","phone","email","auth_uid"] },
+  therapists: { key: "therapists", pk: "id",          ls: "kinetic.therapists",
+                cols: ["id","name","spec","load","max","color"] },
+  packages:   { key: "packages",   pk: "id",          ls: "kinetic.packages",
+                cols: ["id","name","sessions","price","active","popular","color","sold"] },
+  campaigns:  { key: "campaigns",  pk: "id",          ls: "kinetic.campaigns",
+                cols: ["id","name","audience","sent","read","replied","status","template","schedule","best"] },
 };
+
+// Map a DATA_TABLES key back to its window.DATA.* alias. Two friendly names
+// diverge from the DB name (bookings→appts, invoices→payments); everything
+// else matches. Used by signOut cache clear.
+function friendlyName(key) {
+  if (key === "bookings") return "appts";
+  if (key === "invoices") return "payments";
+  return key;
+}
 
 // Legacy alias: some seeds use `id` instead of the real PK. Read PK from
 // either, prefer the real one.

@@ -106,19 +106,19 @@ const seedAppointments = [
 ];
 
 const seedTherapists = [
-  { name:"كريم صالح",  spec:"علاج يدوي",     load:6, max:8, color:"#7BBDE8" },
-  { name:"لينا فاروق",  spec:"تأهيل بعد العمليات",      load:5, max:8, color:"#7E6BD3" },
-  { name:"منى حلمي",   spec:"كبار السن / أعصاب",  load:3, max:6, color:"#3FA984" },
-  { name:"عادل نصر",    spec:"إصابات رياضية",    load:4, max:7, color:"#D49044" },
+  { id:"TH-1", name:"كريم صالح",  spec:"علاج يدوي",     load:6, max:8, color:"#7BBDE8" },
+  { id:"TH-2", name:"لينا فاروق",  spec:"تأهيل بعد العمليات",      load:5, max:8, color:"#7E6BD3" },
+  { id:"TH-3", name:"منى حلمي",   spec:"كبار السن / أعصاب",  load:3, max:6, color:"#3FA984" },
+  { id:"TH-4", name:"عادل نصر",    spec:"إصابات رياضية",    load:4, max:7, color:"#D49044" },
 ];
 
 const seedPackages = [
-  { id:"PKG-1", name:"جلسة واحدة",      Sessions:1,  price:850,  active:true,  popular:false, color:"#BDD8E9", sold:48 },
-  { id:"PKG-2", name:"باقة البداية — 6 جلسات",Sessions:6,  price:4650, active:true,  popular:false, color:"#7BBDE8", sold:33 },
-  { id:"PKG-3", name:"الباقة الأساسية — 10 جلسات",  Sessions:10, price:7250, active:true,  popular:true,  color:"#3A7FB5", sold:62 },
-  { id:"PKG-4", name:"التعافي — 15 جلسة", Sessions:15, price:10100,active:true,  popular:false, color:"#1E4A6E", sold:21 },
-  { id:"PKG-5", name:"بعد العمليات — 24 جلسة",  Sessions:24, price:15400,active:true,  popular:false, color:"#7E6BD3", sold:14 },
-  { id:"PKG-6", name:"الكلاسيكية — 30 جلسة",   Sessions:30, price:18500,active:false, popular:false, color:"#8898A8", sold:0  },
+  { id:"PKG-1", name:"جلسة واحدة",      sessions:1,  price:850,  active:true,  popular:false, color:"#BDD8E9", sold:48 },
+  { id:"PKG-2", name:"باقة البداية — 6 جلسات",sessions:6,  price:4650, active:true,  popular:false, color:"#7BBDE8", sold:33 },
+  { id:"PKG-3", name:"الباقة الأساسية — 10 جلسات",  sessions:10, price:7250, active:true,  popular:true,  color:"#3A7FB5", sold:62 },
+  { id:"PKG-4", name:"التعافي — 15 جلسة", sessions:15, price:10100,active:true,  popular:false, color:"#1E4A6E", sold:21 },
+  { id:"PKG-5", name:"بعد العمليات — 24 جلسة",  sessions:24, price:15400,active:true,  popular:false, color:"#7E6BD3", sold:14 },
+  { id:"PKG-6", name:"الكلاسيكية — 30 جلسة",   sessions:30, price:18500,active:false, popular:false, color:"#8898A8", sold:0  },
 ];
 
 const seedPayments = [
@@ -162,6 +162,22 @@ window.DATA = {
   campaigns: seedCampaigns,
   sessions: seedSessions,
 };
+
+// ── Reactive data hook ─────────────────────────────────────────
+// Components that read from window.DATA.* should call useDataVersion()
+// so they re-render when any table is upserted/removed/hydrated.
+// Emits the same event (kinetic:data-updated) already dispatched by
+// KineticData.upsert/remove and hydrateDomainTables.
+function useDataVersion() {
+  const [tick, setTick] = React.useState(0);
+  React.useEffect(() => {
+    const on = () => setTick(t => t + 1);
+    window.addEventListener("kinetic:data-updated", on);
+    return () => window.removeEventListener("kinetic:data-updated", on);
+  }, []);
+  return tick;
+}
+window.useDataVersion = useDataVersion;
 
 
 // ===== src/charts.jsx =====

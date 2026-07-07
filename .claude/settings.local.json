@@ -58,7 +58,11 @@
       "Bash(grep -q \"passed ===\" \"C:\\\\\\\\Users\\\\\\\\bdalr\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\C--Users-bdalr-Desktop-clinksys\\\\\\\\31b85d16-190f-41b6-b6ef-f95d6294ead9\\\\\\\\tasks\\\\\\\\brysfs9lq.output\")",
       "Bash(cat \"C:\\\\\\\\Users\\\\\\\\bdalr\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\C--Users-bdalr-Desktop-clinksys\\\\\\\\31b85d16-190f-41b6-b6ef-f95d6294ead9\\\\\\\\tasks\\\\\\\\brysfs9lq.output\")",
       "Bash(node *)",
-      "mcp__Claude_Code_Remote__send_later"
+      "mcp__Claude_Code_Remote__send_later",
+      "Bash(python -m http.server 8000)",
+      "Read(//c/Users/bdalr/.claude/skills/ui-ux-pro-max/**)",
+      "Bash(python scripts/search.py \"healthcare clinic dashboard list table minimal professional Arabic RTL\" --design-system -p \"Kinetic Clinic\")",
+      "Bash(python scripts/search.py \"data table hover row zebra sticky header\" --domain ux -n 8)"
     ]
   }
 }

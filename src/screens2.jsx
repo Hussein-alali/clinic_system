@@ -61,7 +61,7 @@ function Treatments({ go }) {
           <thead><tr><th>الخطة</th><th>المريض</th><th>التشخيص</th><th>الأخصائي</th><th>التقدّم</th><th>الجلسات</th><th>الحالة</th><th>آخر تحديث</th></tr></thead>
           <tbody>
             {plans.map(p=>(
-              <tr key={p.id} onClick={()=>{setSelected(p);setView("detail")}} style={{cursor:"pointer"}}>
+              <tr key={p.id} data-clickable="true" tabIndex={0} onClick={()=>{setSelected(p);setView("detail")}} onKeyDown={e=>{ if(e.key==="Enter"||e.key===" "){e.preventDefault();setSelected(p);setView("detail");} }}>
                 <td className="mono" style={{fontWeight:600}}>{p.id}</td>
                 <td>{p.patient}</td>
                 <td>{p.diag}</td>
@@ -125,6 +125,10 @@ function TreatmentPlanCreate({ onCancel, onSave, template }) {
   const [diag, setDiag] = React.useState(template || "متلازمة ألم الرضفة الفخذية");
   const [modalities, setModalities] = React.useState([]);
   const toggleModality = (m) => setModalities(list => list.includes(m) ? list.filter(x=>x!==m) : [...list, m]);
+  const patients = (window.scopePatients ? window.scopePatients(DATA.patients) : DATA.patients) || [];
+  const [patientId, setPatientId] = React.useState(patients[0] ? (patients[0].patient_id || patients[0].id) : "");
+  const therapists = (DATA.therapists || []);
+  const [therapistId, setTherapistId] = React.useState(therapists[0] ? (therapists[0].staff_id || therapists[0].id || therapists[0].name) : "");
   return (
     <Page>
       <div className="crumb" style={{cursor:"pointer"}} onClick={onCancel}><span>خطط العلاج</span><I.Chevron size={11}/><span style={{color:"var(--ink-700)"}}>خطة جديدة</span></div>
@@ -141,8 +145,12 @@ function TreatmentPlanCreate({ onCancel, onSave, template }) {
         <div className="card card-pad">
           <div className="h3" style={{marginBottom:14}}>الخطة details</div>
           <div className="rgrid c-sm" style={{"--gtc":"repeat(2,1fr)",gap:14}}>
-            <Field label="مريض" required><select className="input"><option>آية كريم (P-10243)</option><option>هناء مصطفى</option></select></Field>
-            <Field label="الأخصائي المسؤول" required><select className="input"><option>كريم صالح</option><option>لينا فاروق</option></select></Field>
+            <Field label="مريض" required>
+              <PatientCombobox value={patientId} onChange={setPatientId} patients={patients}/>
+            </Field>
+            <Field label="الأخصائي المسؤول" required>
+              <TherapistCombobox value={therapistId} onChange={setTherapistId} therapists={therapists}/>
+            </Field>
             <Field label="التشخيص" required span={2}><input className="input" value={diag} onChange={e=>setDiag(e.target.value)}/></Field>
             <Field label="الأهداف (هدف بكل سطر)" span={2}><textarea className="input" style={{height:100,padding:10}} defaultValue={"Restore pain-free stair descent\nReturn to running بواسطة July\nQuad strength symmetry ≥ 90%"}/></Field>
             <Field label="طرق العلاج" span={2}>
@@ -561,7 +569,7 @@ function Payments({ go }) {
                   const remaining = p.amount - p.paid;
                   const pct = p.amount ? p.paid/p.amount : 0;
                   return (
-                    <tr key={p.id} onClick={()=>setSelected(p)} style={{cursor:"pointer"}}>
+                    <tr key={p.id} data-clickable="true" tabIndex={0} onClick={()=>setSelected(p)} onKeyDown={e=>{ if(e.key==="Enter"||e.key===" "){e.preventDefault();setSelected(p);} }}>
                       <td className="mono" style={{fontWeight:600}}>{p.id}</td>
                       <td>
                         <div style={{display:"flex",alignItems:"center",gap:8}}>
@@ -789,13 +797,13 @@ function NewInvoiceModal({ onClose }) {
       </>}>
       <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:14,marginBottom:14}}>
         <Field label="مريض" required>
-          <select className="input" value={patientId} onChange={e=>setPatientId(e.target.value)}>
-            {patients.length===0 && <option value="">لا يوجد مرضى</option>}
-            {patients.map(p=>{
-              const pid = p.patient_id || p.id;
-              return <option key={pid} value={pid}>{p.name} ({pid})</option>;
-            })}
-          </select>
+          <PatientCombobox
+            value={patientId}
+            onChange={setPatientId}
+            patients={patients}
+            placeholder={patients.length === 0 ? "لا يوجد مرضى" : "ابحث عن مريض بالاسم أو الرقم…"}
+            disabled={patients.length === 0}
+          />
         </Field>
         <Field label="التاريخ"><input className="input" type="date" value={date} onChange={e=>setDate(e.target.value)}/></Field>
         <Field label="تاريخ الاستحقاق"><input className="input" type="date" value={due} onChange={e=>setDue(e.target.value)}/></Field>
@@ -835,12 +843,11 @@ function NewInvoiceModal({ onClose }) {
 // ───────────── Packages ─────────────
 function Packages({ go }) {
   const [editing, setEditing] = React.useState(null);
-  const [, bump] = React.useReducer(x => x + 1, 0);
-  const toggleActive = (p) => {
-    p.active = !p.active;
-    bump();
-    try { window.dispatchEvent(new CustomEvent("kinetic:data-updated", { detail: { table: "packages" } })); } catch(_) {}
-    if (window.showToast) window.showToast(p.active ? `تم تفعيل ${p.name}` : `تم إيقاف ${p.name}`, "success");
+  const toggleActive = async (p) => {
+    const next = { ...p, active: !p.active };
+    try { await window.KineticData.upsert("packages", next); }
+    catch (e) { console.warn("toggle package failed", e); }
+    if (window.showToast) window.showToast(next.active ? `تم تفعيل ${p.name}` : `تم إيقاف ${p.name}`, "success");
   };
   return (
     <Page>
@@ -881,17 +888,16 @@ function Packages({ go }) {
                 <RowMenu size={14} items={[
                   { label:"تعديل الباقة", icon:<I.Edit size={13}/>, onClick:()=>setEditing(p) },
                   { label:p.active?"إيقاف الباقة":"تفعيل الباقة", icon:<I.Check size={13}/>, onClick:()=>toggleActive(p) },
-                  { label:"مضاعفة", icon:<I.Plus size={13}/>, onClick:()=>{
-                    const clone = { ...p, id: (p.id||"PK-")+"-Copy", name:p.name+" — نسخة" };
-                    DATA.packages.push(clone);
-                    bump();
+                  { label:"مضاعفة", icon:<I.Plus size={13}/>, onClick:async()=>{
+                    const clone = { ...p, id: (p.id||"PK-")+"-Copy-"+Math.random().toString(36).slice(2,6), name:p.name+" — نسخة", sold:0 };
+                    try { await window.KineticData.upsert("packages", clone); }
+                    catch (e) { console.warn("clone package failed", e); }
                     if (window.showToast) window.showToast(`تم نسخ ${p.name}`,"success");
                   }},
-                  { label:"حذف الباقة", icon:<I.X size={13}/>, danger:true, onClick:()=>{
+                  { label:"حذف الباقة", icon:<I.X size={13}/>, danger:true, onClick:async()=>{
                     if (!window.confirm(`حذف ${p.name}؟`)) return;
-                    const idx = DATA.packages.indexOf(p);
-                    if (idx >= 0) DATA.packages.splice(idx,1);
-                    bump();
+                    try { await window.KineticData.remove("packages", p.id); }
+                    catch (e) { console.warn("delete package failed", e); }
                     if (window.showToast) window.showToast(`تم حذف ${p.name}`,"success");
                   }},
                 ]}/>
@@ -935,7 +941,6 @@ function Campaigns({ go }) {
   const [selected, setSelected] = React.useState(null);
   const [templatesOpen, setTemplatesOpen] = React.useState(false);
   const [initialTemplate, setInitialTemplate] = React.useState(null);
-  const [, bump] = React.useReducer(x => x + 1, 0);
 
   if (view === "builder") return <CampaignBuilder initialTemplate={initialTemplate} onCancel={()=>{setInitialTemplate(null);setView("list");}} onSave={()=>{
     if (window.showToast) window.showToast("تم إطلاق الحملة", "success");
@@ -981,7 +986,7 @@ function Campaigns({ go }) {
           <thead><tr><th>الحملة</th><th>الجمهور</th><th>مُرسلة</th><th>مقروءة</th><th>ردّ</th><th>القالب</th><th>الجدولة</th><th>الحالة</th><th></th></tr></thead>
           <tbody>
             {DATA.campaigns.map(c=>(
-              <tr key={c.id} onClick={()=>{setSelected(c);setView("analytics")}} style={{cursor:"pointer"}}>
+              <tr key={c.id} data-clickable="true" tabIndex={0} onClick={()=>{setSelected(c);setView("analytics")}} onKeyDown={e=>{ if(e.key==="Enter"||e.key===" "){e.preventDefault();setSelected(c);setView("analytics");} }}>
                 <td>
                   <div style={{display:"flex",alignItems:"center",gap:10}}>
                     <div style={{width:32,height:32,borderRadius:8,background:c.best?"linear-gradient(135deg,#25D366,#1FA351)":"var(--blue-100)",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -1018,22 +1023,22 @@ function Campaigns({ go }) {
                   <button className="btn btn-ghost btn-icon" onClick={(e)=>{e.stopPropagation();setSelected(c);setView("analytics")}}><I.Chart size={13}/></button>
                   <RowMenu size={13} items={[
                     { label:"عرض التحليلات", icon:<I.Chart size={13}/>, onClick:()=>{setSelected(c);setView("analytics");} },
-                    { label:"مضاعفة الحملة", icon:<I.Plus size={13}/>, onClick:()=>{
-                      const clone = { ...c, id: (c.id||"CM-")+"-C", name: c.name+" — نسخة", status:"مسودة", sent:0, read:0, replied:0 };
-                      DATA.campaigns.push(clone);
-                      bump();
+                    { label:"مضاعفة الحملة", icon:<I.Plus size={13}/>, onClick:async()=>{
+                      const clone = { ...c, id: (c.id||"CM-")+"-C-"+Math.random().toString(36).slice(2,6), name: c.name+" — نسخة", status:"مسودة", sent:0, read:0, replied:0 };
+                      try { await window.KineticData.upsert("campaigns", clone); }
+                      catch (e) { console.warn("clone campaign failed", e); }
                       if (window.showToast) window.showToast(`تم نسخ الحملة`,"success");
                     }},
-                    { label:c.status==="جارٍ"?"إيقاف مؤقت":"استئناف", icon:<I.X size={13}/>, onClick:()=>{
-                      c.status = c.status==="جارٍ" ? "مجدول" : "جارٍ";
-                      bump();
-                      if (window.showToast) window.showToast(c.status==="جارٍ"?"تم الاستئناف":"تم الإيقاف المؤقت","success");
+                    { label:c.status==="جارٍ"?"إيقاف مؤقت":"استئناف", icon:<I.X size={13}/>, onClick:async()=>{
+                      const nextStatus = c.status==="جارٍ" ? "مجدول" : "جارٍ";
+                      try { await window.KineticData.upsert("campaigns", { ...c, status: nextStatus }); }
+                      catch (e) { console.warn("toggle campaign failed", e); }
+                      if (window.showToast) window.showToast(nextStatus==="جارٍ"?"تم الاستئناف":"تم الإيقاف المؤقت","success");
                     }},
-                    { label:"حذف الحملة", icon:<I.X size={13}/>, danger:true, onClick:()=>{
+                    { label:"حذف الحملة", icon:<I.X size={13}/>, danger:true, onClick:async()=>{
                       if (!window.confirm(`حذف حملة ${c.name}؟`)) return;
-                      const idx = DATA.campaigns.indexOf(c);
-                      if (idx >= 0) DATA.campaigns.splice(idx,1);
-                      bump();
+                      try { await window.KineticData.remove("campaigns", c.id); }
+                      catch (e) { console.warn("delete campaign failed", e); }
                       if (window.showToast) window.showToast("تم حذف الحملة","success");
                     }},
                   ]}/>
@@ -2098,6 +2103,9 @@ Object.assign(window, { Reports, SettingsPage, NotFound });
 // Main app — routing + auth gate
 
 function App() {
+  // Re-render the entire app when any DB table changes (upsert / remove /
+  // hydrate). Cheap: it just bumps a state counter.
+  window.useDataVersion();
   const [rawRoute, setRoute] = React.useState(() => {
     return localStorage.getItem("kinetic.route") || "dashboard";
   });
