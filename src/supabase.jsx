@@ -26,6 +26,8 @@ if (!__isDemo() && SUPABASE_URL && SUPABASE_ANON_KEY && window.supabase && windo
   sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 }
 window.SB = sb;
+// Demo flag shared with later scripts: seeds/mock fixtures only load when true.
+window.IS_DEMO = __isDemo();
 
 // ── Default clinic branding ───────────────────────────────────
 const DEFAULT_CLINIC = {
@@ -154,8 +156,12 @@ async function removeSection(id) {
 }
 
 // ── Branches (multi-branch support, LS-backed) ────────────────
-const DEFAULT_BRANCHES = [
+// Neutral placeholder until the clinic defines its branches in Settings
+// (demo keeps a realistic sample branch).
+const DEFAULT_BRANCHES = __isDemo() ? [
   { id: "br_heliopolis", name: "فرع مصر الجديدة", therapists: 4, rooms: 5, address: "14 ش صلاح سالم، مصر الجديدة، القاهرة", phone: "+20 2 2638 1100" },
+] : [
+  { id: "br_main", name: "الفرع الرئيسي", therapists: 0, rooms: 0, address: "", phone: "" },
 ];
 
 function nextBranchId() {
@@ -457,6 +463,8 @@ async function upsertRow(name, row) {
       if (error) console.warn(`upsertRow ${name} failed`, error.message || error);
     }
   }
+  // Rows written schema-shaped (e.g. bulk import) need the UI aliases too.
+  if (window.normalizeDomainData && window.DATA) window.normalizeDomainData(window.DATA);
   window.dispatchEvent(new CustomEvent("kinetic:data-updated", { detail: { table: name } }));
   return normalized;
 }
@@ -475,15 +483,87 @@ async function removeRow(name, id) {
   window.dispatchEvent(new CustomEvent("kinetic:data-updated", { detail: { table: name } }));
 }
 
+// ── Row normalization ─────────────────────────────────────────
+// DB rows are schema-shaped (patient_id, pain_score, payment_method…)
+// while the UI reads friendly aliases (id, pain, method, patient name…).
+// Normalize after hydration so every screen renders real rows unchanged.
+const BOOKING_STATUS_AR = { pending:"معلّق", confirmed:"مؤكد", completed:"مكتمل", cancelled:"ملغي", "no-show":"لم يحضر", available:"متاح" };
+const INVOICE_STATUS_AR = { paid:"مدفوع", partial:"جزئي", pending:"معلّق", overdue:"متأخر" };
+
+function normalizeDomainData(D) {
+  const patients = D.patients || [];
+  const nameOfPatient = (pid) => {
+    const p = patients.find(x => (x.patient_id ?? x.id) === pid);
+    return p ? p.name : "";
+  };
+  const nameOfTherapist = (tid) => {
+    const t = (D.therapists || []).find(x => x.id === tid)
+      || (D.staff || []).find(x => x.staff_id === tid);
+    return t ? t.name : "";
+  };
+  D.patients = patients.map(p => ({
+    ...p,
+    id: p.patient_id ?? p.id,
+    diag: p.diag ?? p.diagnosis ?? "",
+    status: p.status ?? "نشط",
+    registered: p.registered ?? String(p.created_at || "").slice(0, 10),
+    chronic: Array.isArray(p.chronic) ? p.chronic : [],
+    surgeries: Array.isArray(p.surgeries) ? p.surgeries : [],
+    dr: p.dr ?? "—", th: p.th ?? "—", job: p.job ?? "—",
+    visited: p.visited ?? "—", payment: p.payment ?? "معلّق",
+  }));
+  D.appts = (D.appts || []).map(a => ({
+    ...a,
+    id: a.booking_id ?? a.id,
+    pid: a.pid ?? a.patient_id ?? null,
+    patient: a.patient ?? (nameOfPatient(a.patient_id) || "—"),
+    th: a.th ?? nameOfTherapist(a.therapist_id),
+    dr: a.dr ?? "", time: a.time ?? "", dur: a.dur ?? 30,
+    room: a.room ?? "", type: a.type ?? "",
+    status: BOOKING_STATUS_AR[a.status] ?? a.status ?? "معلّق",
+  }));
+  D.sessions = (D.sessions || []).map(s => ({
+    ...s,
+    id: s.session_id ?? s.id,
+    session: s.session ?? s.session_number ?? 0,
+    pain: s.pain ?? s.pain_score ?? 0,
+    notes: s.notes ?? s.session_notes ?? "",
+    mood: s.mood ?? "—",
+    date: s.date ?? String(s.created_at || "").slice(0, 10),
+    patient: s.patient ?? nameOfPatient(s.patient_id),
+    therapist: s.therapist ?? nameOfTherapist(s.therapist_id),
+    goals: Array.isArray(s.goals) ? s.goals : [],
+    done: Array.isArray(s.done) ? s.done : [],
+  }));
+  D.payments = (D.payments || []).map(v => ({
+    ...v,
+    id: v.invoice_id ?? v.id,
+    patient: v.patient ?? (nameOfPatient(v.patient_id) || "—"),
+    date: v.date ?? String(v.created_at || "").slice(0, 10),
+    method: v.method ?? v.payment_method ?? "—",
+    amount: Number(v.amount) || 0,
+    paid: Number(v.paid) || 0,
+    status: INVOICE_STATUS_AR[v.status] ?? v.status ?? "معلّق",
+  }));
+}
+window.normalizeDomainData = normalizeDomainData;
+
 // Hydrate domain tables from Supabase (if configured) into window.DATA
-// on boot. Non-blocking: seed data renders first, real data swaps in.
+// on boot. Non-blocking: the UI renders first, real data swaps in.
 async function hydrateDomainTables() {
   if (!sb) return;
+  const fetched = {};
   for (const name of Object.keys(DATA_TABLES)) {
     try {
       const rows = await listTable(name);
-      if (rows && rows.length && window.DATA) window.DATA[name] = rows;
+      if (rows && rows.length) fetched[name] = rows;
     } catch (e) { console.warn("hydrate", name, "failed", e); }
+  }
+  if (window.DATA) {
+    for (const [name, rows] of Object.entries(fetched)) window.DATA[name] = rows;
+    // Normalize even when nothing was fetched: rows restored from the LS
+    // cache (listTable fallback) are schema-shaped too.
+    normalizeDomainData(window.DATA);
   }
   window.dispatchEvent(new CustomEvent("kinetic:data-updated", { detail: { table: "*" } }));
 }

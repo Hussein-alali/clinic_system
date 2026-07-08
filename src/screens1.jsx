@@ -21,35 +21,68 @@ function buildTelUrl(phone) {
 }
 
 // ── Dashboard ─────────────────────────────────────────────────
+// Shared palette for computed category charts.
+const CHART_COLORS = ["#7BBDE8","#3A7FB5","#BDD8E9","#7E6BD3","#3FA984","#1E4A6E","#D49044"];
+// Long Arabic date for page subtitles ("الأحد، 24 مايو").
+function todayLabelAr() {
+  try { return new Date().toLocaleDateString("ar-EG", { weekday:"long", day:"numeric", month:"long" }); }
+  catch { return new Date().toISOString().slice(0,10); }
+}
+// Active branch name (settings-driven; falls back to a neutral label).
+function activeBranchName() {
+  const b = (window.BRANCHES || []).find(x => x.id === window.ACTIVE_BRANCH_ID) || (window.BRANCHES || [])[0];
+  return (b && b.name) || "عيادتك";
+}
+const invoiceDateOf = (p) => String(p.date || p.created_at || "").slice(0, 10);
+const fmtEGP = (v) => v >= 1000 ? `EGP ${(v/1000).toFixed(1)}K` : `EGP ${(v||0).toLocaleString()}`;
+
 function Dashboard({ go }) {
   const [range, setRange] = React.useState("هذا الأسبوع");
-  const revenueData = [
-    { label:"إثن", v: 18200 }, { label:"ثلا", v: 22400 },
-    { label:"أرب", v: 19800 }, { label:"خمي", v: 27100 },
-    { label:"جمع", v: 31200 }, { label:"سبت", v: 24800 },
-    { label:"أحد", v: 14200 }
-  ];
-  const apptData = [
-    { label:"إثن", v: 18 }, { label:"ثلا", v: 24 }, { label:"أرب", v: 22 },
-    { label:"خمي", v: 28 }, { label:"جمع", v: 30 }, { label:"سبت", v: 21 }, { label:"أحد", v: 9 }
-  ];
-  const methodsData = [
-    { label:"علاج يدوي",    v: 42, color:"#7BBDE8" },
-    { label:"تقوية / rehab",  v: 28, color:"#3A7FB5" },
-    { label:"كهرباء وموجات", v: 18, color:"#BDD8E9" },
-    { label:"علاج مائي",      v: 12, color:"#7E6BD3" },
-  ];
-  const packageData = [
-    { label:"الأساسية 10",   v: 62, color:"#7BBDE8" },
-    { label:"البداية 6", v: 33, color:"#3A7FB5" },
-    { label:"جلسة واحدة",    v: 48, color:"#BDD8E9" },
-    { label:"التعافي 15", v: 21, color:"#1E4A6E" },
-    { label:"بعد العمليات 24",  v: 14, color:"#7E6BD3" },
-  ];
+  const patients = DATA.patients, appts = DATA.appts, payments = DATA.payments;
+  const today = new Date().toISOString().slice(0,10);
+  const month = today.slice(0,7);
+
+  // Revenue per day — the latest 7 dates that actually have invoices.
+  const revByDate = {};
+  payments.forEach(p => { const d = invoiceDateOf(p); if (d) revByDate[d] = (revByDate[d]||0) + (p.paid||0); });
+  const revenueData = Object.keys(revByDate).sort().slice(-7).map(d => ({ label:d.slice(5), v:revByDate[d] }));
+
+  // Appointment volume per day (bookings without a date count as today).
+  const apptByDate = {};
+  appts.forEach(a => { const d = String(a.date || today).slice(0,10); apptByDate[d] = (apptByDate[d]||0)+1; });
+  const apptData = Object.keys(apptByDate).sort().slice(-7).map(d => ({ label:d.slice(5), v:apptByDate[d] }));
+
+  // Session-type mix from actual bookings.
+  const typeCounts = {};
+  appts.forEach(a => { if (a.type) typeCounts[a.type] = (typeCounts[a.type]||0)+1; });
+  const methodsData = Object.entries(typeCounts).sort((a,b)=>b[1]-a[1]).slice(0,4)
+    .map(([label, v], i) => ({ label, v, color: CHART_COLORS[i] }));
+
+  // Package uptake from the packages table.
+  const packageData = DATA.packages.filter(p => p.active !== false).slice(0,5)
+    .map((p, i) => ({ label:p.name, v:p.sold||0, color: CHART_COLORS[i % CHART_COLORS.length] }));
+
+  const booked = appts.filter(a => a.status !== "متاح");
+  const confirmed = booked.filter(a => a.status !== "معلّق" && a.status !== "ملغي");
+  const todaysPatients = new Set(booked.map(a => a.patient).filter(Boolean)).size;
+  const todaysRevenue = payments.filter(p => invoiceDateOf(p) === today).reduce((s,p)=>s+(p.paid||0),0);
+  const monthRevenue = payments.filter(p => invoiceDateOf(p).startsWith(month)).reduce((s,p)=>s+(p.paid||0),0);
+  const outstanding = payments.reduce((s,p)=>s+Math.max(0,(p.amount||0)-(p.paid||0)),0);
+  const remainTotal = patients.reduce((s,p)=>s+(p.remain||0),0);
+  const weekAgo = new Date(Date.now()-7*864e5).toISOString().slice(0,10);
+  const newThisWeek = patients.filter(p => (p.registered||"") >= weekAgo).length;
+  const pendingPayments = payments.filter(p => p.status !== "مدفوع");
 
   // ── Handlers ──
   function handleExportCsv() {
-    const rows = ["البيان,القيمة","مرضى اليوم,42","مواعيد اليوم,14/16","إيرادات اليوم,24800","الإيرادات الشهرية,410000"];
+    const rows = [
+      "البيان,القيمة",
+      `مرضى اليوم,${todaysPatients}`,
+      `مواعيد اليوم,${booked.length}/${appts.length}`,
+      `إيرادات اليوم,${todaysRevenue}`,
+      `الإيرادات الشهرية,${monthRevenue}`,
+      `مستحقات معلقة,${outstanding}`,
+    ];
     downloadCsv(rows, "dashboard.csv");
     if (window.showToast) window.showToast("تم تصدير البيانات", "success");
   }
@@ -59,8 +92,8 @@ function Dashboard({ go }) {
       <div className="page-head" style={{marginBottom:22}}>
         <div>
           <div className="crumb"><span>الرئيسية</span><I.Chevron size={11}/><span>لوحة التحكم</span></div>
-          <div className="h1">صباح الخير، شريف <span style={{display:"inline-block",transform:"translateY(-2px)"}}>👋🏼</span></div>
-          <div className="muted" style={{fontSize:13.5,marginTop:4}}>الأحد، 24 مايو — أداء فرع مصر الجديدة اليوم.</div>
+          <div className="h1">صباح الخير{window.ME && window.ME.name ? `، ${window.ME.name.split(" ")[0]}` : ""} <span style={{display:"inline-block",transform:"translateY(-2px)"}}>👋🏼</span></div>
+          <div className="muted" style={{fontSize:13.5,marginTop:4}}>{todayLabelAr()} — أداء {activeBranchName()} اليوم.</div>
         </div>
         <div className="page-actions">
           <div className="seg">
@@ -75,12 +108,12 @@ function Dashboard({ go }) {
 
       {/* stat row */}
       <div className="grid-stats" style={{marginBottom:18}}>
-        <StatCard label="مرضى اليوم"    value="42"     delta="+8%"  deltaKind="up"   accent="#7BBDE8" icon={<I.Users size={15}/>}     spark={[8,12,10,14,11,18,22,20,28,30,32,42]}/>
-        <StatCard label="مواعيد اليوم" value="14/16" delta="+2"   deltaKind="up"   accent="#3A7FB5" icon={<I.Calendar size={15}/>} spark={[10,12,14,11,15,13,16,14]}/>
-        <StatCard label="إيرادات اليوم"   value="EGP 24.8K" delta="+12%" deltaKind="up" accent="#3FA984" icon={<I.Dollar size={15}/>}    spark={[18,22,19,27,31,24,14,28]}/>
-        <StatCard label="الإيرادات الشهرية"   value="EGP 410K" delta="+18%" deltaKind="up" accent="#7E6BD3" icon={<I.Chart size={15}/>}     spark={[210,260,240,300,350,380,410]}/>
-        <StatCard label="الأخصائيون النشطون" value="4/4"    delta="100%" deltaKind="up"   accent="#D49044" icon={<I.Stethoscope size={15}/>} spark={[4,4,4,4,4,4,4,4]}/>
-        <StatCard label="الجلسات المتبقية" value="1,184" delta="-32"  deltaKind="down" accent="#D8665A" icon={<I.Activity size={15}/>}  spark={[1280,1262,1245,1220,1200,1184]}/>
+        <StatCard label="مرضى اليوم"    value={String(todaysPatients)} accent="#7BBDE8" icon={<I.Users size={15}/>}/>
+        <StatCard label="مواعيد اليوم" value={`${booked.length}/${appts.length}`} accent="#3A7FB5" icon={<I.Calendar size={15}/>}/>
+        <StatCard label="إيرادات اليوم"   value={fmtEGP(todaysRevenue)} accent="#3FA984" icon={<I.Dollar size={15}/>}/>
+        <StatCard label="الإيرادات الشهرية"   value={fmtEGP(monthRevenue)} accent="#7E6BD3" icon={<I.Chart size={15}/>}/>
+        <StatCard label="الأخصائيون النشطون" value={`${DATA.therapists.length}/${DATA.therapists.length}`} accent="#D49044" icon={<I.Stethoscope size={15}/>}/>
+        <StatCard label="الجلسات المتبقية" value={remainTotal.toLocaleString()} accent="#D8665A" icon={<I.Activity size={15}/>}/>
       </div>
 
       {/* main two cols */}
@@ -105,11 +138,12 @@ function Dashboard({ go }) {
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
             <div>
               <div className="h2">جدول اليوم</div>
-              <div className="muted" style={{fontSize:12.5,marginTop:2}}>10 من 14 مؤكد</div>
+              <div className="muted" style={{fontSize:12.5,marginTop:2}}>{confirmed.length} من {booked.length} مؤكد</div>
             </div>
             <button className="btn btn-ghost" style={{fontSize:12}} onClick={()=>go("appointments")}>عرض التقويم <I.ArrowRight size={12}/></button>
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:268,overflowY:"auto"}}>
+            {DATA.appts.length===0 && <div className="muted" style={{fontSize:13,padding:"24px 0",textAlign:"center"}}>لا مواعيد بعد.</div>}
             {DATA.appts.slice(0,6).map(a=>(
               <div key={a.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",border:"1px solid var(--ink-200)",borderRadius:12,background:a.status==="قيد التنفيذ"?"var(--blue-50)":"#fff"}}>
                 <div style={{textAlign:"center",minWidth:48}}>
@@ -149,6 +183,7 @@ function Dashboard({ go }) {
           <div className="h2" style={{marginBottom:4}}>حمل الأخصائيين</div>
           <div className="muted" style={{fontSize:12.5,marginBottom:14}}>حجوزات اليوم</div>
           <div style={{display:"flex",flexDirection:"column",gap:14}}>
+            {DATA.therapists.length===0 && <div className="muted" style={{fontSize:13,padding:"18px 0",textAlign:"center"}}>لا أخصائيين مسجّلين بعد.</div>}
             {DATA.therapists.map(t=>(
               <div key={t.name}>
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
@@ -176,9 +211,10 @@ function Dashboard({ go }) {
               <div className="h2">مرضى جدد</div>
               <div className="muted" style={{fontSize:12.5,marginTop:2}}>مسجّلون هذا الأسبوع</div>
             </div>
-            <span className="badge b-blue">12 جديد</span>
+            <span className="badge b-blue">{newThisWeek} جديد</span>
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            {DATA.patients.length===0 && <div className="muted" style={{fontSize:13,padding:"18px 0",textAlign:"center"}}>لا مرضى مسجّلين بعد.</div>}
             {DATA.patients.slice(0,4).map(p=>(
               <div key={p.id} style={{display:"flex",alignItems:"center",gap:10,padding:"6px 0"}}>
                 <div className="av md">{p.name.split(" ").map(x=>x[0]).join("").slice(0,2)}</div>
@@ -206,10 +242,11 @@ function Dashboard({ go }) {
               <div className="h2">مدفوعات معلقة</div>
               <div className="muted" style={{fontSize:12.5,marginTop:2}}>يحتاج متابعة</div>
             </div>
-            <span className="badge b-amber"><span className="dot"></span>EGP 18.4K</span>
+            <span className="badge b-amber"><span className="dot"></span>{fmtEGP(outstanding)}</span>
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:10}}>
-            {DATA.payments.filter(p=>p.status!=="مدفوع").slice(0,4).map(p=>(
+            {pendingPayments.length===0 && <div className="muted" style={{fontSize:13,padding:"18px 0",textAlign:"center"}}>لا مدفوعات معلقة.</div>}
+            {pendingPayments.slice(0,4).map(p=>(
               <div key={p.id} style={{display:"flex",alignItems:"center",gap:10,padding:"4px 0"}}>
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{fontSize:12.5,fontWeight:500}}>{p.patient}</div>
@@ -253,7 +290,7 @@ function PayBadge({ s }) {
   return <span className={"badge " + m.c}><span className="dot"></span>{m.d}</span>;
 }
 
-Object.assign(window, { Dashboard, ApptBadge, PayBadge });
+Object.assign(window, { Dashboard, ApptBadge, PayBadge, todayLabelAr, activeBranchName });
 
 
 // ===== src/مريض.jsx =====
@@ -356,9 +393,9 @@ function Patients({ go }) {
                   <td><span style={{fontSize:12.5}}>{p.th}</span></td>
                   <td>
                     <div style={{display:"flex",alignItems:"center",gap:8}}>
-                      <span className="mono" style={{fontSize:12.5,fontWeight:600,minWidth:18,textAlign:"right"}}>{p.remain}</span>
+                      <span className="mono" style={{fontSize:12.5,fontWeight:600,minWidth:18,textAlign:"right"}}>{p.remain ?? "—"}</span>
                       <div style={{flex:1,maxWidth:60,height:4,background:"var(--ink-100)",borderRadius:999,overflow:"hidden"}}>
-                        <div style={{height:"100%",width:`${Math.min(100,p.remain/12*100)}%`,background:"var(--blue-500)"}}/>
+                        <div style={{height:"100%",width:`${Math.min(100,(p.remain||0)/12*100)}%`,background:"var(--blue-500)"}}/>
                       </div>
                     </div>
                   </td>
@@ -378,13 +415,9 @@ function Patients({ go }) {
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 18px",borderTop:"1px solid var(--ink-100)",background:"var(--ink-50)",flexWrap:"wrap",gap:10}}>
             <span className="muted" style={{fontSize:12}}>عرض 1–{filtered.length} من {myPatients.length}</span>
             <div style={{display:"flex",gap:6}}>
-              <button className="btn btn-secondary" style={{padding:"5px 9px"}}><I.ArrowLeft size={12}/></button>
-              {[1,2,3].map(n=>(
+              {Array.from({length: Math.max(1, Math.ceil(filtered.length/25))},(_,i)=>i+1).slice(0,8).map(n=>(
                 <button key={n} className={"btn " + (page===n?"btn-primary":"btn-secondary")} style={{padding:"5px 11px",minWidth:32}} onClick={()=>setPage(n)}>{n}</button>
               ))}
-              <span className="muted" style={{padding:"5px 8px"}}>…</span>
-              <button className={"btn " + (page===8?"btn-primary":"btn-secondary")} style={{padding:"5px 11px",minWidth:32}} onClick={()=>setPage(8)}>8</button>
-              <button className="btn btn-secondary" style={{padding:"5px 9px"}}><I.ArrowRight size={12}/></button>
             </div>
           </div>
         </div>
@@ -447,6 +480,15 @@ function Patients({ go }) {
 // ── PatientDetail ──────────────────────────────────────────────
 function PatientDetail({ p, onBack, go }) {
   const [tab, setTab] = React.useState("نظرة عامة");
+  // Real per-patient figures (production rows carry no seed metadata).
+  const pid = p.patient_id || p.id;
+  const mySessions = DATA.sessions.filter(s => s.patient_id === pid || s.patient === p.name);
+  const pkgTotal = Number(((p.pkg || "").match(/(\d+)/) || [])[1]) || 12;
+  const doneSessions = p.remain != null ? Math.max(0, pkgTotal - p.remain) : mySessions.length;
+  const nextAppt = DATA.appts.find(a => (a.pid === pid || a.patient === p.name) && a.status !== "مكتمل" && a.status !== "ملغي");
+  const avgPain = mySessions.length
+    ? (mySessions.reduce((s, x) => s + (x.pain ?? x.pain_score ?? 0), 0) / mySessions.length).toFixed(1)
+    : null;
   return (
     <Page>
       <div className="crumb" style={{cursor:"pointer"}} onClick={onBack}>
@@ -470,7 +512,7 @@ function PatientDetail({ p, onBack, go }) {
               <div style={{display:"flex",gap:"8px 18px",marginTop:8,fontSize:12.5,color:"var(--ink-500)",flexWrap:"wrap"}}>
                 <span style={{display:"flex",alignItems:"center",gap:6}}><I.User size={13}/> {p.age} y · {p.gender==="F"?"Female":"Male"}</span>
                 <span style={{display:"flex",alignItems:"center",gap:6}}><I.Phone size={13}/> {p.phone}</span>
-                <span style={{display:"flex",alignItems:"center",gap:6}}><I.MapPin size={13}/> مصر الجديدة، القاهرة</span>
+                <span style={{display:"flex",alignItems:"center",gap:6}}><I.MapPin size={13}/> {p.address || "—"}</span>
                 <span style={{display:"flex",alignItems:"center",gap:6}}><I.Clock size={13}/> Reg. {p.registered}</span>
               </div>
             </div>
@@ -515,9 +557,9 @@ function PatientDetail({ p, onBack, go }) {
 
             <div style={{padding:22}}>
               {tab==="نظرة عامة" && <PatientOverview p={p}/>}
-              {tab==="السجل" && <PatientHistory/>}
-              {tab==="خطة العلاج" && <PatientTreatmentPlan/>}
-              {tab==="الجلسات" && <SessionTimeline mini/>}
+              {tab==="السجل" && <PatientHistory p={p}/>}
+              {tab==="خطة العلاج" && <PatientTreatmentPlan p={p}/>}
+              {tab==="الجلسات" && <SessionTimeline mini p={p}/>}
               {tab==="الملفات" && <PatientFiles p={p}/>}
               {tab==="الفواتير" && <PatientInvoices p={p}/>}
             </div>
@@ -529,22 +571,22 @@ function PatientDetail({ p, onBack, go }) {
           <div className="card card-pad">
             <div className="h3" style={{marginBottom:12}}>تقدّم العلاج</div>
             <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:8}}>
-              <span className="mono" style={{fontSize:32,fontWeight:600}}>{12-p.remain}</span>
-              <span className="muted">من 12 Sessions</span>
+              <span className="mono" style={{fontSize:32,fontWeight:600}}>{doneSessions}</span>
+              <span className="muted">من {pkgTotal} Sessions</span>
             </div>
             <div style={{height:8,background:"var(--ink-100)",borderRadius:999,overflow:"hidden"}}>
-              <div style={{height:"100%",width:`${(12-p.remain)/12*100}%`,background:"linear-gradient(90deg, var(--blue-500), var(--blue-700))",borderRadius:999}}/>
+              <div style={{height:"100%",width:`${Math.min(100, doneSessions/pkgTotal*100)}%`,background:"linear-gradient(90deg, var(--blue-500), var(--blue-700))",borderRadius:999}}/>
             </div>
             <div style={{display:"flex",justifyContent:"space-between",marginTop:14,fontSize:12}}>
-              <div><div className="muted">الجلسة القادمة</div><div style={{fontWeight:500}}>غدًا، 09:00</div></div>
-              <div style={{textAlign:"right"}}><div className="muted">الألم (متوسط)</div><div className="mono">3.8 / 10</div></div>
+              <div><div className="muted">الجلسة القادمة</div><div style={{fontWeight:500}}>{nextAppt ? `${nextAppt.date || "اليوم"} ${nextAppt.time || ""}` : "—"}</div></div>
+              <div style={{textAlign:"right"}}><div className="muted">الألم (متوسط)</div><div className="mono">{avgPain != null ? `${avgPain} / 10` : "—"}</div></div>
             </div>
           </div>
 
           <div className="card card-pad">
             <div className="h3" style={{marginBottom:12}}>البيانات الطبية</div>
-            <InfoRow k="الشكوى الرئيسية" v={p.chief}/>
-            <InfoRow k="التشخيص" v={p.diag}/>
+            <InfoRow k="الشكوى الرئيسية" v={p.chief || "—"}/>
+            <InfoRow k="التشخيص" v={p.diag || "—"}/>
             <InfoRow k="أمراض مزمنة" v={p.chronic.length ? p.chronic.join(", ") : "—"}/>
             <InfoRow k="العمليات" v={p.surgeries.length ? p.surgeries.join(", ") : "لا يوجد"}/>
           </div>
@@ -552,12 +594,12 @@ function PatientDetail({ p, onBack, go }) {
           <div className="card card-pad">
             <div className="h3" style={{marginBottom:12}}>فريق الرعاية</div>
             <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
-              <div className="av md" style={{background:"#7E6BD333",color:"#7E6BD3"}}>YA</div>
-              <div><div style={{fontSize:13,fontWeight:500}}>{p.dr}</div><div className="muted" style={{fontSize:11.5}}>الطبيب المسؤول</div></div>
+              <div className="av md" style={{background:"#7E6BD333",color:"#7E6BD3"}}>{initialsOf(p.dr) || "—"}</div>
+              <div><div style={{fontSize:13,fontWeight:500}}>{p.dr || "—"}</div><div className="muted" style={{fontSize:11.5}}>الطبيب المسؤول</div></div>
             </div>
             <div style={{display:"flex",alignItems:"center",gap:10}}>
-              <div className="av md" style={{background:"var(--blue-100)",color:"var(--blue-700)"}}>KS</div>
-              <div><div style={{fontSize:13,fontWeight:500}}>{p.th}</div><div className="muted" style={{fontSize:11.5}}>الأخصائي الأساسي</div></div>
+              <div className="av md" style={{background:"var(--blue-100)",color:"var(--blue-700)"}}>{initialsOf(p.th) || "—"}</div>
+              <div><div style={{fontSize:13,fontWeight:500}}>{p.th || "—"}</div><div className="muted" style={{fontSize:11.5}}>الأخصائي الأساسي</div></div>
             </div>
           </div>
 
@@ -605,16 +647,22 @@ function PatientOverview({ p }) {
       <div>
         <div className="h3" style={{marginBottom:10}}>اللمحة السريرية</div>
         <div style={{padding:14,background:"var(--blue-50)",border:"1px solid var(--blue-100)",borderRadius:12,marginBottom:14}}>
-          <div className="serif" style={{fontSize:18,lineHeight:1.4,color:"var(--ink-900)"}}>"{p.chief}"</div>
-          <div className="muted" style={{fontSize:11.5,marginTop:6}}>المريض-reported chief complaint</div>
+          <div className="serif" style={{fontSize:18,lineHeight:1.4,color:"var(--ink-900)"}}>"{p.chief || p.diag || "—"}"</div>
+          <div className="muted" style={{fontSize:11.5,marginTop:6}}>الشكوى الرئيسية / التشخيص</div>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-          {[
-            {l:"الألم level",v:"3/10",sub:"↓ from 7"},
-            {l:"مدى الحركة (انحناء)",v:"82°",sub:"+12° in 4 weeks"},
-            {l:"الالتزام",v:"94%",sub:"ممتاز"},
-            {l:"المرحلة التالية",v:"ROM 90°",sub:"متوقع بحلول 6 يونيو"},
-          ].map((m,i)=>(
+          {(() => {
+            // Real per-patient metrics only — no fabricated clinical numbers.
+            const pid = p.patient_id || p.id;
+            const sess = DATA.sessions.filter(s => s.patient_id === pid || s.patient === p.name);
+            const latest = sess[0];
+            return [
+              {l:"مستوى الألم (آخر جلسة)", v: latest ? `${latest.pain ?? latest.pain_score ?? "—"}/10` : "—", sub: latest ? latest.date : "لا جلسات بعد"},
+              {l:"جلسات مسجلة", v: String(sess.length), sub: sess.length ? `آخرها ${latest.date}` : "—"},
+              {l:"آخر زيارة", v: p.visited && p.visited !== "—" ? p.visited : (latest ? latest.date : "—"), sub: ""},
+              {l:"الحالة", v: p.status || "—", sub: p.payment && p.payment !== "—" ? `الدفع: ${p.payment}` : ""},
+            ];
+          })().map((m,i)=>(
             <div key={i} style={{padding:12,border:"1px solid var(--ink-200)",borderRadius:10}}>
               <div className="muted" style={{fontSize:11}}>{m.l}</div>
               <div className="mono" style={{fontSize:18,fontWeight:600,marginTop:2}}>{m.v}</div>
@@ -627,14 +675,31 @@ function PatientOverview({ p }) {
   );
 }
 
-function PatientHistory() {
-  const events = [
-    { date:"2026-05-22", type:"جلسة", title:"الجلسة #7 — علاج يدوي", by:"كريم صالح", body:"الألم reduced to 3/10. Increased حمل on TheraBand red." },
-    { date:"2026-05-18", type:"جلسة", title:"الجلسة #6 — علاج يدوي", by:"كريم صالح", body:"تيبّس صباحي مستمر. أُضيفت تمارين تثبيت لوح الكتف." },
-    { date:"2026-05-15", type:"note",    title:"إيقاف المسكنات",                  by:"د. ياسمين عادل", body:"المريض tolerated جلسة without flare." },
-    { date:"2026-04-30", type:"intake",  title:"تقييم أولي",          by:"د. ياسمين عادل", body:"الخطة: 12 Sessions over 6 weeks. Baseline ROM 70°." },
-    { date:"2026-04-28", type:"booking", title:"المريض registered",          by:"الاستقبال",       body:"إحالة من د. م. حسني (جراح عظام)." },
-  ];
+function PatientHistory({ p }) {
+  // Timeline built from the patient's real records: logged sessions +
+  // the registration event. No fabricated entries.
+  const pid = p ? (p.patient_id || p.id) : null;
+  const sess = p ? DATA.sessions.filter(s => s.patient_id === pid || s.patient === p.name) : [];
+  const events = sess.map(s => ({
+    date: s.date || "",
+    type: "جلسة",
+    title: `الجلسة #${s.session ?? s.session_number ?? "—"}`,
+    by: s.therapist || "—",
+    body: s.notes || s.session_notes || "",
+  }));
+  if (p && (p.registered || p.created_at)) {
+    events.push({
+      date: p.registered || String(p.created_at).slice(0, 10),
+      type: "booking",
+      title: "تسجيل المريض",
+      by: "الاستقبال",
+      body: p.notes || "",
+    });
+  }
+  events.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  if (events.length === 0) {
+    return <EmptyState icon={<I.Clock size={22}/>} title="لا سجل بعد" body="سيظهر السجل الزمني هنا بعد تسجيل الجلسات."/>;
+  }
   return (
     <div>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,flexWrap:"wrap",gap:10}}>
@@ -667,20 +732,21 @@ function PatientHistory() {
   );
 }
 
-function PatientTreatmentPlan() {
-  const [plan, setPlan] = React.useState({
-    goals: [
-      { g:"تقليل ألم أسفل الظهر إلى ≤ 2/10", done:false },
-      { g:"استعادة انحناء القطنية إلى 90°+", done:false },
-      { g:"العودة للجري 5 كم/أسبوع", done:false },
-      { g:"إيقاف المسكنات", done:true },
-      { g:"تأسيس القياسات المرجعية", done:true },
-    ],
-    modalities: ["علاج يدوي","تمدد ماكنزي","تحفيز كهربي","برنامج ثيراباند","تثبيت الجذع","علاج حراري"],
-    notes: "المريض is responding well to تمدد ماكنزي protocol. متابعة gradual loading on TheraBand red. Re-assess L4–L5 ROM at جلسة 10. Advise against prolonged sitting; suggest standing desk.",
-    therapist: { initials:"KS", name:"كريم صالح", spec:"علاج يدوي" },
-    diagnosis: "انزلاق غضروفي L4–L5, مع radiculopathy to left L5 dermatome",
-    schedule: { frequency:"2× / week", duration:"6 weeks", total:12 },
+function PatientTreatmentPlan({ p }) {
+  // Initialized from the patient's real record; goals/modalities start
+  // empty and are filled in by the clinician (editable below).
+  const [plan, setPlan] = React.useState(() => {
+    const th = p && p.th && p.th !== "—" ? p.th : "";
+    const thRow = (DATA.therapists || []).find(t => t.name === th);
+    const total = Number(((p && p.pkg || "").match(/(\d+)/) || [])[1]) || 0;
+    return {
+      goals: [],
+      modalities: [],
+      notes: (p && p.notes) || "",
+      therapist: { initials: th ? initialsOf(th) : "—", name: th || "—", spec: (thRow && thRow.spec) || "" },
+      diagnosis: (p && (p.diag || p.diagnosis)) || "—",
+      schedule: { frequency: "—", duration: "—", total },
+    };
   });
   const [editing, setEditing] = React.useState(null);
 
@@ -709,6 +775,7 @@ function PatientTreatmentPlan() {
         <div>
           <div className="label">أهداف الخطة</div>
           <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:18}}>
+            {plan.goals.length===0 && <div className="muted" style={{fontSize:12.5,padding:"6px 0"}}>لا أهداف بعد — أضفها من «تعديل الخطة».</div>}
             {plan.goals.map((g,i)=>(
               <label key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",border:"1px solid var(--ink-200)",borderRadius:10,fontSize:13,cursor:"pointer"}}>
                 <input type="checkbox" checked={g.done} onChange={()=>toggleGoal(i)}/>
@@ -719,6 +786,7 @@ function PatientTreatmentPlan() {
 
           <div className="label">طرق العلاج</div>
           <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:14}}>
+            {plan.modalities.length===0 && <span className="muted" style={{fontSize:12.5}}>—</span>}
             {plan.modalities.map(m=>(
               <span key={m} className="pill tag-blue">{m}</span>
             ))}
@@ -726,7 +794,7 @@ function PatientTreatmentPlan() {
 
           <div className="label">ملاحظات</div>
           <div style={{padding:14,background:"var(--ink-50)",borderRadius:12,fontSize:13,lineHeight:1.55,whiteSpace:"pre-wrap"}}>
-            {plan.notes}
+            {plan.notes || "—"}
           </div>
         </div>
         <div>
@@ -993,9 +1061,8 @@ function PatientFiles({ p }) {
 
 function PatientInvoices({ p }) {
   const [newInvoiceOpen, setNewInvoiceOpen] = React.useState(false);
-  const invoices = DATA.payments.filter(x => x.patient === p.name).concat([
-    { id:"INV-2026-0410", patient:p.name, amount:850, paid:850, method:"نقدي", date:"2026-05-01", status:"مدفوع" },
-  ]);
+  const pid = p.patient_id || p.id;
+  const invoices = DATA.payments.filter(x => x.patient === p.name || x.patient_id === pid);
   return (
     <div>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
@@ -1242,15 +1309,15 @@ function FormReview({ form }) {
       <div className="h3" style={{marginBottom:14}}>مراجعة & create</div>
       <div style={{padding:18,background:"var(--blue-50)",border:"1px solid var(--blue-100)",borderRadius:12,marginBottom:14}}>
         <div style={{display:"flex",alignItems:"center",gap:10,color:"var(--blue-900)",fontSize:13}}>
-          <I.Check size={15}/> Looks good. المريض will be created مع file # <span className="mono">{f.patient_id || "—"}</span> وتعيينه إلى <strong>فرع مصر الجديدة</strong>.
+          <I.Check size={15}/> Looks good. المريض will be created مع file # <span className="mono">{f.patient_id || "—"}</span> وتعيينه إلى <strong>{activeBranchName()}</strong>.
         </div>
       </div>
       <div className="grid-2" style={{gap:18}}>
         {[
           {h:"شخصي", rows:[["الاسم الكامل", f.name || "—"],["رقم الملف", f.patient_id || "—"],["الهاتف", f.phone || "—"],["Age", `${f.age || "—"}, ${f.gender || "—"}`]]},
           {h:"طبي", rows:[["التشخيص", f.diagnosis || "—"],["أمراض مزمنة", f.chronic || "—"],["العمليات", f.surgeries || "—"]]},
-          {h:"المرفقات", rows:[["الصورة","record-card.jpg"],["الأشعة","2 ملف"],["التقارير","mri-report.pdf"]]},
-          {h:"التعيينات", rows:[["طبيب","د. ياسمين عادل"],["الأخصائي","كريم صالح"],["الباقة","الأساسية 10 جلسات"]]},
+          {h:"المرفقات", rows:[["الملفات","تُرفع من ملف المريض بعد الإنشاء"]]},
+          {h:"التعيينات", rows:[["طبيب", f.doctor || "—"],["الأخصائي", f.therapist || "—"],["الباقة", f.pkg || "—"]]},
         ].map((s,i)=>(
           <div key={i} className="card card-pad" style={{padding:14,boxShadow:"none"}}>
             <div className="h3" style={{marginBottom:8}}>{s.h}</div>
@@ -1328,8 +1395,17 @@ function CalendarView({ dateOffset, setDateOffset }) {
     const m = Number.isFinite(parts[1]) ? parts[1] : 0;
     return (h-8)*60 + m;
   };
-  const dateStrs = ["اليوم، 24 مايو","غدًا، 25 مايو","الثلاثاء، 26 مايو","الأربعاء، 27 مايو"];
-  const today = dateStrs[Math.max(0,Math.min(dateStrs.length-1,dateOffset))];
+  // Real calendar label driven by the offset (was a hardcoded date list).
+  const viewDate = new Date(Date.now() + dateOffset * 864e5);
+  const dm = viewDate.toLocaleDateString("ar-EG", { day: "numeric", month: "long" });
+  const today = dateOffset === 0 ? `اليوم، ${dm}`
+    : dateOffset === 1 ? `غدًا، ${dm}`
+    : viewDate.toLocaleDateString("ar-EG", { weekday: "long", day: "numeric", month: "long" });
+
+  if (therapists.length === 0) {
+    return <EmptyState icon={<I.Calendar size={22}/>} title="لا أخصائيين بعد"
+      body="أضف الأخصائيين من الإعدادات ليظهر تقويم الحجوزات هنا."/>;
+  }
 
   return (
     <>

@@ -8,6 +8,18 @@
 --   </script>
 -- ============================================================
 
+-- ── Role helper ──────────────────────────────────────────────
+-- Standard Supabase JWTs put 'authenticated' in the top-level role claim;
+-- the clinic role (admin/receptionist/doctor/therapist/patient) is stored
+-- in user_metadata. All policies below read it through this helper.
+create or replace function public.app_role() returns text
+language sql stable as $$
+  select coalesce(
+    auth.jwt() -> 'user_metadata' ->> 'role',
+    auth.jwt() ->> 'role'
+  )
+$$;
+
 -- ── Clinic branding (singleton row) ─────────────────────────
 create table if not exists clinic_settings (
   id            int primary key default 1,
@@ -127,6 +139,18 @@ create table if not exists campaigns (
   created_at  timestamptz default now()
 );
 
+-- ── Branches (multi-branch clinics) ─────────────────────────
+create table if not exists branches (
+  id          text primary key,
+  name        text not null,
+  therapists  int default 0,
+  rooms       int default 0,
+  address     text,
+  phone       text,
+  created_at  timestamptz default now(),
+  updated_at  timestamptz
+);
+
 -- ── Patient files (normalized document store) ───────────────
 -- The `patients` table stays PII-only. Uploaded documents (reports,
 -- X-rays, MRI/CT scans, lab results, prescriptions, images, PDFs, …)
@@ -160,23 +184,27 @@ alter table clinic_settings enable row level security;
 alter table custom_sections enable row level security;
 
 -- Allow anon read of branding + visible sections (safe: no PII)
+drop policy if exists "public read clinic_settings" on clinic_settings;
 create policy "public read clinic_settings"
   on clinic_settings for select using (true);
 
+drop policy if exists "public read custom_sections" on custom_sections;
 create policy "public read custom_sections"
   on custom_sections for select using (visible = true);
 
 -- Writes require an authenticated admin JWT.
 -- Replace the check with your real admin claim once auth is wired.
+drop policy if exists "admin write clinic_settings" on clinic_settings;
 create policy "admin write clinic_settings"
   on clinic_settings for all
-  using (auth.jwt() ->> 'role' = 'admin')
-  with check (auth.jwt() ->> 'role' = 'admin');
+  using (public.app_role() = 'admin')
+  with check (public.app_role() = 'admin');
 
+drop policy if exists "admin write custom_sections" on custom_sections;
 create policy "admin write custom_sections"
   on custom_sections for all
-  using (auth.jwt() ->> 'role' = 'admin')
-  with check (auth.jwt() ->> 'role' = 'admin');
+  using (public.app_role() = 'admin')
+  with check (public.app_role() = 'admin');
 
 -- ── Domain-table RLS (PRD Section 8) ────────────────────────
 -- Enable RLS on every domain table.
@@ -188,114 +216,147 @@ alter table staff         enable row level security;
 alter table therapists    enable row level security;
 alter table packages      enable row level security;
 alter table campaigns     enable row level security;
+alter table branches      enable row level security;
 alter table patient_files enable row level security;
 alter table audit_events  enable row level security;
 
+-- ── branches ─────────────────────────────────────────────────
+drop policy if exists "staff read branches" on branches;
+create policy "staff read branches" on branches for select using (
+  public.app_role() in ('admin','receptionist','doctor','therapist')
+);
+drop policy if exists "admin write branches" on branches;
+create policy "admin write branches" on branches for all using (
+  public.app_role() = 'admin'
+) with check (
+  public.app_role() = 'admin'
+);
+
 -- Helper: current role from JWT ('admin' | 'receptionist' | 'doctor' | 'therapist' | 'patient')
--- (auth.jwt() ->> 'role') is set by Supabase Auth via user_metadata.role or a trigger.
+-- (public.app_role()) is set by Supabase Auth via user_metadata.role or a trigger.
 
 -- ── patients ─────────────────────────────────────────────────
+drop policy if exists "staff read patients" on patients;
 create policy "staff read patients" on patients for select using (
-  auth.jwt() ->> 'role' in ('admin','receptionist','doctor','therapist')
+  public.app_role() in ('admin','receptionist','doctor','therapist')
 );
+drop policy if exists "admin/reception write patients" on patients;
 create policy "admin/reception write patients" on patients for all using (
-  auth.jwt() ->> 'role' in ('admin','receptionist')
+  public.app_role() in ('admin','receptionist')
 ) with check (
-  auth.jwt() ->> 'role' in ('admin','receptionist')
+  public.app_role() in ('admin','receptionist')
 );
 
 -- ── bookings ─────────────────────────────────────────────────
+drop policy if exists "staff read bookings" on bookings;
 create policy "staff read bookings" on bookings for select using (
-  auth.jwt() ->> 'role' in ('admin','receptionist','doctor','therapist')
+  public.app_role() in ('admin','receptionist','doctor','therapist')
 );
+drop policy if exists "admin/reception write bookings" on bookings;
 create policy "admin/reception write bookings" on bookings for all using (
-  auth.jwt() ->> 'role' in ('admin','receptionist')
+  public.app_role() in ('admin','receptionist')
 ) with check (
-  auth.jwt() ->> 'role' in ('admin','receptionist')
+  public.app_role() in ('admin','receptionist')
 );
 
 -- ── sessions ─────────────────────────────────────────────────
+drop policy if exists "staff read sessions" on sessions;
 create policy "staff read sessions" on sessions for select using (
-  auth.jwt() ->> 'role' in ('admin','receptionist','doctor','therapist')
+  public.app_role() in ('admin','receptionist','doctor','therapist')
 );
 -- Therapists write their own sessions; admins can write any.
+drop policy if exists "therapist writes own sessions" on sessions;
 create policy "therapist writes own sessions" on sessions for all using (
-  auth.jwt() ->> 'role' = 'admin'
-  or (auth.jwt() ->> 'role' = 'therapist' and therapist_id = (
+  public.app_role() = 'admin'
+  or (public.app_role() = 'therapist' and therapist_id = (
     select staff_id from staff where auth_uid = auth.uid()
   ))
 ) with check (
-  auth.jwt() ->> 'role' = 'admin'
-  or (auth.jwt() ->> 'role' = 'therapist' and therapist_id = (
+  public.app_role() = 'admin'
+  or (public.app_role() = 'therapist' and therapist_id = (
     select staff_id from staff where auth_uid = auth.uid()
   ))
 );
 
 -- ── invoices ─────────────────────────────────────────────────
+drop policy if exists "staff read invoices" on invoices;
 create policy "staff read invoices" on invoices for select using (
-  auth.jwt() ->> 'role' in ('admin','receptionist','doctor')
+  public.app_role() in ('admin','receptionist','doctor')
 );
+drop policy if exists "admin/reception write invoices" on invoices;
 create policy "admin/reception write invoices" on invoices for all using (
-  auth.jwt() ->> 'role' in ('admin','receptionist')
+  public.app_role() in ('admin','receptionist')
 ) with check (
-  auth.jwt() ->> 'role' in ('admin','receptionist')
+  public.app_role() in ('admin','receptionist')
 );
 
 -- ── staff ────────────────────────────────────────────────────
+drop policy if exists "staff read own+admin all" on staff;
 create policy "staff read own+admin all" on staff for select using (
-  auth.jwt() ->> 'role' = 'admin'
+  public.app_role() = 'admin'
   or auth_uid = auth.uid()
 );
+drop policy if exists "admin write staff" on staff;
 create policy "admin write staff" on staff for all using (
-  auth.jwt() ->> 'role' = 'admin'
+  public.app_role() = 'admin'
 ) with check (
-  auth.jwt() ->> 'role' = 'admin'
+  public.app_role() = 'admin'
 );
 
 -- ── therapists ───────────────────────────────────────────────
+drop policy if exists "staff read therapists" on therapists;
 create policy "staff read therapists" on therapists for select using (
-  auth.jwt() ->> 'role' in ('admin','receptionist','doctor','therapist')
+  public.app_role() in ('admin','receptionist','doctor','therapist')
 );
+drop policy if exists "admin write therapists" on therapists;
 create policy "admin write therapists" on therapists for all using (
-  auth.jwt() ->> 'role' = 'admin'
+  public.app_role() = 'admin'
 ) with check (
-  auth.jwt() ->> 'role' = 'admin'
+  public.app_role() = 'admin'
 );
 
 -- ── packages ─────────────────────────────────────────────────
+drop policy if exists "staff read packages" on packages;
 create policy "staff read packages" on packages for select using (
-  auth.jwt() ->> 'role' in ('admin','receptionist','doctor','therapist')
+  public.app_role() in ('admin','receptionist','doctor','therapist')
 );
+drop policy if exists "admin/reception write packages" on packages;
 create policy "admin/reception write packages" on packages for all using (
-  auth.jwt() ->> 'role' in ('admin','receptionist')
+  public.app_role() in ('admin','receptionist')
 ) with check (
-  auth.jwt() ->> 'role' in ('admin','receptionist')
+  public.app_role() in ('admin','receptionist')
 );
 
 -- ── campaigns ────────────────────────────────────────────────
+drop policy if exists "staff read campaigns" on campaigns;
 create policy "staff read campaigns" on campaigns for select using (
-  auth.jwt() ->> 'role' in ('admin','receptionist','doctor')
+  public.app_role() in ('admin','receptionist','doctor')
 );
+drop policy if exists "admin/reception write campaigns" on campaigns;
 create policy "admin/reception write campaigns" on campaigns for all using (
-  auth.jwt() ->> 'role' in ('admin','receptionist')
+  public.app_role() in ('admin','receptionist')
 ) with check (
-  auth.jwt() ->> 'role' in ('admin','receptionist')
+  public.app_role() in ('admin','receptionist')
 );
 
 -- ── patient_files ────────────────────────────────────────────
+drop policy if exists "staff read patient_files" on patient_files;
 create policy "staff read patient_files" on patient_files for select using (
-  auth.jwt() ->> 'role' in ('admin','receptionist','doctor','therapist')
+  public.app_role() in ('admin','receptionist','doctor','therapist')
 );
+drop policy if exists "admin/reception write patient_files" on patient_files;
 create policy "admin/reception write patient_files" on patient_files for all using (
-  auth.jwt() ->> 'role' in ('admin','receptionist')
+  public.app_role() in ('admin','receptionist')
 ) with check (
-  auth.jwt() ->> 'role' in ('admin','receptionist')
+  public.app_role() in ('admin','receptionist')
 );
 
 -- ── audit_events ─────────────────────────────────────────────
+drop policy if exists "admin read audit" on audit_events;
 create policy "admin read audit" on audit_events for select using (
-  auth.jwt() ->> 'role' = 'admin'
+  public.app_role() = 'admin'
 );
+drop policy if exists "system insert audit" on audit_events;
 create policy "system insert audit" on audit_events for insert with check (true);
 
 -- ── Storage bucket for patient documents ────────────────────
@@ -305,14 +366,16 @@ insert into storage.buckets (id, name, public)
   values ('patient-files', 'patient-files', true)
   on conflict (id) do nothing;
 
+drop policy if exists "staff read patient files bucket" on storage.objects;
 create policy "staff read patient files bucket" on storage.objects for select using (
   bucket_id = 'patient-files'
-  and auth.jwt() ->> 'role' in ('admin','receptionist','doctor','therapist')
+  and public.app_role() in ('admin','receptionist','doctor','therapist')
 );
+drop policy if exists "admin/reception write patient files bucket" on storage.objects;
 create policy "admin/reception write patient files bucket" on storage.objects for all using (
   bucket_id = 'patient-files'
-  and auth.jwt() ->> 'role' in ('admin','receptionist')
+  and public.app_role() in ('admin','receptionist')
 ) with check (
   bucket_id = 'patient-files'
-  and auth.jwt() ->> 'role' in ('admin','receptionist')
+  and public.app_role() in ('admin','receptionist')
 );

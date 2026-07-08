@@ -279,7 +279,7 @@ function Sidebar({ active, onNav, role, user, isOpen }) {
     }) }))
     .filter(g => g.items.length > 0);
 
-  const u = user || { name:"شريف عادل", email:"sherif@kinetic.eg" };
+  const u = user || { name:"أمير", email:"amir@kinetic.eg" };
   const uInit = window.initialsOf ? window.initialsOf(u.name) : "ش ع";
 
   return (
@@ -925,7 +925,7 @@ function isDemoMode() {
 function AuthScreen({ onLogin, onBookAsGuest }) {
   // ── State ──────────────────────────────────────────────────
   const [mode, setMode] = React.useState("login"); // login | forgot | reset
-  const [email, setEmail] = React.useState("sherif@kinetic.eg");
+  const [email, setEmail] = React.useState("amir@kinetic.eg");
   // Empty by default. The placeholder bullets used to seed this field
   // caused a real password containing "•" to bypass Supabase Auth.
   const [pw, setPw] = React.useState("");
@@ -982,7 +982,7 @@ function AuthScreen({ onLogin, onBookAsGuest }) {
     // Mock path (demo mode) — role selector picks the identity.
     setTimeout(()=>{
       setBusy(false);
-      const prof = (window.ROLE_PROFILES||{})[role] || { name:"شريف عادل", email:"sherif@kinetic.eg", match:null };
+      const prof = (window.ROLE_PROFILES||{})[role] || { name:"أمير", email:"amir@kinetic.eg", match:null };
       onLogin && onLogin({
         name: prof.name,
         role,
@@ -1041,13 +1041,18 @@ function AuthScreen({ onLogin, onBookAsGuest }) {
             كل هذا من مساحة عمل واحدة هادئة مصممة للعلاج الطبيعي.
           </p>
 
-          {/* mock stat tiles */}
+          {/* stat tiles — demo shows sample figures; production shows the
+              clinic's real counts (blank-safe on a fresh database). */}
           <div style={{display:"grid",gridTemplateColumns:"repeat(3, 1fr)",gap:10,marginTop:28}}>
-            {[
+            {(isDemoMode() ? [
               {k:"المرضى",v:"248"},
               {k:"جلسات/شهر",v:"1,420"},
               {k:"معدّل الالتزام",v:"97%"},
-            ].map((s,i)=>(
+            ] : [
+              {k:"جدولة الجلسات",v:"✓"},
+              {k:"الفواتير والباقات",v:"✓"},
+              {k:"حملات واتساب",v:"✓"},
+            ]).map((s,i)=>(
               <div key={i} style={{background:"rgba(255,255,255,.55)",backdropFilter:"blur(8px)",border:"1px solid rgba(255,255,255,.6)",padding:"12px 14px",borderRadius:14}}>
                 <div style={{fontSize:11,color:"#1E4A6E",letterSpacing:".04em",textTransform:"uppercase"}}>{s.k}</div>
                 <div className="mono" style={{fontSize:22,fontWeight:600,color:"#0F1E2B",marginTop:2}}>{s.v}</div>
@@ -1071,7 +1076,9 @@ function AuthScreen({ onLogin, onBookAsGuest }) {
                 سجّل الدخول للمتابعة إلى مساحة عيادتك.
               </div>
 
-              {/* الدور picker */}
+              {/* الدور picker — demo only; production resolves the role from
+                  the Supabase account, so picking one here would mislead. */}
+              {isDemoMode() && <>
               <div className="label">سجّل الدخول بصفة</div>
               <div className="rgrid half-sm" style={{"--gtc":"repeat(4,1fr)",gap:6,marginBottom:18}}>
                 {roles.map(r=>(
@@ -1086,6 +1093,7 @@ function AuthScreen({ onLogin, onBookAsGuest }) {
                     }}>{r}</button>
                 ))}
               </div>
+              </>}
 
               <form onSubmit={submit}>
                 <div className="label">البريد الإلكتروني</div>
@@ -1154,7 +1162,7 @@ function AuthScreen({ onLogin, onBookAsGuest }) {
                 سنرسل رابطًا لمرة واحدة إلى بريدك المسجّل.
               </div>
               <div className="label">البريد الإلكتروني</div>
-              <input className="input" type="email" defaultValue="sherif@kinetic.eg" style={{height:42,marginBottom:18}}/>
+              <input className="input" type="email" defaultValue="amir@kinetic.eg" style={{height:42,marginBottom:18}}/>
               <button className="btn btn-blue" style={{width:"100%",height:44,justifyContent:"center"}} onClick={()=>setMode("login")}>
                 إرسال رابط الإعادة <I.ArrowRight size={15}/>
               </button>

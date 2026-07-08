@@ -18,15 +18,28 @@ function Treatments({ go }) {
   const [templatesOpen, setTemplatesOpen] = React.useState(false);
   const [template, setTemplate] = React.useState(null);
 
-  const plans = [
-    { id:"TP-2231", patient:"هناء مصطفى",   diag:"انزلاق غضروفي L4–L5",     therapist:"كريم صالح", goals:5,  progress:42, sessions:"5/12", status:"نشط",   updated:"اليوم" },
-    { id:"TP-2232", patient:"عمر السيد",  diag:"كتف متجمدة (يمين)",        therapist:"لينا فاروق",goals:3,  progress:62, sessions:"5/8",  status:"نشط",   updated:"أمس" },
-    { id:"TP-2233", patient:"آية كريم",     diag:"ألم الرضفة الفخذية",        therapist:"كريم صالح", goals:4,  progress:0,  sessions:"0/10", status:"مسودة",    updated:"منذ يومين" },
-    { id:"TP-2234", patient:"وليد حسن",   diag:"خشونة الفقرات العنقية",       therapist:"منى حلمي", goals:4,  progress:27, sessions:"4/15", status:"نشط",   updated:"منذ 3 أيام" },
-    { id:"TP-2235", patient:"نور عبدالرحمن",diag:"تأهيل بعد جراحة الرباط الصليبي",         therapist:"لينا فاروق",goals:6,  progress:25, sessions:"6/24", status:"نشط",   updated:"اليوم" },
-    { id:"TP-2236", patient:"سلمى رضا",     diag:"التهاب اللفافة الأخمصية",          therapist:"كريم صالح", goals:3,  progress:38, sessions:"3/8",  status:"نشط",   updated:"منذ 4 أيام" },
-    { id:"TP-2237", patient:"تامر إبراهيم",  diag:"عرق النسا (يسار)",               therapist:"منى حلمي", goals:3,  progress:100,sessions:"6/6",  status:"مكتمل",updated:"منذ أسبوعين" },
-  ];
+  // One plan row per real patient — progress derived from the package
+  // size and remaining sessions (no fabricated plan fixtures).
+  const plans = DATA.patients.map(p => {
+    const pid = p.patient_id || p.id;
+    const total = Number(((p.pkg || "").match(/(\d+)/) || [])[1]) || 0;
+    const loggedCount = DATA.sessions.filter(s => s.patient_id === pid || s.patient === p.name).length;
+    const done = p.remain != null && total ? Math.max(0, total - p.remain) : loggedCount;
+    const progress = total ? Math.min(100, Math.round(done / total * 100)) : 0;
+    return {
+      id: "TP-" + pid,
+      patient: p.name,
+      diag: p.diag || p.diagnosis || "—",
+      therapist: p.th && p.th !== "—" ? p.th : "—",
+      goals: 0,
+      progress,
+      sessions: total ? `${done}/${total}` : String(done),
+      status: progress >= 100 && total ? "مكتمل" : (p.status === "غير نشط" ? "مسودة" : "نشط"),
+      updated: p.visited && p.visited !== "—" ? p.visited : (p.registered || "—"),
+      p,
+    };
+  });
+  const avgProgress = plans.length ? Math.round(plans.reduce((s, x) => s + x.progress, 0) / plans.length) : 0;
 
   if (view === "detail" && selected) return <TreatmentPlanDetail plan={selected} onBack={()=>setView("list")} onEdit={()=>{setView("create");}}/>;
   if (view === "create") return <TreatmentPlanCreate template={template} onCancel={()=>{setTemplate(null);setView("list");}} onSave={()=>{
@@ -41,7 +54,7 @@ function Treatments({ go }) {
         <div>
           <div className="crumb"><span>الرئيسية</span><I.Chevron size={11}/><span>خطط العلاج</span></div>
           <div className="h1">خطط العلاج</div>
-          <div className="muted" style={{fontSize:13.5,marginTop:4}}>{plans.filter(p=>p.status==="نشط").length} نشط · {plans.filter(p=>p.status==="مسودة").length} مسودات · متوسط التقدم 42%</div>
+          <div className="muted" style={{fontSize:13.5,marginTop:4}}>{plans.filter(p=>p.status==="نشط").length} نشط · {plans.filter(p=>p.status==="مسودة").length} مسودات · متوسط التقدم {avgProgress}%</div>
         </div>
         <div className="page-actions">
           <button className="btn btn-secondary" onClick={()=>setTemplatesOpen(true)}><I.FileText size={14}/> القوالب</button>
@@ -51,8 +64,8 @@ function Treatments({ go }) {
 
       <div className="grid-3" style={{marginBottom:18}}>
         <StatCard label="خطط نشطة" value={plans.filter(p=>p.status==="نشط").length} accent="#7BBDE8" icon={<I.Clipboard size={15}/>}/>
-        <StatCard label="أهداف محققة" value="68%" accent="#3FA984" icon={<I.Check size={15}/>}/>
-        <StatCard label="متوسط الجلسات حتى الهدف" value="9.4" accent="#7E6BD3" icon={<I.Activity size={15}/>}/>
+        <StatCard label="خطط مكتملة" value={String(plans.filter(p=>p.status==="مكتمل").length)} accent="#3FA984" icon={<I.Check size={15}/>}/>
+        <StatCard label="متوسط التقدّم" value={`${avgProgress}%`} accent="#7E6BD3" icon={<I.Activity size={15}/>}/>
       </div>
 
       <div className="card" style={{overflow:"hidden"}}>
@@ -60,6 +73,9 @@ function Treatments({ go }) {
         <table className="tbl">
           <thead><tr><th>الخطة</th><th>المريض</th><th>التشخيص</th><th>الأخصائي</th><th>التقدّم</th><th>الجلسات</th><th>الحالة</th><th>آخر تحديث</th></tr></thead>
           <tbody>
+            {plans.length===0 && (
+              <tr><td colSpan={8}><EmptyState icon={<I.Clipboard size={22}/>} title="لا خطط علاج بعد" body="أضف مرضى لتظهر خططهم العلاجية هنا."/></td></tr>
+            )}
             {plans.map(p=>(
               <tr key={p.id} data-clickable="true" tabIndex={0} onClick={()=>{setSelected(p);setView("detail")}} onKeyDown={e=>{ if(e.key==="Enter"||e.key===" "){e.preventDefault();setSelected(p);setView("detail");} }}>
                 <td className="mono" style={{fontWeight:600}}>{p.id}</td>
@@ -108,7 +124,7 @@ function TreatmentPlanDetail({ plan, onBack, onEdit }) {
       <div className="page-head" style={{alignItems:"flex-start"}}>
         <div>
           <div className="h1">{plan.diag}</div>
-          <div className="muted" style={{fontSize:13.5,marginTop:4}}>المريض: {plan.patient} · الأخصائي: {plan.therapist} · Created Apr 30, 2026</div>
+          <div className="muted" style={{fontSize:13.5,marginTop:4}}>المريض: {plan.patient} · الأخصائي: {plan.therapist}{plan.p && plan.p.registered ? ` · سُجّل ${plan.p.registered}` : ""}</div>
         </div>
         <div className="page-actions">
           <button className="btn btn-secondary" onClick={()=>window.print()}><I.Print size={13}/> طباعة</button>
@@ -116,7 +132,7 @@ function TreatmentPlanDetail({ plan, onBack, onEdit }) {
         </div>
       </div>
 
-      <PatientTreatmentPlan/>
+      <PatientTreatmentPlan p={plan.p}/>
     </Page>
   );
 }
@@ -414,7 +430,7 @@ function SessionTimer() {
 }
 
 function PainTrendChart() {
-  const data = DATA.sessions.slice().reverse().map((s,i) => ({ label: `S${i+1}`, v: 11 - s.pain }));
+  const data = DATA.sessions.slice().reverse().map((s,i) => ({ label: `S${i+1}`, v: 11 - (s.pain ?? s.pain_score ?? 0) }));
   return <AreaChart data={data} height={140} color="#3FA984" fill="rgba(63,169,132,.18)"/>;
 }
 
@@ -426,7 +442,7 @@ function SessionHistoryList() {
           <I.Search size={14} style={{position:"absolute",left:11,top:"50%",transform:"translateY(-50%)",color:"var(--ink-400)"}}/>
           <input className="input" placeholder="ابحث بالمريض أو الملاحظة…" style={{paddingLeft:32}}/>
         </div>
-        <select className="input" style={{width:"auto",minWidth:150,flex:"0 1 180px"}}><option>كل الأخصائيين</option><option>كريم صالح</option></select>
+        <select className="input" style={{width:"auto",minWidth:150,flex:"0 1 180px"}}><option>كل الأخصائيين</option>{DATA.therapists.map(t=><option key={t.id||t.name}>{t.name}</option>)}</select>
         <select className="input" style={{width:"auto",minWidth:150,flex:"0 1 180px"}}><option>آخر 30 يوم</option><option>هذا الأسبوع</option></select>
       </div>
 
@@ -435,25 +451,33 @@ function SessionHistoryList() {
   );
 }
 
-function SessionTimeline({ mini }) {
+function SessionTimeline({ mini, p }) {
   const [notesModal, setNotesModal] = React.useState(null);
+  // Scope to one patient when rendered inside a patient profile.
+  const pid = p ? (p.patient_id || p.id) : null;
+  const rows = p
+    ? DATA.sessions.filter(s => s.patient_id === pid || s.patient === p.name)
+    : DATA.sessions;
+  if (rows.length === 0) {
+    return <EmptyState icon={<I.Activity size={22}/>} title="لا جلسات مسجلة بعد" body="ستظهر الجلسات هنا بعد تسجيلها من شاشة الجلسات."/>;
+  }
   return (
     <div className="card" style={{padding:0,overflow:"hidden"}}>
-      {DATA.sessions.map((s,i)=>(
-        <div key={i} className="rgrid sess-row" style={{
-          padding:"16px 22px", borderBottom:i<DATA.sessions.length-1?"1px solid var(--ink-100)":"none",
+      {rows.map((s,i)=>(
+        <div key={s.id || i} className="rgrid sess-row" style={{
+          padding:"16px 22px", borderBottom:i<rows.length-1?"1px solid var(--ink-100)":"none",
           "--gtc":"56px 1fr 110px 130px", gap:16, alignItems:"center"
         }}>
           <div style={{textAlign:"center"}}>
-            <div className="mono" style={{fontSize:20,fontWeight:600,color:"var(--blue-700)"}}>#{s.session}</div>
+            <div className="mono" style={{fontSize:20,fontWeight:600,color:"var(--blue-700)"}}>#{s.session ?? s.session_number ?? "—"}</div>
             <div className="muted mono" style={{fontSize:10}}>{s.date}</div>
           </div>
           <div>
             <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
-              <span style={{fontSize:13,fontWeight:600}}>{mini ? "هناء مصطفى" : "هناء مصطفى"} · جلسة #{s.session}</span>
-              <span className="muted" style={{fontSize:11.5}}>بواسطة كريم صالح</span>
+              <span style={{fontSize:13,fontWeight:600}}>{(p && p.name) || s.patient || "—"} · جلسة #{s.session ?? s.session_number ?? "—"}</span>
+              {(s.therapist || "") && <span className="muted" style={{fontSize:11.5}}>بواسطة {s.therapist}</span>}
             </div>
-            <div style={{fontSize:13,color:"var(--ink-700)",lineHeight:1.5}}>{s.notes}</div>
+            <div style={{fontSize:13,color:"var(--ink-700)",lineHeight:1.5}}>{s.notes || s.session_notes || ""}</div>
             {s.done && s.done.length>0 && (
               <div style={{display:"flex",gap:6,marginTop:8,flexWrap:"wrap"}}>
                 {s.done.map(d=><span key={d} className="badge b-green"><I.Check size={10}/>{d}</span>)}
@@ -503,11 +527,13 @@ function Payments({ go }) {
   const filtered = scoped.filter(p => statusFilter==="الكل" || p.status===statusFilter)
                           .filter(p => methodFilter==="الكل" || p.method===methodFilter);
 
+  const thisMonth = new Date().toISOString().slice(0,7);
   const totals = {
     paid: scoped.filter(p=>p.status==="مدفوع").reduce((s,p)=>s+p.paid,0),
-    outstanding: scoped.reduce((s,p)=>s+(p.amount-p.paid),0),
-    overdue: scoped.filter(p=>p.status==="متأخر").reduce((s,p)=>s+(p.amount-p.paid),0),
-    monthly: 410200,
+    outstanding: scoped.reduce((s,p)=>s+Math.max(0,(p.amount||0)-(p.paid||0)),0),
+    overdue: scoped.filter(p=>p.status==="متأخر").reduce((s,p)=>s+Math.max(0,(p.amount||0)-(p.paid||0)),0),
+    monthly: scoped.filter(p=>String(p.date||p.created_at||"").slice(0,7)===thisMonth).reduce((s,p)=>s+(p.paid||0),0),
+    avg: scoped.length ? scoped.reduce((s,p)=>s+(p.amount||0),0) / scoped.length : 0,
   };
 
   return (
@@ -529,10 +555,10 @@ function Payments({ go }) {
       </div>
 
       <div className="grid-4" style={{marginBottom:18}}>
-        <StatCard label="محصّل هذا الشهر" value={`EGP ${(totals.monthly/1000).toFixed(0)}K`} delta="+18%" deltaKind="up" accent="#3FA984" icon={<I.Dollar size={15}/>} spark={[210,260,240,300,350,380,410]}/>
-        <StatCard label="معلّق"          value={`EGP ${(totals.outstanding/1000).toFixed(1)}K`} delta="-EGP 2.3K" deltaKind="down" accent="#D49044" icon={<I.Clock size={15}/>}/>
-        <StatCard label="متأخر (>14ي)"        value={`EGP ${(totals.overdue/1000).toFixed(1)}K`}    delta="2 invoices" deltaKind="down" accent="#D8665A" icon={<I.X size={15}/>}/>
-        <StatCard label="متوسط الفاتورة"           value="EGP 7.6K"  delta="+5%" deltaKind="up" accent="#7BBDE8" icon={<I.FileText size={15}/>}/>
+        <StatCard label="محصّل هذا الشهر" value={`EGP ${(totals.monthly/1000).toFixed(1)}K`} accent="#3FA984" icon={<I.Dollar size={15}/>}/>
+        <StatCard label="معلّق"          value={`EGP ${(totals.outstanding/1000).toFixed(1)}K`} accent="#D49044" icon={<I.Clock size={15}/>}/>
+        <StatCard label="متأخر (>14ي)"        value={`EGP ${(totals.overdue/1000).toFixed(1)}K`} accent="#D8665A" icon={<I.X size={15}/>}/>
+        <StatCard label="متوسط الفاتورة"           value={`EGP ${(totals.avg/1000).toFixed(1)}K`} accent="#7BBDE8" icon={<I.FileText size={15}/>}/>
       </div>
 
       <div className="seg" style={{marginBottom:14}}>
@@ -565,6 +591,9 @@ function Payments({ go }) {
                 <th>فاتورة</th><th>المريض</th><th>التاريخ</th><th>المبلغ</th><th>مدفوع</th><th>الطريقة</th><th>الحالة</th><th></th>
               </tr></thead>
               <tbody>
+                {filtered.length===0 && (
+                  <tr><td colSpan={8}><EmptyState icon={<I.FileText size={22}/>} title="لا فواتير بعد" body="أنشئ أول فاتورة من زر «فاتورة جديدة»."/></td></tr>
+                )}
                 {filtered.map(p=>{
                   const remaining = p.amount - p.paid;
                   const pct = p.amount ? p.paid/p.amount : 0;
@@ -642,18 +671,28 @@ function Payments({ go }) {
 }
 
 function PaymentMethodsView() {
-  const data = [
-    { label:"نقدي",          v:32, color:"#7BBDE8", revenue:"131,000" },
-    { label:"فيزا / Mastercard", v:28, color:"#3A7FB5", revenue:"114,800" },
-    { label:"إنستاباي",      v:18, color:"#7E6BD3", revenue:"73,800" },
-    { label:"فودافون كاش", v:14, color:"#D49044", revenue:"57,400" },
-    { label:"تحويل بنكي", v:8,  color:"#3FA984", revenue:"32,800" },
-  ];
+  // Real method mix computed from the invoices table.
+  const colors = ["#7BBDE8","#3A7FB5","#7E6BD3","#D49044","#3FA984","#BDD8E9"];
+  const byMethod = {};
+  DATA.payments.forEach(p => {
+    const m = p.method || p.payment_method || "—";
+    byMethod[m] = (byMethod[m] || 0) + (p.paid || 0);
+  });
+  const totalPaid = Object.values(byMethod).reduce((s,v)=>s+v, 0);
+  const data = Object.entries(byMethod).sort((a,b)=>b[1]-a[1]).map(([label, rev], i) => ({
+    label,
+    v: totalPaid ? Math.round(rev/totalPaid*100) : 0,
+    color: colors[i % colors.length],
+    revenue: rev.toLocaleString(),
+  }));
+  if (data.length === 0) {
+    return <EmptyState icon={<I.CreditCard size={22}/>} title="لا مدفوعات بعد" body="سيظهر توزيع طرق الدفع هنا بعد تسجيل الفواتير."/>;
+  }
   return (
     <div className="rgrid c-lg" style={{"--gtc":"1fr 1fr"}}>
       <div className="card card-pad">
         <div className="h2" style={{marginBottom:18}}>الطريقة mix · this month</div>
-        <DonutChart data={data} size={200} centerLabel="ج.م محصلة" centerValue="410K"/>
+        <DonutChart data={data} size={200} centerLabel="ج.م محصلة" centerValue={totalPaid>=1000?`${(totalPaid/1000).toFixed(0)}K`:String(totalPaid)}/>
       </div>
       <div className="card card-pad">
         <div className="h2" style={{marginBottom:14}}>Revenue بواسطة method</div>
@@ -717,12 +756,20 @@ function InvoiceModal({ invoice, onClose }) {
           <div>
             <div className="muted" style={{fontSize:11,textTransform:"uppercase",letterSpacing:".05em",marginBottom:4}}>فاتورة لـ</div>
             <div style={{fontWeight:600}}>{invoice.patient}</div>
-            <div className="muted" style={{fontSize:12,lineHeight:1.5,marginTop:2}}>ملف P-10241<br/>مصر الجديدة، القاهرة<br/>+20 100 234 1180</div>
+            {(() => {
+              const row = DATA.patients.find(p => p.name === invoice.patient || (p.patient_id||p.id) === invoice.patient_id) || {};
+              return <div className="muted" style={{fontSize:12,lineHeight:1.5,marginTop:2}}>ملف {row.patient_id || row.id || "—"}<br/>{row.address || ""}{row.address ? <br/> : null}{row.phone || ""}</div>;
+            })()}
           </div>
           <div>
             <div className="muted" style={{fontSize:11,textTransform:"uppercase",letterSpacing:".05em",marginBottom:4}}>فريق الرعاية</div>
-            <div style={{fontSize:13}}>د. ياسمين عادل</div>
-            <div className="muted" style={{fontSize:12}}>كريم صالح (PT)</div>
+            {(() => {
+              const row = DATA.patients.find(p => p.name === invoice.patient || (p.patient_id||p.id) === invoice.patient_id) || {};
+              return <>
+                <div style={{fontSize:13}}>{row.dr && row.dr !== "—" ? row.dr : "—"}</div>
+                <div className="muted" style={{fontSize:12}}>{row.th && row.th !== "—" ? row.th : ""}</div>
+              </>;
+            })()}
           </div>
         </div>
 
@@ -731,15 +778,14 @@ function InvoiceModal({ invoice, onClose }) {
           <table className="tbl" style={{fontSize:12.5,minWidth:420}}>
             <thead><tr><th>البند</th><th style={{textAlign:"right"}}>الكمية</th><th style={{textAlign:"right"}}>السعر</th><th style={{textAlign:"right"}}>الإجمالي</th></tr></thead>
             <tbody>
-              <tr><td>الأساسية 10 — باقة علاج يدوي</td><td style={{textAlign:"right"}}>1</td><td style={{textAlign:"right"}} className="mono">7,250.00</td><td style={{textAlign:"right"}} className="mono">7,250.00</td></tr>
-              <tr><td>تقييم أولي</td><td style={{textAlign:"right"}}>1</td><td style={{textAlign:"right"}} className="mono">0.00</td><td style={{textAlign:"right"}} className="mono">0.00</td></tr>
+              <tr><td>{invoice.desc || "خدمات علاجية"}</td><td style={{textAlign:"right"}}>1</td><td style={{textAlign:"right"}} className="mono">{(invoice.amount||0).toLocaleString()}</td><td style={{textAlign:"right"}} className="mono">{(invoice.amount||0).toLocaleString()}</td></tr>
             </tbody>
           </table>
         </div>
 
         <div style={{display:"flex",justifyContent:"flex-end"}}>
           <div style={{minWidth:240}}>
-            <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12.5}}><span className="muted">المجموع الفرعي</span><span className="mono">EGP 7,250.00</span></div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12.5}}><span className="muted">المجموع الفرعي</span><span className="mono">EGP {(invoice.amount||0).toLocaleString()}</span></div>
             <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12.5}}><span className="muted">ض.ق.م (14%)</span><span className="mono">EGP 0.00</span></div>
             <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0",borderTop:"1px solid var(--ink-200)",marginTop:6}}><span style={{fontWeight:600}}>الإجمالي</span><span className="mono" style={{fontWeight:600,fontSize:16}}>EGP {invoice.amount.toLocaleString()}</span></div>
             <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12.5}}><span className="muted">مدفوعة عبر {invoice.method}</span><span className="mono">EGP {invoice.paid.toLocaleString()}</span></div>
@@ -963,12 +1009,21 @@ function Campaigns({ go }) {
         </div>
       </div>
 
+      {(() => {
+        // Real campaign KPIs aggregated from the campaigns table.
+        const sent = DATA.campaigns.reduce((s,c)=>s+(c.sent||0),0);
+        const read = DATA.campaigns.reduce((s,c)=>s+(c.read||0),0);
+        const replied = DATA.campaigns.reduce((s,c)=>s+(c.replied||0),0);
+        const pct = (a,b)=> b ? `${Math.round(a/b*1000)/10}%` : "—";
+        return (
       <div className="grid-4" style={{marginBottom:18}}>
-        <StatCard label="رسائل مُرسلة (شهر)"   value="3,812" delta="+24%"  deltaKind="up"   accent="#25D366" icon={<I.WhatsApp size={15}/>} spark={[120,180,210,240,290,340,380]}/>
-        <StatCard label="معدل القراءة"             value="89%"   delta="+3%"   deltaKind="up"   accent="#7BBDE8" icon={<I.Eye size={15}/>}/>
-        <StatCard label="معدل الرد"         value="14.2%" delta="+1.8%" deltaKind="up"   accent="#7E6BD3" icon={<I.Send size={15}/>}/>
-        <StatCard label="رسائل فاشلة"       value="2.1%"  delta="-0.4%" deltaKind="up"   accent="#D8665A" icon={<I.X size={15}/>}/>
+        <StatCard label="رسائل مُرسلة"   value={sent.toLocaleString()} accent="#25D366" icon={<I.WhatsApp size={15}/>}/>
+        <StatCard label="معدل القراءة"             value={pct(read, sent)} accent="#7BBDE8" icon={<I.Eye size={15}/>}/>
+        <StatCard label="معدل الرد"         value={pct(replied, sent)} accent="#7E6BD3" icon={<I.Send size={15}/>}/>
+        <StatCard label="الحملات النشطة"       value={String(DATA.campaigns.filter(c=>c.status==="جارٍ"||c.status==="مجدول").length)} accent="#D8665A" icon={<I.Megaphone size={15}/>}/>
       </div>
+        );
+      })()}
 
       <div className="card" style={{overflow:"hidden"}}>
         <div style={{padding:"12px 18px",borderBottom:"1px solid var(--ink-200)",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
@@ -985,6 +1040,9 @@ function Campaigns({ go }) {
         <table className="tbl">
           <thead><tr><th>الحملة</th><th>الجمهور</th><th>مُرسلة</th><th>مقروءة</th><th>ردّ</th><th>القالب</th><th>الجدولة</th><th>الحالة</th><th></th></tr></thead>
           <tbody>
+            {DATA.campaigns.length===0 && (
+              <tr><td colSpan={9}><EmptyState icon={<I.Megaphone size={22}/>} title="لا حملات بعد" body="أطلق أول حملة واتساب من زر «حملة جديدة»."/></td></tr>
+            )}
             {DATA.campaigns.map(c=>(
               <tr key={c.id} data-clickable="true" tabIndex={0} onClick={()=>{setSelected(c);setView("analytics")}} onKeyDown={e=>{ if(e.key==="Enter"||e.key===" "){e.preventDefault();setSelected(c);setView("analytics");} }}>
                 <td>
@@ -1070,14 +1128,21 @@ function CampaignBuilder({ onCancel, onSave, initialTemplate }) {
   const [template, setTemplate] = React.useState(initialTemplate != null ? (templateNameMap[initialTemplate] || 0) : 0);
   const [previewOpen, setPreviewOpen] = React.useState(false);
   const [filters, setFilters] = React.useState({
-    diag:"انزلاق غضروفي L4–L5",
-    age:[35,75],
+    diag:"",
+    age:[0,100],
     payment:"Any",
     chronic:"Any",
-    lastVisit:"30+ days",
-    remaining:"≥ 3",
-    gender:"Any"
+    lastVisit:"آخر 7 أيام",
+    remaining:"أي",
+    gender:"أي"
   });
+
+  // Live audience estimate against the real patients table.
+  const audiencePatients = DATA.patients.filter(p =>
+    (!filters.diag || (p.diag || p.diagnosis || "").includes(filters.diag)) &&
+    (filters.gender === "أي" || filters.gender === "Any" || !filters.gender
+      || (filters.gender === "أنثى" ? p.gender === "F" : p.gender === "M"))
+  );
 
   const templates = [
     { name:"متابعة ربع سنوية", body:"أهلاً {{first_name}} 👋 it's been a while! How is your {{condition}} feeling? Reply 1 to book a جلسة, 2 to chat مع a therapist." },
@@ -1141,8 +1206,8 @@ function CampaignBuilder({ onCancel, onSave, initialTemplate }) {
                 <Field label="الحالة/نوع الإصابة"><select className="input"><option>أي</option><option>بعد العمليات</option><option>أمراض مزمنة pain</option></select></Field>
                 <Field label="الفئة العمرية"><input className="input" defaultValue="35 – 75"/></Field>
                 <Field label="الجنس"><select className="input" value={filters.gender} onChange={e=>setFilters({...filters,gender:e.target.value})}><option>أي</option><option>أنثى</option><option>ذكر</option></select></Field>
-                <Field label="طبيب"><select className="input"><option>أي</option><option>د. ياسمين عادل</option></select></Field>
-                <Field label="الأخصائي"><select className="input"><option>أي</option><option>كريم صالح</option></select></Field>
+                <Field label="طبيب"><select className="input"><option>أي</option>{[...new Set(DATA.patients.map(p=>p.dr).filter(d=>d&&d!=="—"))].map(d=><option key={d}>{d}</option>)}</select></Field>
+                <Field label="الأخصائي"><select className="input"><option>أي</option>{DATA.therapists.map(t=><option key={t.id||t.name}>{t.name}</option>)}</select></Field>
                 <Field label="الجلسات المتبقية"><select className="input" value={filters.remaining} onChange={e=>setFilters({...filters,remaining:e.target.value})}><option>أي</option><option>0</option><option>1–2</option><option>≥ 3</option></select></Field>
                 <Field label="آخر زيارة"><select className="input" value={filters.lastVisit} onChange={e=>setFilters({...filters,lastVisit:e.target.value})}><option>آخر 7 أيام</option><option>14+ days</option><option>30+ days</option><option>60+ days</option></select></Field>
                 <Field label="أمراض مزمنة disease"><select className="input"><option>أي</option><option>سكري</option><option>ضغط دم</option></select></Field>
@@ -1154,8 +1219,8 @@ function CampaignBuilder({ onCancel, onSave, initialTemplate }) {
                   <I.Users size={18}/>
                 </div>
                 <div style={{flex:1,minWidth:200}}>
-                  <div style={{fontWeight:600,fontSize:13.5,color:"var(--blue-900)"}}>هذا الجمهور يشمل <span className="mono">312 مريض</span></div>
-                  <div className="muted" style={{fontSize:12,marginTop:2}}>L4–L5 diagnosis · 35–75 yrs · last visit 30+ days · est. cost EGP 156</div>
+                  <div style={{fontWeight:600,fontSize:13.5,color:"var(--blue-900)"}}>هذا الجمهور يشمل <span className="mono">{audiencePatients.length} مريض</span></div>
+                  <div className="muted" style={{fontSize:12,marginTop:2}}>{filters.diag ? `تشخيص: ${filters.diag} · ` : ""}تكلفة تقديرية EGP {(audiencePatients.length * 0.5).toFixed(0)}</div>
                 </div>
                 <button className="btn btn-secondary" onClick={()=>setPreviewOpen(true)}>معاينة القائمة</button>
               </div>
@@ -1263,8 +1328,8 @@ function CampaignBuilder({ onCancel, onSave, initialTemplate }) {
                 padding:"10px 12px",fontSize:13,maxWidth:"86%",
                 boxShadow:"0 1px 1px rgba(0,0,0,.1)",lineHeight:1.45
               }}>
-                أهلاً <strong>هناء</strong> 👋<br/>
-                مرّ وقت طويل! كيف حال <strong>انزلاق غضروفي L4–L5</strong> مؤخرًا؟<br/><br/>
+                أهلاً <strong>{"{{first_name}}"}</strong> 👋<br/>
+                مرّ وقت طويل! كيف حال <strong>{"{{condition}}"}</strong> مؤخرًا؟<br/><br/>
                 اضغط <strong>1</strong> لحجز جلسة<br/>
                 اضغط <strong>2</strong> للتحدث مع أخصائي
                 <div style={{fontSize:10,color:"#888",textAlign:"right",marginTop:6}}>09:00 · ✓✓</div>
@@ -1278,7 +1343,7 @@ function CampaignBuilder({ onCancel, onSave, initialTemplate }) {
             </div>
             <div style={{display:"flex",justifyContent:"flex-start",marginBottom:8}}>
               <div style={{background:"#fff",borderRadius:"12px 12px 12px 4px",padding:"10px 12px",fontSize:13,maxWidth:"86%",boxShadow:"0 1px 1px rgba(0,0,0,.1)"}}>
-                تمام! غدًا 10:00 مع كريم؟<br/>
+                تمام! {"{{time}}"} مع {"{{therapist}}"}؟<br/>
                 اضغط <strong>نعم</strong> للتأكيد.
                 <div style={{fontSize:10,color:"#888",textAlign:"right",marginTop:6}}>09:04 · ✓</div>
               </div>
@@ -1387,12 +1452,13 @@ function CampaignAnalytics({ c, onBack }) {
       <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr"}}>
         <div className="card card-pad">
           <div className="h2" style={{marginBottom:14}}>أفضل الردود</div>
-          {[
+          {!window.IS_DEMO && <div className="muted" style={{fontSize:13,padding:"14px 0"}}>ستظهر ردود المرضى هنا بعد ربط واتساب للأعمال.</div>}
+          {(window.IS_DEMO ? [
             {p:"هناء مصطفى", t:"نعم please, can I book Wednesday at 10?", time:"منذ 14 دقيقة"},
             {p:"وليد حسن", t:"ما المواعيد المتاحة هذا الأسبوع؟", time:"منذ ساعة"},
             {p:"سلمى رضا", t:"ألمي أفضل بكثير، شكرًا لك 🙏", time:"منذ 3 ساعات"},
             {p:"تامر إبراهيم", t:"أحتاج إعادة جدولة موعد الثلاثاء الماضي", time:"أمس"},
-          ].map((r,i)=>(
+          ] : []).map((r,i)=>(
             <div key={i} style={{padding:"10px 0",borderBottom:i<3?"1px dashed var(--ink-100)":"none",display:"flex",gap:12}}>
               <div className="av md">{r.p.split(" ").map(x=>x[0]).join("").slice(0,2)}</div>
               <div style={{flex:1}}>
@@ -1444,7 +1510,11 @@ function Reports({ go }) {
         <div className="page-actions">
           <select className="input" style={{width:"auto",minWidth:150,flex:"0 1 180px"}}><option>آخر 30 يوم</option><option>هذا الشهر</option><option>هذا الربع</option><option>منذ بداية السنة</option></select>
           <button className="btn btn-secondary" onClick={()=>{
-            const rows=["التقرير,القيمة","الإيرادات الشهرية,410200","مرضى نشطون,248","جلسات هذا الشهر,892","متوسط الفاتورة,7600"];
+            const month = new Date().toISOString().slice(0,7);
+            const monthly = DATA.payments.filter(p=>String(p.date||p.created_at||"").slice(0,7)===month).reduce((s,p)=>s+(p.paid||0),0);
+            const active = DATA.patients.filter(p=>p.status!=="غير نشط").length;
+            const avg = DATA.payments.length ? Math.round(DATA.payments.reduce((s,p)=>s+(p.amount||0),0)/DATA.payments.length) : 0;
+            const rows=["التقرير,القيمة",`الإيرادات الشهرية,${monthly}`,`مرضى نشطون,${active}`,`الجلسات المسجلة,${DATA.sessions.length}`,`متوسط الفاتورة,${avg}`];
             downloadCsv(rows, "report.csv");
             if(window.showToast)window.showToast("تم تصدير التقرير","success");
           }}><I.Download size={14}/> تصدير</button>
@@ -1485,19 +1555,37 @@ function Reports({ go }) {
 }
 
 function FinancialReport() {
-  const monthly = [
-    {label:"ينا",v:296},{label:"فبر",v:312},{label:"مار",v:341},{label:"أبر",v:382},{label:"مايو",v:410}
-  ];
-  const daily = [
-    {label:"أحد",v:18200},{label:"إثن",v:22400},{label:"ثلا",v:19800},{label:"أرب",v:27100},{label:"خمي",v:31200},{label:"جمع",v:24800},{label:"سبت",v:14200}
-  ];
+  // Aggregated from the real invoices/packages tables.
+  const dateOf = (p) => String(p.date || p.created_at || "").slice(0, 10);
+  const byMonth = {}, byDay = {};
+  DATA.payments.forEach(p => {
+    const d = dateOf(p);
+    if (!d) return;
+    byMonth[d.slice(0,7)] = (byMonth[d.slice(0,7)]||0) + (p.paid||0);
+    byDay[d] = (byDay[d]||0) + (p.paid||0);
+  });
+  const monthly = Object.keys(byMonth).sort().slice(-6).map(m => ({ label:m.slice(2), v: Math.round(byMonth[m]/1000) }));
+  const daily = Object.keys(byDay).sort().slice(-7).map(d => ({ label:d.slice(5), v: byDay[d] }));
+
+  const thisMonth = new Date().toISOString().slice(0,7);
+  const monthRevenue = byMonth[thisMonth] || 0;
+  const collected = DATA.payments.reduce((s,p)=>s+(p.paid||0),0);
+  const outstanding = DATA.payments.reduce((s,p)=>s+Math.max(0,(p.amount||0)-(p.paid||0)),0);
+  const dayCount = Object.keys(byDay).length || 1;
+  const dailyAvg = collected / dayCount;
+  const fmtK = (v)=> v>=1000?`EGP ${(v/1000).toFixed(1)}K`:`EGP ${Math.round(v).toLocaleString()}`;
+
+  const services = DATA.packages.map((p,i)=>({ l:p.name, v:(p.sold||0)*(p.price||0), c:["#7BBDE8","#7E6BD3","#BDD8E9","#3A7FB5","#1E4A6E"][i%5] }))
+    .filter(s=>s.v>0).sort((a,b)=>b.v-a.v).slice(0,5);
+  const maxService = services[0] ? services[0].v : 1;
+
   return (
     <div>
       <div className="grid-4" style={{marginBottom:18}}>
-        <StatCard label="إجمالي الإيرادات (شهر)" value="EGP 410.2K" delta="+18%" deltaKind="up" accent="#3FA984" icon={<I.Dollar size={15}/>}/>
-        <StatCard label="المتوسط اليومي"      value="EGP 13.2K" delta="+9%"  deltaKind="up" accent="#7BBDE8" icon={<I.Chart size={15}/>}/>
-        <StatCard label="محصّل"          value="EGP 391.8K" delta="95.5%" deltaKind="up" accent="#3A7FB5" icon={<I.Check size={15}/>}/>
-        <StatCard label="معلّق"        value="EGP 18.4K"  delta="4.5%" deltaKind="down" accent="#D49044" icon={<I.Clock size={15}/>}/>
+        <StatCard label="إجمالي الإيرادات (شهر)" value={fmtK(monthRevenue)} accent="#3FA984" icon={<I.Dollar size={15}/>}/>
+        <StatCard label="المتوسط اليومي"      value={fmtK(dailyAvg)} accent="#7BBDE8" icon={<I.Chart size={15}/>}/>
+        <StatCard label="محصّل"          value={fmtK(collected)} accent="#3A7FB5" icon={<I.Check size={15}/>}/>
+        <StatCard label="معلّق"        value={fmtK(outstanding)} accent="#D49044" icon={<I.Clock size={15}/>}/>
       </div>
 
       <div className="rgrid c-lg" style={{"--gtc":"1.5fr 1fr",marginBottom:18}}>
@@ -1506,130 +1594,166 @@ function FinancialReport() {
           <AreaChart data={monthly} height={240} formatY={v=>`${v}K`}/>
         </div>
         <div className="card card-pad">
-          <div className="h2" style={{marginBottom:14}}>يوميًا — الأسبوع الحالي</div>
+          <div className="h2" style={{marginBottom:14}}>يوميًا — آخر 7 أيام نشطة</div>
           <BarChart data={daily} height={240} formatY={v=>v>=1000?`${Math.round(v/1000)}K`:v}/>
         </div>
       </div>
 
       <div className="card card-pad">
         <div className="h2" style={{marginBottom:14}}>أفضل الخدمات حسب الإيرادات</div>
-        {[
-          {l:"الأساسية 10 — علاج يدوي",  v:182400, c:"#7BBDE8"},
-          {l:"بعد العمليات 24 — التعافي",      v:108200, c:"#7E6BD3"},
-          {l:"جلسة واحدة",             v:55400,  c:"#BDD8E9"},
-          {l:"البداية 6",                   v:38400,  c:"#3A7FB5"},
-          {l:"التعافي 15",                 v:25800,  c:"#1E4A6E"},
-        ].map((s,i)=>{
-          const max = 182400;
-          return (
-            <div key={i} style={{padding:"11px 0",borderBottom:i<4?"1px dashed var(--ink-100)":"none"}}>
-              <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
-                <span style={{fontSize:13,fontWeight:500}}>{s.l}</span>
-                <span className="mono" style={{fontSize:13,fontWeight:600}}>EGP {s.v.toLocaleString()}</span>
-              </div>
-              <div style={{height:5,background:"var(--ink-100)",borderRadius:999,overflow:"hidden"}}>
-                <div style={{height:"100%",width:`${s.v/max*100}%`,background:s.c}}/>
-              </div>
+        {services.length===0 && <div className="muted" style={{fontSize:13,padding:"14px 0"}}>لا مبيعات باقات بعد.</div>}
+        {services.map((s,i)=>(
+          <div key={i} style={{padding:"11px 0",borderBottom:i<services.length-1?"1px dashed var(--ink-100)":"none"}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+              <span style={{fontSize:13,fontWeight:500}}>{s.l}</span>
+              <span className="mono" style={{fontSize:13,fontWeight:600}}>EGP {s.v.toLocaleString()}</span>
             </div>
-          );
-        })}
+            <div style={{height:5,background:"var(--ink-100)",borderRadius:999,overflow:"hidden"}}>
+              <div style={{height:"100%",width:`${s.v/maxService*100}%`,background:s.c}}/>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
 }
 
 function MedicalReport() {
-  const diagData = [
-    { label:"أسفل الظهر / القطنية",   v:38, color:"#7BBDE8" },
-    { label:"الركبة (رباط صليبي)",       v:24, color:"#3A7FB5" },
-    { label:"الكتف",              v:14, color:"#7E6BD3" },
-    { label:"الرقبة / العنقية",       v:12, color:"#3FA984" },
-    { label:"أخرى",                 v:12, color:"#BDD8E9" },
+  // Aggregated from the real patients/sessions tables.
+  const patients = DATA.patients, sessions = DATA.sessions;
+  const active = patients.filter(p => p.status !== "غير نشط");
+  const avgSessions = patients.length ? (sessions.length / patients.length).toFixed(1) : "0";
+  const finished = patients.filter(p => p.remain === 0).length;
+  const goalRate = patients.length ? Math.round(finished / patients.length * 100) : 0;
+
+  // Diagnosis mix by keyword buckets.
+  const buckets = [
+    { label:"أسفل الظهر / القطنية", re:/ظهر|قطن|غضروف|نسا/, color:"#7BBDE8" },
+    { label:"الركبة", re:/ركبة|رباط|رضف/, color:"#3A7FB5" },
+    { label:"الكتف", re:/كتف/, color:"#7E6BD3" },
+    { label:"الرقبة / العنقية", re:/رقبة|عنق/, color:"#3FA984" },
   ];
+  let other = 0;
+  const counts = buckets.map(b => ({ ...b, v: 0 }));
+  patients.forEach(p => {
+    const d = p.diag || p.diagnosis || "";
+    const hit = counts.find(b => b.re.test(d));
+    if (hit) hit.v += 1; else other += 1;
+  });
+  const diagData = counts.filter(b => b.v > 0).map(({label,v,color}) => ({label,v,color}));
+  if (other > 0) diagData.push({ label:"أخرى", v: other, color:"#BDD8E9" });
+
+  // Real per-therapist session counts.
+  const sessionsOf = (t) => sessions.filter(s => s.therapist === t.name || s.therapist_id === t.id).length;
+
+  // Cohort pain trend: average pain per session number across all patients.
+  const byNum = {};
+  sessions.forEach(s => {
+    const n = s.session ?? s.session_number;
+    if (!n) return;
+    (byNum[n] = byNum[n] || []).push(s.pain ?? s.pain_score ?? 0);
+  });
+  const cohort = Object.keys(byNum).map(Number).sort((a,b)=>a-b).slice(0,10)
+    .map(n => ({ label:`ج${n}`, v: byNum[n].reduce((s,v)=>s+v,0)/byNum[n].length }));
+
   return (
     <div>
       <div className="grid-3" style={{marginBottom:18}}>
-        <StatCard label="مرضى تحت العلاج" value="184" delta="+12" deltaKind="up" accent="#7BBDE8" icon={<I.Users size={15}/>}/>
-        <StatCard label="متوسط الجلسات حتى الهدف"   value="9.4" delta="-0.6" deltaKind="up" accent="#3FA984" icon={<I.Activity size={15}/>}/>
-        <StatCard label="تحقيق الأهداف"        value="68%" delta="+4%" deltaKind="up" accent="#7E6BD3" icon={<I.Check size={15}/>}/>
+        <StatCard label="مرضى تحت العلاج" value={String(active.length)} accent="#7BBDE8" icon={<I.Users size={15}/>}/>
+        <StatCard label="متوسط الجلسات لكل مريض"   value={avgSessions} accent="#3FA984" icon={<I.Activity size={15}/>}/>
+        <StatCard label="أكملوا باقاتهم"        value={`${goalRate}%`} accent="#7E6BD3" icon={<I.Check size={15}/>}/>
       </div>
 
       <div className="rgrid c-lg" style={{"--gtc":"1fr 1fr",marginBottom:18}}>
         <div className="card card-pad">
           <div className="h2" style={{marginBottom:18}}>التشخيص breakdown</div>
-          <DonutChart data={diagData} size={180} centerLabel="مريض" centerValue="184"/>
+          <DonutChart data={diagData} size={180} centerLabel="مريض" centerValue={String(patients.length)}/>
         </div>
         <div className="card card-pad">
           <div className="h2" style={{marginBottom:14}}>الأخصائي activity</div>
-          {DATA.therapists.map((t,i)=>{
-            const Sessions = [142, 128, 89, 96][i] || 80;
-            return (
-              <div key={t.name} style={{padding:"11px 0",borderBottom:i<3?"1px dashed var(--ink-100)":"none",display:"flex",alignItems:"center",gap:10}}>
-                <span className="av md" style={{background:t.color+"33",color:t.color}}>{t.name.split(" ").map(x=>x[0]).join("")}</span>
-                <div style={{flex:1}}>
-                  <div style={{fontWeight:500,fontSize:13}}>{t.name}</div>
-                  <div className="muted" style={{fontSize:11.5}}>{t.spec}</div>
-                </div>
-                <div style={{textAlign:"right"}}>
-                  <div className="mono" style={{fontSize:14,fontWeight:600}}>{Sessions}</div>
-                  <div className="muted" style={{fontSize:10.5}}>جلسات/شهر</div>
-                </div>
+          {DATA.therapists.length===0 && <div className="muted" style={{fontSize:13,padding:"14px 0"}}>لا أخصائيين مسجّلين بعد.</div>}
+          {DATA.therapists.map((t,i)=>(
+            <div key={t.name} style={{padding:"11px 0",borderBottom:i<DATA.therapists.length-1?"1px dashed var(--ink-100)":"none",display:"flex",alignItems:"center",gap:10}}>
+              <span className="av md" style={{background:t.color+"33",color:t.color}}>{t.name.split(" ").map(x=>x[0]).join("")}</span>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:500,fontSize:13}}>{t.name}</div>
+                <div className="muted" style={{fontSize:11.5}}>{t.spec}</div>
               </div>
-            );
-          })}
+              <div style={{textAlign:"right"}}>
+                <div className="mono" style={{fontSize:14,fontWeight:600}}>{sessionsOf(t)}</div>
+                <div className="muted" style={{fontSize:10.5}}>جلسات مسجلة</div>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
 
       <div className="card card-pad">
         <div className="h2" style={{marginBottom:14}}>تقدّم العلاج · cohort</div>
-        <div className="muted" style={{fontSize:12.5,marginBottom:14}}>متوسط انخفاض الألم لجميع المرضى النشطين · آخر 8 أسابيع</div>
-        <AreaChart data={[
-          {label:"أ1",v:6.8},{label:"أ2",v:6.4},{label:"أ3",v:5.9},{label:"أ4",v:5.3},
-          {label:"أ5",v:4.7},{label:"أ6",v:4.1},{label:"أ7",v:3.5},{label:"أ8",v:3.0}
-        ]} height={200} color="#3FA984" fill="rgba(63,169,132,.16)" formatY={v=>v.toFixed(1)}/>
+        <div className="muted" style={{fontSize:12.5,marginBottom:14}}>متوسط مستوى الألم حسب رقم الجلسة · جميع المرضى</div>
+        <AreaChart data={cohort} height={200} color="#3FA984" fill="rgba(63,169,132,.16)" formatY={v=>Number(v).toFixed(1)}/>
       </div>
     </div>
   );
 }
 
 function OperationalReport() {
+  // Aggregated from the real bookings table.
+  const appts = DATA.appts;
+  const booked = appts.filter(a => a.status !== "متاح");
+  const completed = booked.filter(a => a.status === "مكتمل");
+  const noShow = booked.filter(a => a.status === "لم يحضر");
+  const confirmed = booked.filter(a => ["مؤكد","مكتمل","قيد التنفيذ"].includes(a.status));
+  const attended = booked.filter(a => a.status === "مكتمل" || a.status === "قيد التنفيذ");
+  const attendRate = booked.length ? Math.round(attended.length / booked.length * 100) : 0;
+  const noShowRate = booked.length ? (noShow.length / booked.length * 100).toFixed(1) : "0";
+  const utilization = appts.length ? Math.round(booked.length / appts.length * 100) : 0;
+
+  // By weekday (bookings carry a date in production).
+  const wd = ["أحد","إثن","ثلا","أرب","خمي","جمع","سبت"];
+  const byDay = wd.map(l => ({ label:l, v:0, color:"#7BBDE8" }));
+  booked.forEach(a => { if (a.date) { const d = new Date(a.date); if (!isNaN(d)) byDay[d.getDay()].v += 1; } });
+
+  // By hour from the booking time.
+  const byHourMap = {};
+  booked.forEach(a => {
+    const h = parseInt(String(a.time||"").split(":")[0], 10);
+    if (Number.isFinite(h)) byHourMap[h] = (byHourMap[h]||0) + 1;
+  });
+  const byHour = Object.keys(byHourMap).map(Number).sort((a,b)=>a-b).map(h => ({ label:`${h}:00`, v: byHourMap[h] }));
+
+  const funnel = [
+    {l:"مجدول", v: booked.length, c:"#BDD8E9"},
+    {l:"مؤكد", v: confirmed.length, c:"#7BBDE8"},
+    {l:"مكتمل", v: completed.length, c:"#1E4A6E"},
+    {l:"لم يحضر", v: noShow.length, c:"#D8665A"},
+  ];
+  const funnelMax = Math.max(1, booked.length);
+
   return (
     <div>
       <div className="grid-4" style={{marginBottom:18}}>
-        <StatCard label="مواعيد/شهر"   value="1,420" delta="+8%" deltaKind="up" accent="#7BBDE8" icon={<I.Calendar size={15}/>}/>
-        <StatCard label="معدّل الحضور"     value="93%"   delta="+1%" deltaKind="up" accent="#3FA984" icon={<I.Check size={15}/>}/>
-        <StatCard label="معدل عدم الحضور"         value="4.2%"  delta="-0.6%" deltaKind="up" accent="#D49044" icon={<I.X size={15}/>}/>
-        <StatCard label="استخدام الغرف"    value="78%"   delta="+5%" deltaKind="up" accent="#7E6BD3" icon={<I.MapPin size={15}/>}/>
+        <StatCard label="مواعيد مسجلة"   value={booked.length.toLocaleString()} accent="#7BBDE8" icon={<I.Calendar size={15}/>}/>
+        <StatCard label="معدّل الحضور"     value={`${attendRate}%`} accent="#3FA984" icon={<I.Check size={15}/>}/>
+        <StatCard label="معدل عدم الحضور"         value={`${noShowRate}%`} accent="#D49044" icon={<I.X size={15}/>}/>
+        <StatCard label="استخدام الفترات"    value={`${utilization}%`} accent="#7E6BD3" icon={<I.MapPin size={15}/>}/>
       </div>
 
       <div className="rgrid c-lg" style={{"--gtc":"1fr 1fr",marginBottom:18}}>
         <div className="card card-pad">
           <div className="h2" style={{marginBottom:14}}>Appointments بواسطة day من week</div>
-          <BarChart data={[
-            {label:"إثن",v:218,color:"#7BBDE8"},{label:"ثلا",v:248,color:"#7BBDE8"},
-            {label:"أرب",v:262,color:"#7BBDE8"},{label:"خمي",v:284,color:"#3A7FB5"},
-            {label:"جمع",v:271,color:"#7BBDE8"},{label:"سبت",v:198,color:"#BDD8E9"},{label:"أحد",v:84,color:"#BDD8E9"}
-          ]} height={220}/>
+          <BarChart data={byDay.some(d=>d.v>0) ? byDay : []} height={220}/>
         </div>
         <div className="card card-pad">
           <div className="h2" style={{marginBottom:14}}>Appointments بواسطة hour</div>
-          <AreaChart data={[
-            {label:"8a",v:42},{label:"10a",v:78},{label:"12p",v:62},
-            {label:"2p",v:51},{label:"4p",v:88},{label:"6p",v:64}
-          ]} height={220}/>
+          <AreaChart data={byHour} height={220}/>
         </div>
       </div>
 
       <div className="card card-pad">
         <div className="h2" style={{marginBottom:14}}>قمع الحضور</div>
-        {[
-          {l:"مجدول",v:1420,c:"#BDD8E9"},
-          {l:"مؤكد",v:1372,c:"#7BBDE8"},
-          {l:"تم الحضور",v:1340,c:"#3A7FB5"},
-          {l:"مكتمل",v:1320,c:"#1E4A6E"},
-          {l:"لم يحضر",v:60,c:"#D8665A"},
-        ].map((f,i)=>{
-          const w = f.v/1420*100;
+        {funnel.map((f,i)=>{
+          const w = f.v/funnelMax*100;
           return (
             <div key={i} style={{padding:"8px 0"}}>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
@@ -1701,13 +1825,15 @@ function SettingsPage({ go }) {
               <table className="tbl">
                 <thead><tr><th>الاسم</th><th>البريد الإلكتروني</th><th>الدور</th><th>Last نشط</th><th></th></tr></thead>
                 <tbody>
-                  {[
-                    {n:"شريف عادل",e:"sherif@kinetic.eg",r:"مدير",l:"الآن"},
-                    {n:"د. ياسمين عادل",e:"yasmin@kinetic.eg",r:"طبيب",l:"منذ 5 دقائق"},
-                    {n:"كريم صالح",e:"karim@kinetic.eg",r:"الأخصائي",l:"منذ 12 دقيقة"},
-                    {n:"مريم خليل",e:"mariam@kinetic.eg",r:"موظف استقبال",l:"منذ ساعة"},
-                    {n:"لينا فاروق",e:"lina@kinetic.eg",r:"الأخصائي",l:"أمس"},
-                  ].map((u,i)=>(
+                  {(DATA.staff||[]).length===0 && (
+                    <tr><td colSpan={5}><EmptyState icon={<I.Users size={22}/>} title="لا مستخدمين بعد" body="ادعُ أعضاء الفريق من زر «دعوة مستخدم» بعد إنشاء حساباتهم في Supabase."/></td></tr>
+                  )}
+                  {(DATA.staff||[]).map(s=>({
+                    n: s.name,
+                    e: s.email || "—",
+                    r: ({admin:"مدير", receptionist:"موظف استقبال", doctor:"طبيب", therapist:"الأخصائي"})[s.role] || s.role || "—",
+                    l: "—",
+                  })).map((u,i)=>(
                     <tr key={i}>
                       <td><div style={{display:"flex",alignItems:"center",gap:10}}><div className="av sm">{u.n.split(" ").map(x=>x[0]).join("").slice(0,2)}</div>{u.n}</div></td>
                       <td className="mono" style={{fontSize:12}}>{u.e}</td>
@@ -2190,8 +2316,12 @@ function App() {
 
   if (!user) return <><AuthScreen onLogin={handleLogin} onBookAsGuest={()=>setPublicBooking(true)}/>{toast && <Toast msg={toast.msg} kind={toast.kind}/>}</>;
 
-  // Patients get a totally different shell — focused on their care
+  // Patients get a totally different shell — focused on their care.
+  // Set the identity BEFORE the early return so a page refresh (which
+  // restores the user from localStorage without going through handleLogin)
+  // still resolves the patient in getPatientMe().
   if (user.role === "مريض") {
+    window.ME = user;
     return <PatientPortal onLogout={() => { setUser(null); setRoute("dashboard"); }}/>;
   }
 
@@ -2201,7 +2331,7 @@ function App() {
     ...user,
     scope: user.scope !== undefined ? user.scope : (window.roleScope ? window.roleScope(user.role) : "all"),
     match: user.match !== undefined ? user.match : (profile.match || null),
-    email: user.email || profile.email || "sherif@kinetic.eg",
+    email: user.email || profile.email || "amir@kinetic.eg",
     color: user.color || profile.color,
   };
   // Make the logged-in identity available to data-scoping helpers.
@@ -2224,6 +2354,14 @@ function App() {
     settings:     { title:"الإعدادات",             crumb:["الرئيسية","Settings"] },
   };
 
+  // Notifications derived from real data — latest bookings, payments and
+  // logged sessions (no canned entries).
+  const notifs = [
+    ...DATA.appts.filter(a=>a.status!=="متاح").slice(-2).map(a=>({ title:`موعد — ${a.patient}${a.time?` ${a.time}`:""}`, time:a.date||"", dot:"var(--blue-500)" })),
+    ...DATA.payments.slice(-2).map(p=>({ title:`فاتورة ${p.id} — EGP ${(p.paid||0).toLocaleString()}`, time:p.date||"", dot:"var(--green)" })),
+    ...DATA.sessions.slice(0,1).map(s=>({ title:`جلسة مسجلة — ${s.patient||""} #${s.session||""}`, time:s.date||"", dot:"var(--amber)" })),
+  ].slice(0,5);
+
   return (
     <div style={{display:"flex",minHeight:"100vh",background:"var(--ink-50)"}}>
       <div className={"sidebar-backdrop" + (mobileNavOpen ? " open" : "")} onClick={()=>setMobileNavOpen(false)}/>
@@ -2237,7 +2375,7 @@ function App() {
           <div style={{flex:1,display:"flex",alignItems:"center",gap:12,minWidth:0}}>
             <span className="mono" style={{fontSize:11,color:"var(--ink-400)",letterSpacing:".05em",textTransform:"uppercase"}}>{acct.role}</span>
             <span style={{color:"var(--ink-300)"}}>·</span>
-            <span style={{fontSize:13,color:"var(--ink-700)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>فرع مصر الجديدة</span>
+            <span style={{fontSize:13,color:"var(--ink-700)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{activeBranchName()}</span>
             <span className="badge b-green" style={{marginLeft:6}}><span className="dot"></span>متصل</span>
           </div>
           <button type="button" className="search-wrap" onClick={()=>setPaletteOpen(true)}
@@ -2256,16 +2394,13 @@ function App() {
           <div style={{position:"relative"}}>
             <button className="btn btn-ghost btn-icon" title="الإشعارات" style={{position:"relative"}} onClick={()=>setNotifsOpen(o=>!o)}>
               <I.Bell size={17}/>
-              <span style={{position:"absolute",top:6,right:6,width:7,height:7,background:"var(--red)",borderRadius:"50%",border:"2px solid #fff"}}></span>
+              {notifs.length>0 && <span style={{position:"absolute",top:6,right:6,width:7,height:7,background:"var(--red)",borderRadius:"50%",border:"2px solid #fff"}}></span>}
             </button>
             {notifsOpen && (
               <div style={{position:"fixed",top:60,insetInlineEnd:"max(8px, min(56px, 4vw))",width:"min(320px, calc(100vw - 16px))",background:"#fff",border:"1px solid var(--ink-200)",borderRadius:14,boxShadow:"0 8px 32px rgba(0,0,0,.12)",zIndex:999,padding:"12px 0"}}>
                 <div style={{padding:"4px 16px 10px",fontWeight:600,fontSize:13,borderBottom:"1px solid var(--ink-100)"}}>الإشعارات</div>
-                {[
-                  {title:"موعد جديد — هناء مصطفى", time:"منذ 5 دقائق", dot:"var(--blue-500)"},
-                  {title:"تم استلام دفعة 850 ج.م", time:"منذ 20 دقيقة", dot:"var(--green)"},
-                  {title:"تذكير: جلسة خالد يوسف 3:00 م", time:"منذ ساعة", dot:"var(--amber)"},
-                ].map((n,i)=>(
+                {notifs.length===0 && <div className="muted" style={{padding:"14px 16px",fontSize:12.5}}>لا إشعارات جديدة.</div>}
+                {notifs.map((n,i)=>(
                   <div key={i} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 16px",cursor:"pointer",borderBottom:"1px solid var(--ink-50)"}}
                     onClick={()=>setNotifsOpen(false)}>
                     <span style={{width:8,height:8,borderRadius:"50%",background:n.dot,flexShrink:0}}/>
@@ -2333,26 +2468,52 @@ const PATIENT_FALLBACK = {
 // current DATA.patients cache. Falls back to the seed record when running
 // without a real login (previously the whole portal displayed هناء's data
 // regardless of who logged in).
+// Placeholder "next visit" when the patient has nothing booked — keeps the
+// portal UI stable without inventing an appointment.
+const NEXT_NONE = { none:true, date:"—", time:"—", dur:0, with:"—", room:"—", type:"لا حجز قادم" };
+
 function getPatientMe(){
   const ME = window.ME || {};
   const patients = (window.DATA && window.DATA.patients) || [];
   const pid = ME.patient_id || ME.match || null;
-  const row = pid ? patients.find(p => p.patient_id === pid || p.id === pid) : null;
-  if (!row) return PATIENT_FALLBACK;
+  const row = pid ? patients.find(p => p.patient_id === pid || p.id === pid || p.name === pid) : null;
+  if (!row) {
+    // Demo keeps the seed persona; production derives a minimal identity
+    // from the login instead of showing another patient's data.
+    if (window.IS_DEMO) return PATIENT_FALLBACK;
+    const nm = ME.name || "مريض";
+    return {
+      name: nm,
+      initials: nm.split(" ").map(x=>x[0]||"").join("").slice(0,2).toUpperCase() || "—",
+      file: ME.patient_id || "—",
+      phone: ME.phone || "—",
+      diag: "—", doctor: "—", therapist: "—",
+      remaining: 0, total: 0,
+      next: NEXT_NONE,
+    };
+  }
   const initials = (row.name || "").split(" ").map(x=>x[0]||"").join("").slice(0,2).toUpperCase();
-  const remaining = row.remain != null ? row.remain : PATIENT_FALLBACK.remaining;
-  const total = row.total || (row.pkg && Number((row.pkg.match(/(\d+)/)||[])[1])) || PATIENT_FALLBACK.total;
+  const remaining = row.remain != null ? row.remain : 0;
+  const total = row.total || (row.pkg && Number((row.pkg.match(/(\d+)/)||[])[1])) || 0;
+  // Next visit from the real bookings table.
+  const file = row.patient_id || row.id;
+  const upcoming = ((window.DATA && window.DATA.appts) || []).find(a =>
+    (a.pid === file || a.patient === row.name) && a.status !== "مكتمل" && a.status !== "ملغي" && a.status !== "متاح");
+  const next = upcoming ? {
+    date: upcoming.date || "اليوم", time: upcoming.time || "—", dur: upcoming.dur || 30,
+    with: upcoming.th || "—", room: upcoming.room || "—", type: upcoming.type || "",
+  } : NEXT_NONE;
   return {
-    name: row.name || PATIENT_FALLBACK.name,
-    initials: initials || PATIENT_FALLBACK.initials,
-    file: row.patient_id || row.id || PATIENT_FALLBACK.file,
-    phone: row.phone || PATIENT_FALLBACK.phone,
-    diag: row.diag || row.diagnosis || PATIENT_FALLBACK.diag,
-    doctor: row.doctor || PATIENT_FALLBACK.doctor,
-    therapist: row.th || row.therapist || PATIENT_FALLBACK.therapist,
+    name: row.name,
+    initials: initials || "—",
+    file,
+    phone: row.phone || "—",
+    diag: row.diag || row.diagnosis || "—",
+    doctor: row.doctor || row.dr || "—",
+    therapist: row.th || row.therapist || "—",
     remaining,
     total,
-    next: PATIENT_FALLBACK.next,
+    next,
   };
 }
 // Proxy so every property read hits getPatientMe() at that moment. Direct
@@ -2529,7 +2690,7 @@ function PatientHome({ onBook, go }) {
       <div style={{marginBottom:24}}>
         <div className="muted" style={{fontSize:13.5,marginBottom:4}}>الأحد، 24 مايو</div>
         <h1 style={{fontSize:"clamp(24px, 5.5vw, 32px)",fontWeight:600,letterSpacing:"-.015em",margin:0}}>
-          أهلاً <span className="serif" style={{fontWeight:400, fontStyle:"italic"}}>هناء</span> — تشعرين بتحسّن؟
+          أهلاً <span className="serif" style={{fontWeight:400, fontStyle:"italic"}}>{(PATIENT_ME.name||"").split(" ")[0]}</span> — نتمنى لك تحسّنًا دائمًا
         </h1>
       </div>
 
@@ -2656,21 +2817,30 @@ function PatientHome({ onBook, go }) {
             <PainTrendChart/>
           </div>
 
-          <div style={{display:"flex",justifyContent:"space-between",fontSize:12.5}}>
-            <div><div className="muted">البداية</div><div>7/10</div></div>
-            <div><div className="muted">اليوم</div><div className="mono" style={{color:"var(--green)",fontWeight:600}}>3/10</div></div>
-            <div><div className="muted">الهدف</div><div>≤ 2/10</div></div>
-          </div>
+          {(() => {
+            // Real pain trend bounds from the patient's logged sessions.
+            const mySess = ((window.DATA && window.DATA.sessions) || [])
+              .filter(s => s.patient_id === PATIENT_ME.file || s.patient === PATIENT_ME.name);
+            const first = mySess[mySess.length-1], last = mySess[0];
+            const painOf = (s) => s ? (s.pain ?? s.pain_score ?? "—") : "—";
+            return (
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:12.5}}>
+                <div><div className="muted">البداية</div><div>{painOf(first)}/10</div></div>
+                <div><div className="muted">اليوم</div><div className="mono" style={{color:"var(--green)",fontWeight:600}}>{painOf(last)}/10</div></div>
+                <div><div className="muted">الهدف</div><div>≤ 2/10</div></div>
+              </div>
+            );
+          })()}
         </div>
 
         <div className="card card-pad">
           <div className="h2" style={{marginBottom:14}}>تمارين اليوم</div>
-          {[
+          {(window.IS_DEMO ? [
             { l:"تمدد القط-الجمل", sub:"10 تكرارات × 2 مجموعة", done:true },
             { l:"ديد-باج، بالتبادل", sub:"8 لكل جانب × 3", done:true },
             { l:"جسر الأرداف", sub:"15 تكرار × 3 مجموعة", done:false },
             { l:"امشي 20 دقيقة", sub:"في أي وقت اليوم", done:false },
-          ].map((h,i)=>(
+          ] : []).map((h,i)=>(
             <label key={i} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 0",borderBottom:i<3?"1px dashed var(--ink-100)":"none",fontSize:13.5,cursor:"pointer"}}>
               <input type="checkbox" defaultChecked={h.done} style={{width:18,height:18,accentColor:"var(--blue-500)"}}/>
               <div style={{flex:1}}>
@@ -2679,9 +2849,7 @@ function PatientHome({ onBook, go }) {
               </div>
             </label>
           ))}
-          <div style={{padding:10,background:"var(--blue-50)",borderRadius:10,marginTop:14,display:"flex",alignItems:"center",gap:8,fontSize:12,color:"var(--blue-900)"}}>
-            <I.Sparkle size={13}/> 2 من 4 done — keep going!
-          </div>
+          {!window.IS_DEMO && <div className="muted" style={{fontSize:13,padding:"14px 0"}}>لا تمارين منزلية مسندة بعد — سيضيفها أخصائيك بعد الجلسة.</div>}
         </div>
       </div>
 
@@ -2690,19 +2858,22 @@ function PatientHome({ onBook, go }) {
         <div className="h2" style={{marginBottom:14}}>فريق الرعاية</div>
         <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:14}}>
           {[
-            { name:PATIENT_ME.doctor, role:"الطبيب المسؤول", spec:"تأهيل عظام", color:"#7E6BD3" },
-            { name:PATIENT_ME.therapist, role:"الأخصائي الأساسي", spec:"علاج يدوي", color:"#7BBDE8" },
-          ].map((c,i)=>(
+            { name:PATIENT_ME.doctor, role:"الطبيب المسؤول", color:"#7E6BD3" },
+            { name:PATIENT_ME.therapist, role:"الأخصائي الأساسي", color:"#7BBDE8",
+              spec:(((window.DATA&&window.DATA.therapists)||[]).find(t=>t.name===PATIENT_ME.therapist)||{}).spec },
+          ].map((c,i)=>{
+            const clinicPhone = ((window.BRANCHES||[])[0]||{}).phone || "";
+            return (
             <div key={i} style={{display:"flex",alignItems:"center",gap:14,padding:14,border:"1px solid var(--ink-200)",borderRadius:12}}>
-              <div className="av lg" style={{background:c.color+"33",color:c.color}}>{c.name.split(" ").slice(-2).map(x=>x[0]).join("")}</div>
+              <div className="av lg" style={{background:c.color+"33",color:c.color}}>{(c.name||"—").split(" ").slice(-2).map(x=>x[0]||"").join("")}</div>
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontWeight:600,fontSize:14}}>{c.name}</div>
-                <div className="muted" style={{fontSize:12}}>{c.role} · {c.spec}</div>
+                <div style={{fontWeight:600,fontSize:14}}>{c.name || "—"}</div>
+                <div className="muted" style={{fontSize:12}}>{c.role}{c.spec ? ` · ${c.spec}` : ""}</div>
               </div>
-              <button className="btn btn-ghost btn-icon" title="الرسالة" onClick={()=>window.open("https://wa.me/201001234567","_blank")}><I.WhatsApp size={15}/></button>
-              <button className="btn btn-ghost btn-icon" title="اتصال" onClick={()=>window.open("tel:+201001234567")}><I.Phone size={15}/></button>
+              <button className="btn btn-ghost btn-icon" title="الرسالة" onClick={()=>window.open(`https://wa.me/${clinicPhone.replace(/[^\d]/g,"")}`,"_blank")}><I.WhatsApp size={15}/></button>
+              <button className="btn btn-ghost btn-icon" title="اتصال" onClick={()=>window.open(`tel:${clinicPhone.replace(/[^\d+]/g,"")}`)}><I.Phone size={15}/></button>
             </div>
-          ))}
+          );})}
         </div>
       </div>
     </div>
@@ -2711,11 +2882,15 @@ function PatientHome({ onBook, go }) {
 
 function PatientAppointments({ onBook }) {
   const [notesModal, setNotesModal] = React.useState(null);
-  const [upcoming, setUpcoming] = React.useState([
-    { id:"B-2601", date:"غدًا، 25 مايو", time:"09:00", dur:45, th:"كريم صالح", type:"علاج يدوي", status:"مؤكد", room:"غرفة 2" },
-    { id:"B-2602", date:"الأربعاء، 28 مايو", time:"09:00", dur:45, th:"كريم صالح", type:"علاج يدوي", status:"مؤكد", room:"غرفة 2" },
-    { id:"B-2603", date:"السبت، 31 مايو", time:"10:30", dur:45, th:"كريم صالح", type:"تدريبات قوة", status:"معلّق", room:"غرفة 2" },
-  ]);
+  // Real bookings for the logged-in patient (no seeded visit fixtures).
+  const [upcoming, setUpcoming] = React.useState(() => {
+    const me = getPatientMe();
+    return ((window.DATA && window.DATA.appts) || [])
+      .filter(a => (a.pid === me.file || a.patient === me.name)
+        && a.status !== "مكتمل" && a.status !== "ملغي" && a.status !== "ملغى" && a.status !== "متاح")
+      .map(a => ({ id: a.id, date: a.date || "اليوم", time: a.time || "—", dur: a.dur || 30,
+        th: a.th || "—", type: a.type || "", status: a.status, room: a.room || "—" }));
+  });
   const [rescheduling, setRescheduling] = React.useState(null);
   const [reTime, setReTime] = React.useState("");
   const cancelAppt = async (a) => {
@@ -2755,11 +2930,15 @@ function PatientAppointments({ onBook }) {
       if (window.showToast) window.showToast("تعذّر إعادة الجدولة","error");
     }
   };
-  const past = [
-    { date:"الخميس، 22 مايو", time:"08:30", dur:45, th:"كريم صالح", type:"علاج يدوي", status:"مكتمل", pain:"7 → 3" },
-    { date:"الإثنين، 18 مايو", time:"08:30", dur:45, th:"كريم صالح", type:"علاج يدوي", status:"مكتمل", pain:"7 → 4" },
-    { date:"الخميس، 15 مايو", time:"09:00", dur:45, th:"كريم صالح", type:"تقييم أولي", status:"مكتمل", pain:"— → 5" },
-  ];
+  // Past visits from the patient's real logged sessions.
+  const past = (() => {
+    const me = getPatientMe();
+    return ((window.DATA && window.DATA.sessions) || [])
+      .filter(s => s.patient_id === me.file || s.patient === me.name)
+      .map(s => ({ date: s.date || "—", time: "", dur: 0, th: s.therapist || "—",
+        type: `جلسة #${s.session ?? s.session_number ?? "—"}`, status: "مكتمل",
+        pain: `${s.pain ?? s.pain_score ?? "—"}/10`, notes: s.notes || s.session_notes || "" }));
+  })();
 
   return (
     <div>
@@ -2773,6 +2952,7 @@ function PatientAppointments({ onBook }) {
 
       <div className="h3" style={{marginBottom:10,marginTop:8}}>قادمة</div>
       <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:30}}>
+        {upcoming.length===0 && <div className="card" style={{padding:20,textAlign:"center",color:"var(--ink-500)",fontSize:13}}>لا زيارات قادمة — احجز زيارتك الأولى.</div>}
         {upcoming.map((a,i)=>(
           <div key={i} className="card" style={{padding:16,display:"flex",alignItems:"center",gap:16,flexWrap:"wrap"}}>
             <div style={{
@@ -2782,8 +2962,8 @@ function PatientAppointments({ onBook }) {
               display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
               flexShrink:0
             }}>
-              <div className="mono" style={{fontSize:11,opacity:.8,fontWeight:500}}>{a.date.split(",")[0].slice(0,3).toUpperCase()}</div>
-              <div className="mono" style={{fontSize:22,fontWeight:600,lineHeight:1}}>{a.date.includes("Tomorrow") ? "25" : a.date.match(/\d+/)?.[0]}</div>
+              <div className="mono" style={{fontSize:11,opacity:.8,fontWeight:500}}>{/^\d{4}-\d{2}-\d{2}/.test(a.date) ? new Date(a.date).toLocaleDateString("ar-EG",{month:"short"}) : a.date.split("،")[0].slice(0,4)}</div>
+              <div className="mono" style={{fontSize:22,fontWeight:600,lineHeight:1}}>{/^\d{4}-\d{2}-\d{2}/.test(a.date) ? a.date.slice(8,10) : (a.date.match(/\d+/)?.[0] || "—")}</div>
             </div>
             <div style={{flex:1,minWidth:200}}>
               <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:4,flexWrap:"wrap"}}>
@@ -2830,7 +3010,7 @@ function PatientAppointments({ onBook }) {
             مستوى الألم: <span style={{color:"var(--green)",fontWeight:600}}>{notesModal.pain}</span>
           </div>
           <div style={{padding:14,background:"var(--ink-50)",borderRadius:10,fontSize:13,color:"var(--ink-700)"}}>
-            المريض يُظهر تقدمًا جيدًا. تم تطبيق تمارين التقوية والتحريك اليدوي. الالتزام بالبرنامج المنزلي ممتاز.
+            {notesModal.notes || "لا ملاحظات مسجلة لهذه الجلسة."}
           </div>
         </Modal>
       )}
@@ -2849,16 +3029,31 @@ function PatientAppointments({ onBook }) {
 }
 
 function PatientPlanView() {
+  const me = getPatientMe();
+  const row = ((window.DATA && window.DATA.patients) || []).find(p => (p.patient_id||p.id) === me.file || p.name === me.name);
   return (
     <div>
       <h1 style={{fontSize:"clamp(22px, 5vw, 28px)",fontWeight:600,letterSpacing:"-.01em",margin:"0 0 4px"}}>خطة علاجك</h1>
-      <div className="muted" style={{fontSize:13.5,marginBottom:20}}>{PATIENT_ME.diag} · بدأت 30 أبريل 2026</div>
-      <PatientTreatmentPlan/>
+      <div className="muted" style={{fontSize:13.5,marginBottom:20}}>{me.diag}{row && row.registered ? ` · بدأت ${row.registered}` : ""}</div>
+      <PatientTreatmentPlan p={row}/>
     </div>
   );
 }
 
 function PatientMessages() {
+  // No messaging backend yet — the threaded conversation below is a demo
+  // fixture, so production shows a contact card instead of fake chats.
+  if (!window.IS_DEMO) {
+    return (
+      <div>
+        <h1 style={{fontSize:"clamp(22px, 5vw, 28px)",fontWeight:600,letterSpacing:"-.01em",margin:"0 0 4px"}}>الرسائل</h1>
+        <div className="muted" style={{fontSize:13.5,marginBottom:20}}>تحدّث مع فريق الرعاية.</div>
+        <EmptyState icon={<I.WhatsApp size={22}/>} title="لا رسائل بعد"
+          body="المراسلة داخل البوابة قادمة قريبًا — تواصل مع العيادة مباشرة عبر واتساب أو الهاتف."
+          action={<button className="btn btn-blue" onClick={()=>window.open("https://wa.me/","_blank")}><I.WhatsApp size={13}/> تواصل عبر واتساب</button>}/>
+      </div>
+    );
+  }
   return (
     <div>
       <h1 style={{fontSize:"clamp(22px, 5vw, 28px)",fontWeight:600,letterSpacing:"-.01em",margin:"0 0 4px"}}>الرسائل</h1>
@@ -2915,10 +3110,15 @@ function PatientMessages() {
 }
 
 function PatientBills() {
-  const bills = [
-    { id:"INV-2026-0421", date:"22 مايو 2026", desc:"الأساسية 10 — باقة علاج يدوي", amount:7250, paid:7250, method:"فيزا", status:"مدفوع" },
-    { id:"INV-2026-0410", date:"1 مايو 2026",  desc:"جلسة واحدة — تقييم", amount:850, paid:850, method:"نقدي", status:"مدفوع" },
-  ];
+  // The patient's real invoices.
+  const me = getPatientMe();
+  const bills = ((window.DATA && window.DATA.payments) || [])
+    .filter(b => b.patient === me.name || b.patient_id === me.file)
+    .map(b => ({ id: b.id, date: b.date || "—", desc: b.desc || "فاتورة علاج",
+      amount: b.amount || 0, paid: b.paid || 0, method: b.method || "—", status: b.status }));
+  const yearNow = new Date().getFullYear();
+  const paidThisYear = bills.filter(b => String(b.date).includes(String(yearNow))).reduce((s,b)=>s+b.paid,0);
+  const pending = bills.reduce((s,b)=>s+Math.max(0,b.amount-b.paid),0);
   return (
     <div>
       <h1 style={{fontSize:"clamp(22px, 5vw, 28px)",fontWeight:600,letterSpacing:"-.01em",margin:"0 0 4px"}}>الفواتير</h1>
@@ -2927,11 +3127,11 @@ function PatientBills() {
       <div className="rgrid c-sm" style={{"--gtc":"repeat(3,1fr)",gap:14,marginBottom:24}}>
         <div className="card card-pad">
           <div className="muted" style={{fontSize:11,textTransform:"uppercase",letterSpacing:".05em"}}>مدفوع هذه السنة</div>
-          <div className="mono" style={{fontSize:26,fontWeight:600,marginTop:4}}>EGP 8,100</div>
+          <div className="mono" style={{fontSize:26,fontWeight:600,marginTop:4}}>EGP {paidThisYear.toLocaleString()}</div>
         </div>
         <div className="card card-pad">
           <div className="muted" style={{fontSize:11,textTransform:"uppercase",letterSpacing:".05em"}}>معلّق</div>
-          <div className="mono" style={{fontSize:26,fontWeight:600,marginTop:4,color:"var(--green)"}}>EGP 0</div>
+          <div className="mono" style={{fontSize:26,fontWeight:600,marginTop:4,color:pending>0?"var(--red)":"var(--green)"}}>EGP {pending.toLocaleString()}</div>
         </div>
         <div className="card card-pad">
           <div className="muted" style={{fontSize:11,textTransform:"uppercase",letterSpacing:".05em"}}>جلسات متبقية</div>
@@ -2944,6 +3144,9 @@ function PatientBills() {
         <table className="tbl">
           <thead><tr><th>فاتورة</th><th>التاريخ</th><th>البند</th><th>المبلغ</th><th>الطريقة</th><th>الحالة</th><th></th></tr></thead>
           <tbody>
+            {bills.length===0 && (
+              <tr><td colSpan={7}><EmptyState icon={<I.FileText size={22}/>} title="لا فواتير بعد" body="ستظهر فواتيرك هنا بعد أول عملية دفع."/></td></tr>
+            )}
             {bills.map(b=>(
               <tr key={b.id}>
                 <td className="mono">{b.id}</td>
@@ -2969,7 +3172,10 @@ function PatientBills() {
 
 function PatientProfile() {
   const [editOpen, setEditOpen] = React.useState(false);
-  const [form, setForm] = React.useState({ name:PATIENT_ME.name, phone:PATIENT_ME.phone, email:"hana.m@gmail.com", address:"١٤ ش صلاح سالم، مصر الجديدة" });
+  const [form, setForm] = React.useState(() => {
+    const row = ((window.DATA && window.DATA.patients) || []).find(p => (p.patient_id||p.id) === PATIENT_ME.file) || {};
+    return { name:PATIENT_ME.name, phone:PATIENT_ME.phone, email:(window.ME && window.ME.email) || "", address: row.address || "" };
+  });
   return (
     <div>
       <h1 style={{fontSize:"clamp(22px, 5vw, 28px)",fontWeight:600,letterSpacing:"-.01em",margin:"0 0 4px"}}>ملفي الشخصي</h1>
@@ -3154,10 +3360,8 @@ function PatientBookingFlow({ onClose, onDone }) {
 
               <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:10}}>
                 {[
-                  { name:"كريم صالح",  spec:"علاج يدوي",     yourUsual:true,  color:"#7BBDE8", rating:"4.9", nextSlot:"Tomorrow 09:00" },
-                  { name:"لينا فاروق",  spec:"تأهيل بعد العمليات",      color:"#7E6BD3", rating:"4.8", nextSlot:"Tue 14:30" },
-                  { name:"منى حلمي",   spec:"كبار السن / أعصاب",  color:"#3FA984", rating:"4.7", nextSlot:"Wed 11:00" },
-                  { name:"أي أخصائي",spec:"الأقرب توفرًا",  color:"#BDD8E9", rating:"—",   nextSlot:"Today 16:30", any:true },
+                  ...DATA.therapists.map(t=>({ name:t.name, spec:t.spec||"", color:t.color||"#7BBDE8", yourUsual: t.name===PATIENT_ME.therapist })),
+                  { name:"أي أخصائي", spec:"الأقرب توفرًا", color:"#BDD8E9", any:true },
                 ].map((t,i)=>(
                   <button key={i} onClick={()=>{setPicks({...picks,therapist:t.name}); next();}} style={{
                     padding:16,textAlign:"left",cursor:"pointer",fontFamily:"inherit",
@@ -3177,10 +3381,7 @@ function PatientBookingFlow({ onClose, onDone }) {
                         <span style={{fontWeight:600,fontSize:14}}>{t.name}</span>
                         {t.yourUsual && <span className="badge b-blue" style={{fontSize:10}}>المعتاد</span>}
                       </div>
-                      <div className="muted" style={{fontSize:11.5,marginTop:1}}>{t.spec} {t.rating!=="—" && <>· ★ {t.rating}</>}</div>
-                      <div style={{fontSize:11.5,color:"var(--blue-700)",marginTop:4,display:"flex",alignItems:"center",gap:4}}>
-                        <span className="dot" style={{background:"var(--blue-700)"}}></span>Next: {t.nextSlot}
-                      </div>
+                      <div className="muted" style={{fontSize:11.5,marginTop:1}}>{t.spec}</div>
                     </div>
                   </button>
                 ))}
@@ -3475,8 +3676,8 @@ function PublicBookingScreen({ onBack, onDone }) {
                   <div className="label" style={{marginBottom:10}}>اختر أخصائيًا</div>
                   <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:10}}>
                     {[
-                      { name:"أي أخصائي",  spec:"أقرب موعد",        color:"#BDD8E9", rating:"—",   nextSlot:"Today 16:30", any:true, recommended:true },
-                      ...DATA.therapists.map(t=>({ name:t.name, spec:t.spec, color:t.color, rating:"4.8", nextSlot:"Tomorrow 09:00" }))
+                      { name:"أي أخصائي",  spec:"أقرب موعد",        color:"#BDD8E9", any:true, recommended:true },
+                      ...DATA.therapists.map(t=>({ name:t.name, spec:t.spec, color:t.color }))
                     ].map((t,i)=>(
                       <button key={i} onClick={()=>{update("therapist",t.any?null:t.name); next();}} style={{
                         padding:16,textAlign:"left",cursor:"pointer",fontFamily:"inherit",
@@ -3496,10 +3697,7 @@ function PublicBookingScreen({ onBack, onDone }) {
                             <span style={{fontWeight:600,fontSize:14}}>{t.name}</span>
                             {t.recommended && <span className="badge b-blue" style={{fontSize:10}}>الأسرع</span>}
                           </div>
-                          <div className="muted" style={{fontSize:11.5,marginTop:1}}>{t.spec} {t.rating!=="—" && <>· ★ {t.rating}</>}</div>
-                          <div style={{fontSize:11.5,color:"var(--blue-700)",marginTop:4,display:"flex",alignItems:"center",gap:4}}>
-                            <span className="dot" style={{background:"var(--blue-700)"}}></span>Next: {t.nextSlot}
-                          </div>
+                          <div className="muted" style={{fontSize:11.5,marginTop:1}}>{t.spec}</div>
                         </div>
                       </button>
                     ))}

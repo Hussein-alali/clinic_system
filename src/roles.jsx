@@ -8,7 +8,7 @@
 // ── Identity per role ──────────────────────────────────────────
 // `match` is the name as it appears in DATA (dr / th fields) so we can scope.
 const ROLE_PROFILES = {
-  "مدير":          { name:"شريف عادل",      email:"sherif@kinetic.eg", match:null,             color:"#7BBDE8", title:"مدير الفرع" },
+  "مدير":          { name:"أمير",            email:"amir@kinetic.eg",   match:null,             color:"#7BBDE8", title:"مدير الفرع" },
   "موظف استقبال":  { name:"دينا فؤاد",       email:"dina@kinetic.eg",   match:null,             color:"#3FA984", title:"مكتب الاستقبال" },
   "طبيب":          { name:"د. ياسمين عادل",  email:"yasmin@kinetic.eg", match:"د. ياسمين عادل", color:"#7E6BD3", title:"أخصائي تأهيل" },
   "الأخصائي":       { name:"كريم صالح",       email:"karim@kinetic.eg",  match:"كريم صالح",       color:"#7BBDE8", title:"أخصائي علاج طبيعي" },
@@ -159,7 +159,7 @@ function ReceptionDashboard({ go, user }){
       <HomeHeader
         kicker="لوحة الاستقبال"
         title={<>صباح الخير، {user.name.split(" ")[0]} <span style={{display:"inline-block",transform:"translateY(-2px)"}}>👋🏼</span></>}
-        sub="الأحد، 24 مايو — حركة مكتب الاستقبال اليوم في فرع مصر الجديدة."
+        sub={`${todayLabelAr()} — حركة مكتب الاستقبال اليوم في ${activeBranchName()}.`}
         right={<>
           <button className="btn btn-secondary" onClick={()=>go("patients")}><I.Plus size={14}/> مريض جديد</button>
           <button className="btn btn-blue" onClick={()=>go("appointments")}><I.Plus size={14}/> حجز موعد</button>
@@ -167,10 +167,10 @@ function ReceptionDashboard({ go, user }){
       />
 
       <div className="grid-stats" style={{marginBottom:18}}>
-        <StatCard label="مواعيد اليوم"  value={`${booked.length}/${appts.length}`} delta="+2" deltaKind="up" accent="#3A7FB5" icon={<I.Calendar size={15}/>}/>
+        <StatCard label="مواعيد اليوم"  value={`${booked.length}/${appts.length}`} accent="#3A7FB5" icon={<I.Calendar size={15}/>}/>
         <StatCard label="بانتظار الوصول" value={String(waiting.length)} accent="#D49044" icon={<I.Clock size={15}/>}/>
         <StatCard label="فترات متاحة"   value={String(free.length)} accent="#3FA984" icon={<I.Plus size={15}/>}/>
-        <StatCard label="تحصيل اليوم"   value={`EGP ${(collected/1000).toFixed(1)}K`} delta="+12%" deltaKind="up" accent="#7BBDE8" icon={<I.Dollar size={15}/>}/>
+        <StatCard label="تحصيل اليوم"   value={`EGP ${(collected/1000).toFixed(1)}K`} accent="#7BBDE8" icon={<I.Dollar size={15}/>}/>
         <StatCard label="مستحقات معلّقة" value={`EGP ${(outstanding/1000).toFixed(1)}K`} accent="#D8665A" icon={<I.CreditCard size={15}/>}/>
       </div>
 
@@ -252,7 +252,7 @@ function DoctorDashboard({ go, user }){
       <HomeHeader
         kicker="يومي الإكلينيكي"
         title={<>أهلاً، {user.name} <span style={{display:"inline-block",transform:"translateY(-2px)"}}>🩺</span></>}
-        sub={`الأحد، 24 مايو — لديك ${myAppts.length} مواعيد و${active.length} مريض نشط تحت رعايتك.`}
+        sub={`${todayLabelAr()} — لديك ${myAppts.length} مواعيد و${active.length} مريض نشط تحت رعايتك.`}
         right={<>
           <button className="btn btn-secondary" onClick={()=>go("treatments")}><I.Clipboard size={14}/> خطط العلاج</button>
           <button className="btn btn-blue" onClick={()=>go("patients")}><I.Users size={14}/> مرضاي</button>
@@ -261,7 +261,7 @@ function DoctorDashboard({ go, user }){
 
       <div className="grid-stats" style={{marginBottom:18}}>
         <StatCard label="مرضاي"          value={String(myPatients.length)} accent="#7E6BD3" icon={<I.Users size={15}/>}/>
-        <StatCard label="مواعيد اليوم"   value={String(myAppts.length)} delta="+1" deltaKind="up" accent="#3A7FB5" icon={<I.Calendar size={15}/>}/>
+        <StatCard label="مواعيد اليوم"   value={String(myAppts.length)} accent="#3A7FB5" icon={<I.Calendar size={15}/>}/>
         <StatCard label="خطط للمراجعة"   value={String(reviewPlans.length)} accent="#D49044" icon={<I.Clipboard size={15}/>}/>
         <StatCard label="نشطون"          value={String(active.length)} accent="#3FA984" icon={<I.Activity size={15}/>}/>
       </div>
@@ -330,7 +330,7 @@ function TherapistDashboard({ go, user }){
       <HomeHeader
         kicker="جدول يومي"
         title={<>أهلاً، {user.name.split(" ")[0]} <span style={{display:"inline-block",transform:"translateY(-2px)"}}>💪🏼</span></>}
-        sub={`الأحد، 24 مايو — ${myAppts.length} جلسات على جدولك اليوم، ${done.length} مكتملة.`}
+        sub={`${todayLabelAr()} — ${myAppts.length} جلسات على جدولك اليوم، ${done.length} مكتملة.`}
         right={<button className="btn btn-blue" onClick={()=>go("sessions")}><I.Activity size={14}/> سجل جلسة</button>}
       />
 

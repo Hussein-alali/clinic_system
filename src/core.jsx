@@ -153,7 +153,10 @@ const seedSessions = [
   { id:"S-10241-01", session_id:"S-10241-01", patient_id:"P-10241", date:"2026-04-30", session:1, session_number:1, pain:7, pain_score:7, mood:"—",       notes:"تقييم أولي. Baseline measurements taken. الخطة: 12 Sessions over 6 weeks.", session_notes:"تقييم أولي. 12 جلسة على 6 أسابيع.", goals:["تحديد خط الأساس"], done:["تحديد خط الأساس"] },
 ];
 
-window.DATA = {
+// Demo mode (?demo=1) starts from the seed fixtures above so the UI can be
+// explored without a backend. Production starts EMPTY and hydrates from
+// Supabase (hydrateDomainTables) — no mock data ever reaches a real deploy.
+window.DATA = window.IS_DEMO ? {
   patients: seedPatients,
   appts: seedAppointments,
   therapists: seedTherapists,
@@ -161,6 +164,9 @@ window.DATA = {
   payments: seedPayments,
   campaigns: seedCampaigns,
   sessions: seedSessions,
+} : {
+  patients: [], appts: [], therapists: [], packages: [],
+  payments: [], campaigns: [], sessions: [],
 };
 
 // ── Reactive data hook ─────────────────────────────────────────
@@ -204,9 +210,21 @@ function useContainerWidth(initialWidth) {
 const CHART_PAD = { L: 38, R: 12, T: 10, B: 22 };
 const Y_TICKS = 4;
 
+// Placeholder rendered by every chart when there are no points yet —
+// production starts with an empty DB, so charts must not crash on [].
+function ChartEmpty({ height }) {
+  return (
+    <div style={{height, display:"flex", alignItems:"center", justifyContent:"center",
+      background:"var(--ink-50)", borderRadius:10, color:"var(--ink-400)", fontSize:12.5}}>
+      لا توجد بيانات بعد
+    </div>
+  );
+}
+
 // Smooth area / line chart
 function AreaChart({ data, height = 160, color = "#7BBDE8", fill = "rgba(123,189,232,.22)", showGrid = true, showAxis = true, formatY = (v)=>v }) {
   const [ref, w] = useContainerWidth(600);
+  if (!data || data.length === 0) return <ChartEmpty height={height}/>;
   const { L: padL, R: padR, T: padT, B: padB } = CHART_PAD;
   const innerW = Math.max(w - padL - padR, 50);
   const innerH = height - padT - padB;
@@ -251,6 +269,7 @@ function AreaChart({ data, height = 160, color = "#7BBDE8", fill = "rgba(123,189
 
 function BarChart({ data, height = 160, color = "#7BBDE8", showAxis = true, formatY = (v)=>v }) {
   const [ref, w] = useContainerWidth(600);
+  if (!data || data.length === 0) return <ChartEmpty height={height}/>;
   const { L: padL, R: padR, T: padT, B: padB } = CHART_PAD;
   const innerW = Math.max(w - padL - padR, 50);
   const innerH = height - padT - padB;
@@ -287,6 +306,7 @@ function BarChart({ data, height = 160, color = "#7BBDE8", showAxis = true, form
 }
 
 function DonutChart({ data, size=160, thickness=22, centerLabel, centerValue }) {
+  if (!data || data.length === 0 || data.every(d => !d.v)) return <ChartEmpty height={size}/>;
   const total = data.reduce((s,d)=>s+d.v,0) || 1;
   const r = (size - thickness) / 2;
   const cx = size/2, cy = size/2;
@@ -328,6 +348,7 @@ function DonutChart({ data, size=160, thickness=22, centerLabel, centerValue }) 
 }
 
 function Sparkline({ data, width=120, height=36, color="#7BBDE8" }) {
+  if (!data || data.length === 0) return null;
   const max = Math.max(...data), min = Math.min(...data);
   const stepX = width / (data.length-1 || 1);
   const pts = data.map((v,i)=>`${i*stepX},${height - ((v-min)/((max-min)||1))*height}`);
