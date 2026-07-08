@@ -2119,6 +2119,13 @@ function App() {
   const [notifsOpen, setNotifsOpen] = React.useState(false);
   const [paletteOpen, setPaletteOpen] = React.useState(false);
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
+  // TEMPORARY isolated route for the historical patient import page (?import=1).
+  // Bypasses auth/nav entirely. Remove this line, the early return below, and
+  // src/import.jsx after the paper-record migration is complete.
+  const importMode = React.useMemo(() => {
+    try { return new URLSearchParams(window.location.search).get("import") === "1"; }
+    catch { return false; }
+  }, []);
 
   // ⌘K / Ctrl+K opens the global command palette (PRD 5.10)
   React.useEffect(() => {
@@ -2167,6 +2174,12 @@ function App() {
     setRoute(window.roleDefaultRoute ? window.roleDefaultRoute(u.role) : "dashboard");
     setToast({ msg: `أهلاً بعودتك, ${u.name.split(" ")[0]}`, kind:"success" });
     setTimeout(()=>setToast(null), 2400);
+  }
+
+  // TEMPORARY: historical import page — standalone, before auth/nav.
+  if (importMode) {
+    const ImportPage = window.HistoricalImportPage;
+    return <>{ImportPage ? <ImportPage/> : null}{toast && <Toast msg={toast.msg} kind={toast.kind}/>}</>;
   }
 
   if (publicBooking) return <PublicBookingScreen onBack={()=>setPublicBooking(false)} onDone={()=>{

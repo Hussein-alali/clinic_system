@@ -496,6 +496,116 @@ const KineticData = {
   tables: DATA_TABLES,
 };
 
+// ══════════════════════════════════════════════════════════════
+// Patient files (normalized) — `patient_files` table + Supabase
+// Storage bucket "patient-files". The patients table stays PII-only.
+// Demo / offline mode keeps a metadata index (and small files as data
+// URLs) in localStorage so the profile can still list, view, download.
+// `file_type` is free text so new document kinds need no schema change.
+// ══════════════════════════════════════════════════════════════
+const LS_PATIENT_FILES = "kinetic.patient_files";
+const PATIENT_FILES_BUCKET = "patient-files";
+const MAX_INLINE_BYTES = 3 * 1024 * 1024; // demo: inline files up to 3MB as data URLs
+
+function nextFileId() {
+  return "pf_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+function sanitizeFileName(name) {
+  return String(name || "file").replace(/[^\w.\-؀-ۿ]+/g, "_").slice(0, 120);
+}
+function readInlineFile(file) {
+  return new Promise((resolve) => {
+    try {
+      if (!file || file.size > MAX_INLINE_BYTES) return resolve("");
+      const r = new FileReader();
+      r.onload = () => resolve(r.result || "");
+      r.onerror = () => resolve("");
+      r.readAsDataURL(file);
+    } catch { resolve(""); }
+  });
+}
+
+// Upload one file for a patient. Saves to Storage + patient_files when
+// Supabase is configured; always mirrors metadata to localStorage so the
+// UI has an immediate, offline-safe source of truth. Returns the row.
+async function uploadPatientFile(patientId, file, onProgress) {
+  const fileId = nextFileId();
+  const meta = {
+    file_id: fileId,
+    patient_id: patientId,
+    file_name: file.name,
+    file_type: file.type || "",
+    file_url: "",
+    uploaded_at: new Date().toISOString(),
+  };
+  try { onProgress && onProgress(5); } catch {}
+  if (sb) {
+    const path = `${patientId}/${fileId}-${sanitizeFileName(file.name)}`;
+    try {
+      const { error: upErr } = await sb.storage.from(PATIENT_FILES_BUCKET)
+        .upload(path, file, { cacheControl: "3600", upsert: false });
+      if (upErr) {
+        console.warn("uploadPatientFile storage failed", upErr.message || upErr);
+      } else {
+        const { data: pub } = sb.storage.from(PATIENT_FILES_BUCKET).getPublicUrl(path);
+        meta.file_url = (pub && pub.publicUrl) || "";
+        meta.storage_path = path;
+        const { error: insErr } = await sb.from("patient_files").insert({
+          file_id: fileId, patient_id: patientId,
+          file_name: file.name, file_type: meta.file_type, file_url: meta.file_url,
+        });
+        if (insErr) console.warn("uploadPatientFile insert failed", insErr.message || insErr);
+      }
+    } catch (e) { console.warn("uploadPatientFile failed", e); }
+  }
+  // If storage produced no URL (demo/offline/failure), inline small files so
+  // the profile can still preview/download them.
+  if (!meta.file_url) meta.file_url = await readInlineFile(file);
+  try { onProgress && onProgress(100); } catch {}
+  const idx = readLS(LS_PATIENT_FILES, []);
+  idx.push(meta);
+  writeLS(LS_PATIENT_FILES, idx);
+  window.dispatchEvent(new CustomEvent("kinetic:patient-files-updated", { detail: { patientId } }));
+  return meta;
+}
+
+// List a patient's files (server when available, else local mirror).
+async function listPatientFiles(patientId) {
+  if (!patientId) return [];
+  if (sb) {
+    try {
+      const { data, error } = await sb.from("patient_files")
+        .select("*").eq("patient_id", patientId).order("uploaded_at", { ascending: false });
+      if (!error && Array.isArray(data)) {
+        // Merge any demo/offline rows that never reached the server.
+        const local = readLS(LS_PATIENT_FILES, []).filter(f => f.patient_id === patientId);
+        const seen = new Set(data.map(d => d.file_id));
+        return [...data, ...local.filter(l => !seen.has(l.file_id))];
+      }
+      if (error) console.warn("listPatientFiles failed", error.message || error);
+    } catch (e) { console.warn("listPatientFiles failed", e); }
+  }
+  return readLS(LS_PATIENT_FILES, [])
+    .filter(f => f.patient_id === patientId)
+    .sort((a, b) => (b.uploaded_at || "").localeCompare(a.uploaded_at || ""));
+}
+
+async function removePatientFile(fileId) {
+  const idx = readLS(LS_PATIENT_FILES, []);
+  const row = idx.find(f => f.file_id === fileId);
+  writeLS(LS_PATIENT_FILES, idx.filter(f => f.file_id !== fileId));
+  if (sb) {
+    try {
+      if (row && row.storage_path) {
+        await sb.storage.from(PATIENT_FILES_BUCKET).remove([row.storage_path]);
+      }
+      const { error } = await sb.from("patient_files").delete().eq("file_id", fileId);
+      if (error) console.warn("removePatientFile failed", error.message || error);
+    } catch (e) { console.warn("removePatientFile failed", e); }
+  }
+  window.dispatchEvent(new CustomEvent("kinetic:patient-files-updated", { detail: {} }));
+}
+
 // ── Public API ────────────────────────────────────────────────
 Object.assign(window, {
   loadClinic, saveClinic,
@@ -504,4 +614,5 @@ Object.assign(window, {
   signInEmail, signOut, getSession, onAuthChange,
   startDictation, printHTML, escHtml,
   KineticData,
+  uploadPatientFile, listPatientFiles, removePatientFile,
 });

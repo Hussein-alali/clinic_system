@@ -127,6 +127,22 @@ create table if not exists campaigns (
   created_at  timestamptz default now()
 );
 
+-- ── Patient files (normalized document store) ───────────────
+-- The `patients` table stays PII-only. Uploaded documents (reports,
+-- X-rays, MRI/CT scans, lab results, prescriptions, images, PDFs, …)
+-- are stored in Supabase Storage; only their path/public URL is kept
+-- here. `file_type` is a free-text MIME/label so new document kinds
+-- need no schema change.
+create table if not exists patient_files (
+  file_id      text primary key,
+  patient_id   text references patients(patient_id) on delete cascade,
+  file_name    text not null,
+  file_type    text,
+  file_url     text,
+  uploaded_at  timestamptz default now()
+);
+create index if not exists patient_files_patient_id_idx on patient_files(patient_id);
+
 -- ── Audit log (PRD Section 8) ───────────────────────────────
 create table if not exists audit_events (
   id          bigserial primary key,
@@ -172,6 +188,7 @@ alter table staff         enable row level security;
 alter table therapists    enable row level security;
 alter table packages      enable row level security;
 alter table campaigns     enable row level security;
+alter table patient_files enable row level security;
 alter table audit_events  enable row level security;
 
 -- Helper: current role from JWT ('admin' | 'receptionist' | 'doctor' | 'therapist' | 'patient')
@@ -265,8 +282,37 @@ create policy "admin/reception write campaigns" on campaigns for all using (
   auth.jwt() ->> 'role' in ('admin','receptionist')
 );
 
+-- ── patient_files ────────────────────────────────────────────
+create policy "staff read patient_files" on patient_files for select using (
+  auth.jwt() ->> 'role' in ('admin','receptionist','doctor','therapist')
+);
+create policy "admin/reception write patient_files" on patient_files for all using (
+  auth.jwt() ->> 'role' in ('admin','receptionist')
+) with check (
+  auth.jwt() ->> 'role' in ('admin','receptionist')
+);
+
 -- ── audit_events ─────────────────────────────────────────────
 create policy "admin read audit" on audit_events for select using (
   auth.jwt() ->> 'role' = 'admin'
 );
 create policy "system insert audit" on audit_events for insert with check (true);
+
+-- ── Storage bucket for patient documents ────────────────────
+-- Files live in the 'patient-files' bucket; patient_files.file_url stores
+-- the public URL. Run once (safe to re-run).
+insert into storage.buckets (id, name, public)
+  values ('patient-files', 'patient-files', true)
+  on conflict (id) do nothing;
+
+create policy "staff read patient files bucket" on storage.objects for select using (
+  bucket_id = 'patient-files'
+  and auth.jwt() ->> 'role' in ('admin','receptionist','doctor','therapist')
+);
+create policy "admin/reception write patient files bucket" on storage.objects for all using (
+  bucket_id = 'patient-files'
+  and auth.jwt() ->> 'role' in ('admin','receptionist')
+) with check (
+  bucket_id = 'patient-files'
+  and auth.jwt() ->> 'role' in ('admin','receptionist')
+);

@@ -518,7 +518,7 @@ function PatientDetail({ p, onBack, go }) {
               {tab==="السجل" && <PatientHistory/>}
               {tab==="خطة العلاج" && <PatientTreatmentPlan/>}
               {tab==="الجلسات" && <SessionTimeline mini/>}
-              {tab==="الملفات" && <PatientFiles/>}
+              {tab==="الملفات" && <PatientFiles p={p}/>}
               {tab==="الفواتير" && <PatientInvoices p={p}/>}
             </div>
           </div>
@@ -846,69 +846,147 @@ function ModalityAdder({ onAdd }) {
   );
 }
 
-function PatientFiles() {
+// Patient documents — backed by the normalized `patient_files` table via
+// window.listPatientFiles / uploadPatientFile (Supabase Storage + LS fallback).
+function PatientFiles({ p }) {
+  const pid = (p && (p.patient_id || p.id)) || null;
   const fileRef = React.useRef(null);
-  const [files, setFiles] = React.useState([
-    { name:"X-ray-lumbar-AP.jpg",   type:"أشعة",      size:"2.4 MB", date:"2026-04-28", color:"#7BBDE8" },
-    { name:"X-ray-lumbar-LAT.jpg",  type:"أشعة",      size:"2.1 MB", date:"2026-04-28", color:"#7BBDE8" },
-    { name:"MRI-report.pdf",        type:"تقرير",     size:"480 KB", date:"2026-04-27", color:"#7E6BD3" },
-    { name:"Referral-letter.pdf",   type:"إحالة",   size:"120 KB", date:"2026-04-25", color:"#3FA984" },
-    { name:"ID-card.jpg",           type:"هوية",         size:"890 KB", date:"2026-04-25", color:"#D49044" },
-    { name:"شخصي-photo.jpg",    type:"صورة",      size:"1.2 MB", date:"2026-04-25", color:"#BDD8E9" },
-  ]);
+  const [files, setFiles] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState(null);
+  const [uploading, setUploading] = React.useState(false);
 
-  function handleUpload(e) {
-    const f = e.target.files[0];
-    if (!f) return;
-    setFiles(prev=>[{name:f.name,type:"رُفع",size:`${(f.size/1024/1024).toFixed(1)} MB`,date:new Date().toISOString().slice(0,10),color:"#3FA984"},...prev]);
-    if(window.showToast)window.showToast(`تم رفع ${f.name}`,"success");
-    e.target.value="";
+  const reload = React.useCallback(async () => {
+    if (!pid) { setFiles([]); setLoading(false); return; }
+    setLoading(true); setError(null);
+    try {
+      const rows = window.listPatientFiles ? await window.listPatientFiles(pid) : [];
+      setFiles(Array.isArray(rows) ? rows : []);
+    } catch (e) {
+      console.warn("load patient files failed", e);
+      setError("تعذّر تحميل الملفات");
+    } finally { setLoading(false); }
+  }, [pid]);
+
+  React.useEffect(() => { reload(); }, [reload]);
+  React.useEffect(() => {
+    const h = () => reload();
+    window.addEventListener("kinetic:patient-files-updated", h);
+    return () => window.removeEventListener("kinetic:patient-files-updated", h);
+  }, [reload]);
+
+  async function handleUpload(e) {
+    const list = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (!list.length || !pid) return;
+    setUploading(true);
+    let ok = 0;
+    try {
+      for (const f of list) {
+        if (window.uploadPatientFile) { await window.uploadPatientFile(pid, f); ok++; }
+      }
+      if (window.showToast) window.showToast(`تم رفع ${ok} ملف`, "success");
+    } catch (err) {
+      console.warn("upload failed", err);
+      if (window.showToast) window.showToast("تعذّر رفع الملف", "error");
+    } finally { setUploading(false); reload(); }
   }
+
+  function openFile(f) {
+    if (f.file_url) { window.open(f.file_url, "_blank"); return; }
+    if (window.showToast) window.showToast("لا يوجد ملف متاح للعرض", "error");
+  }
+  function downloadFile(f) {
+    if (!f.file_url) { if (window.showToast) window.showToast("لا يوجد ملف للتنزيل", "error"); return; }
+    const a = document.createElement("a");
+    a.href = f.file_url; a.download = f.file_name || "file"; a.target = "_blank";
+    a.click();
+    if (window.showToast) window.showToast(`تم فتح ${f.file_name}`, "success");
+  }
+  const isImage = (f) => (f.file_type || "").startsWith("image/") || /\.(jpe?g|png|webp|gif|bmp)$/i.test(f.file_name || "");
+  const kindLabel = (f) => {
+    const n = (f.file_name || "").toLowerCase();
+    if ((f.file_type || "").startsWith("image/") || /\.(jpe?g|png|webp|gif|bmp)$/i.test(n)) return "صورة";
+    if (n.endsWith(".pdf") || f.file_type === "application/pdf") return "PDF";
+    if (n.endsWith(".dcm")) return "DICOM";
+    return "مستند";
+  };
 
   return (
     <div>
-      <input ref={fileRef} type="file" style={{display:"none"}} onChange={handleUpload}/>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
-        <div className="h3">المريض files</div>
-        <button className="btn btn-blue" onClick={()=>fileRef.current&&fileRef.current.click()}><I.Upload size={13}/> رفع ملف</button>
+      <input ref={fileRef} type="file" multiple style={{ display: "none" }}
+        accept="image/*,application/pdf,.pdf,.doc,.docx,.dcm,.xls,.xlsx,.txt" onChange={handleUpload} />
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+        <div className="h3">ملفات المريض {files.length > 0 && <span className="muted mono" style={{ fontSize: 12 }}>({files.length})</span>}</div>
+        <button className="btn btn-blue" disabled={uploading || !pid} onClick={() => fileRef.current && fileRef.current.click()}>
+          {uploading ? <span className="spin" style={{ width: 13, height: 13, border: "2px solid #fff", borderTopColor: "transparent", borderRadius: "50%" }} /> : <I.Upload size={13} />}
+          {uploading ? "جارٍ الرفع…" : "رفع ملف"}
+        </button>
       </div>
 
       {/* Upload zone */}
       <div style={{
-        border:"2px dashed var(--blue-300)",background:"var(--blue-50)",borderRadius:14,
-        padding:"22px 18px",display:"flex",alignItems:"center",gap:14,marginBottom:18,flexWrap:"wrap"
+        border: "2px dashed var(--blue-300)", background: "var(--blue-50)", borderRadius: 14,
+        padding: "22px 18px", display: "flex", alignItems: "center", gap: 14, marginBottom: 18, flexWrap: "wrap"
       }}>
-        <div style={{width:42,height:42,borderRadius:11,background:"#fff",border:"1px solid var(--blue-300)",display:"flex",alignItems:"center",justifyContent:"center",color:"var(--blue-700)"}}>
-          <I.Upload size={18}/>
+        <div style={{ width: 42, height: 42, borderRadius: 11, background: "#fff", border: "1px solid var(--blue-300)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--blue-700)" }}>
+          <I.Upload size={18} />
         </div>
-        <div style={{flex:1}}>
-          <div style={{fontWeight:500,fontSize:13.5}}>أفلت الأشعة أو صور الرنين أو التقارير أو الصور هنا</div>
-          <div className="muted" style={{fontSize:12}}>JPG, PNG, PDF · up to 10 MB · auto-tagged بواسطة AI</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 500, fontSize: 13.5 }}>أفلت الأشعة أو صور الرنين أو التقارير أو الصور هنا</div>
+          <div className="muted" style={{ fontSize: 12 }}>JPG, PNG, PDF, DICOM · متعدد</div>
         </div>
-        <button className="btn btn-secondary" onClick={()=>fileRef.current&&fileRef.current.click()}>تصفّح الملفات</button>
+        <button className="btn btn-secondary" onClick={() => fileRef.current && fileRef.current.click()}>تصفّح الملفات</button>
       </div>
 
-      <div className="grid-3">
-        {files.map((f,i)=>(
-          <div key={i} className="card" style={{padding:0,overflow:"hidden"}}>
-            <div className="ph" style={{height:120,borderRadius:0,borderBottom:"1px solid var(--blue-100)"}}>{f.type.toLowerCase()} preview</div>
-            <div style={{padding:12,display:"flex",alignItems:"center",gap:10}}>
-              <div style={{width:32,height:32,borderRadius:8,background:f.color+"22",color:f.color,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                <I.FileText size={15}/>
-              </div>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:12.5,fontWeight:500,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{f.name}</div>
-                <div className="muted mono" style={{fontSize:11}}>{f.size} · {f.date}</div>
-              </div>
-              <button className="btn btn-ghost btn-icon" onClick={()=>{
-                const blob=new Blob([`File: ${f.name}\nSize: ${f.size}\nDate: ${f.date}`],{type:"text/plain"});
-                const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=f.name;a.click();URL.revokeObjectURL(url);
-                if(window.showToast)window.showToast(`تم تحميل ${f.name}`,"success");
-              }}><I.Download size={14}/></button>
+      {loading ? (
+        <div className="grid-3">
+          {[0, 1, 2].map(i => (
+            <div key={i} className="card" style={{ padding: 0, overflow: "hidden" }}>
+              <div className="skel" style={{ height: 120, borderRadius: 0 }} />
+              <div style={{ padding: 12 }}><div className="skel" style={{ height: 12, width: "70%" }} /></div>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      ) : error ? (
+        <EmptyState icon={<I.X size={22} />} title="تعذّر تحميل الملفات" body={error}
+          action={<button className="btn btn-secondary" onClick={reload}>إعادة المحاولة</button>} />
+      ) : files.length === 0 ? (
+        <EmptyState icon={<I.FileText size={22} />} title="لا توجد ملفات بعد"
+          body="ارفع الأشعة أو التقارير أو الصور لتظهر هنا." />
+      ) : (
+        <div className="grid-3">
+          {files.map((f) => (
+            <div key={f.file_id} className="card" style={{ padding: 0, overflow: "hidden" }}>
+              <div className="ph" style={{ height: 120, borderRadius: 0, borderBottom: "1px solid var(--blue-100)", cursor: f.file_url ? "pointer" : "default", padding: 0, overflow: "hidden" }}
+                onClick={() => f.file_url && openFile(f)}>
+                {isImage(f) && f.file_url
+                  ? <img src={f.file_url} alt={f.file_name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  : `${kindLabel(f)} preview`}
+              </div>
+              <div style={{ padding: 12, display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ width: 32, height: 32, borderRadius: 8, background: "var(--blue-100)", color: "var(--blue-700)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <I.FileText size={15} />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{f.file_name}</div>
+                  <div className="muted mono" style={{ fontSize: 11 }}>{kindLabel(f)} · {(f.uploaded_at || "").slice(0, 10)}</div>
+                </div>
+                <button className="btn btn-ghost btn-icon" title="تحميل / فتح" onClick={() => downloadFile(f)}><I.Download size={14} /></button>
+                <RowMenu size={13} items={[
+                  { label: "فتح", icon: <I.Eye size={13} />, onClick: () => openFile(f) },
+                  { label: "تحميل", icon: <I.Download size={13} />, onClick: () => downloadFile(f) },
+                  { label: "حذف", icon: <I.Trash size={13} />, danger: true, onClick: async () => {
+                    if (!window.confirm(`حذف ${f.file_name}؟`)) return;
+                    try { if (window.removePatientFile) await window.removePatientFile(f.file_id); if (window.showToast) window.showToast("تم حذف الملف", "success"); }
+                    catch (e) { console.warn("remove file failed", e); if (window.showToast) window.showToast("تعذّر الحذف", "error"); }
+                  } },
+                ]} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
