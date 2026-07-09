@@ -112,6 +112,27 @@ const seedTherapists = [
   { id:"TH-4", name:"عادل نصر",    spec:"إصابات رياضية",    load:4, max:7, color:"#D49044" },
 ];
 
+// Departments and doctors are DB-backed (departments / doctors tables).
+// These seeds only load in demo mode; production hydrates from Supabase.
+// D-pedi and D-women intentionally have no doctors to exercise the
+// "0 أطباء / disabled" path.
+const seedDepartments = [
+  { id:"D-ortho", name_ar:"تأهيل عظام",   name_en:"Orthopedic Rehab", description:"مفاصل، عمود فقري، بعد العمليات", icon:"Stethoscope", color:"#7BBDE8", sort_order:1, active:true },
+  { id:"D-sport", name_ar:"إصابات رياضية", name_en:"Sports Injury",     description:"رباط صليبي، غضروف، عضلات خلفية", icon:"Activity",    color:"#3FA984", sort_order:2, active:true },
+  { id:"D-neuro", name_ar:"أعصاب",         name_en:"Neuro Rehab",       description:"جلطة، باركنسون، تصلب",           icon:"Heart",       color:"#7E6BD3", sort_order:3, active:true },
+  { id:"D-pedi",  name_ar:"أطفال",          name_en:"Pediatrics",        description:"تأخر نمو، مشي",                  icon:"Users",       color:"#D49044", sort_order:4, active:true },
+  { id:"D-chron", name_ar:"آلام مزمنة",     name_en:"Chronic Pain",      description:"أسفل الظهر، الرقبة، فيبروميالجيا", icon:"Sparkle",     color:"#3A7FB5", sort_order:5, active:true },
+  { id:"D-women", name_ar:"صحة المرأة",     name_en:"Women's Health",    description:"حمل، بعد الولادة، قاع الحوض",     icon:"Heart",       color:"#D8665A", sort_order:6, active:true },
+];
+
+const seedDoctors = [
+  { id:"DR-1", name:"د. ياسمين عادل", department_id:"D-ortho", specialization:"تأهيل عظام",         experience_years:12, photo:"", schedule:"الأحد–الخميس 09:00–17:00", status:"available", color:"#7BBDE8", active:true },
+  { id:"DR-2", name:"د. مهند رشدي",   department_id:"D-ortho", specialization:"تأهيل بعد العمليات",  experience_years:8,  photo:"", schedule:"السبت–الأربعاء 10:00–18:00", status:"busy",      color:"#7E6BD3", active:true },
+  { id:"DR-3", name:"د. طارق نور",   department_id:"D-sport", specialization:"إصابات رياضية",       experience_years:15, photo:"", schedule:"الأحد–الخميس 08:00–16:00", status:"available", color:"#3FA984", active:true },
+  { id:"DR-4", name:"د. سلمى فؤاد",   department_id:"D-neuro", specialization:"إعادة تأهيل عصبي",     experience_years:10, photo:"", schedule:"الإثنين–الجمعة 11:00–19:00", status:"leave",     color:"#D49044", active:true },
+  { id:"DR-5", name:"د. حسام لطفي",   department_id:"D-chron", specialization:"إدارة الألم المزمن",   experience_years:9,  photo:"", schedule:"الأحد–الخميس 09:00–15:00", status:"available", color:"#3A7FB5", active:true },
+];
+
 const seedPackages = [
   { id:"PKG-1", name:"جلسة واحدة",      sessions:1,  price:850,  active:true,  popular:false, color:"#BDD8E9", sold:48 },
   { id:"PKG-2", name:"باقة البداية — 6 جلسات",sessions:6,  price:4650, active:true,  popular:false, color:"#7BBDE8", sold:33 },
@@ -160,13 +181,15 @@ window.DATA = window.IS_DEMO ? {
   patients: seedPatients,
   appts: seedAppointments,
   therapists: seedTherapists,
+  departments: seedDepartments,
+  doctors: seedDoctors,
   packages: seedPackages,
   payments: seedPayments,
   campaigns: seedCampaigns,
   sessions: seedSessions,
 } : {
-  patients: [], appts: [], therapists: [], packages: [],
-  payments: [], campaigns: [], sessions: [],
+  patients: [], appts: [], therapists: [], departments: [], doctors: [],
+  packages: [], payments: [], campaigns: [], sessions: [],
 };
 
 // ── Reactive data hook ─────────────────────────────────────────

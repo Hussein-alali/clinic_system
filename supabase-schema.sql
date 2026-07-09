@@ -63,12 +63,18 @@ create table if not exists bookings (
   booking_id    text primary key,
   patient_id    text references patients(patient_id) on delete cascade,
   therapist_id  text,
+  doctor_id     text,
+  department_id text,
   date          date,
   time          text,
   status        text default 'pending',
   notes         text,
   created_at    timestamptz default now()
 );
+-- Backfill the doctor/department columns on databases created before
+-- Quick Booking (safe to re-run).
+alter table bookings add column if not exists doctor_id     text;
+alter table bookings add column if not exists department_id text;
 
 create table if not exists sessions (
   session_id      text primary key,
@@ -110,6 +116,35 @@ create table if not exists therapists (
   color       text default '#7BBDE8',
   created_at  timestamptz default now()
 );
+
+-- ── Departments (booking taxonomy) ──────────────────────────
+create table if not exists departments (
+  id          text primary key,
+  name_ar     text not null,
+  name_en     text,
+  description text,
+  icon        text default 'Layers',       -- icon name resolved in the UI
+  color       text default '#7BBDE8',
+  sort_order  int default 0,
+  active      boolean default true,
+  created_at  timestamptz default now()
+);
+
+-- ── Doctors (assigned to a department) ──────────────────────
+create table if not exists doctors (
+  id               text primary key,
+  name             text not null,
+  department_id    text references departments(id) on delete set null,
+  specialization   text,
+  experience_years int default 0,
+  photo            text,                    -- URL or data URL
+  schedule         text,                    -- freeform working hours
+  status           text default 'available',-- available | busy | leave
+  color            text default '#7BBDE8',
+  active           boolean default true,
+  created_at       timestamptz default now()
+);
+create index if not exists doctors_department_id_idx on doctors(department_id);
 
 -- ── Packages (treatment plans / pricing) ────────────────────
 create table if not exists packages (
@@ -214,6 +249,8 @@ alter table sessions      enable row level security;
 alter table invoices      enable row level security;
 alter table staff         enable row level security;
 alter table therapists    enable row level security;
+alter table departments   enable row level security;
+alter table doctors        enable row level security;
 alter table packages      enable row level security;
 alter table campaigns     enable row level security;
 alter table branches      enable row level security;
@@ -310,6 +347,30 @@ create policy "staff read therapists" on therapists for select using (
 );
 drop policy if exists "admin write therapists" on therapists;
 create policy "admin write therapists" on therapists for all using (
+  public.app_role() = 'admin'
+) with check (
+  public.app_role() = 'admin'
+);
+
+-- ── departments ──────────────────────────────────────────────
+drop policy if exists "staff read departments" on departments;
+create policy "staff read departments" on departments for select using (
+  public.app_role() in ('admin','receptionist','doctor','therapist')
+);
+drop policy if exists "admin write departments" on departments;
+create policy "admin write departments" on departments for all using (
+  public.app_role() = 'admin'
+) with check (
+  public.app_role() = 'admin'
+);
+
+-- ── doctors ──────────────────────────────────────────────────
+drop policy if exists "staff read doctors" on doctors;
+create policy "staff read doctors" on doctors for select using (
+  public.app_role() in ('admin','receptionist','doctor','therapist')
+);
+drop policy if exists "admin write doctors" on doctors;
+create policy "admin write doctors" on doctors for all using (
   public.app_role() = 'admin'
 ) with check (
   public.app_role() = 'admin'

@@ -31,11 +31,18 @@ begin
   if uid is null then
     uid := gen_random_uuid();
 
+    -- NOTE: the *_token / *_change columns must be '' (not NULL) — GoTrue
+    -- returns 500 "Database error" on login when they are NULL, which is
+    -- the classic pitfall of SQL-created auth users.
     insert into auth.users (
       instance_id, id, aud, role, email,
       encrypted_password, email_confirmed_at,
       raw_app_meta_data, raw_user_meta_data,
-      created_at, updated_at
+      created_at, updated_at,
+      confirmation_token, recovery_token,
+      email_change, email_change_token_new, email_change_token_current,
+      phone_change, phone_change_token, reauthentication_token,
+      is_sso_user
     ) values (
       '00000000-0000-0000-0000-000000000000',
       uid,
@@ -45,7 +52,7 @@ begin
       crypt('Amr@2026!', gen_salt('bf')),
       now(),
       '{"provider":"email","providers":["email"]}'::jsonb,
-      '{"role":"admin","name":"عمرو"}'::jsonb,
+      '{"role":"admin","name":"أمير"}'::jsonb,
       now(), now()
     );
 
@@ -61,6 +68,23 @@ begin
       now(), now(), now()
     );
   end if;
+
+  -- Repair pass: if the user was created by an earlier version of this
+  -- script (or any SQL insert) with NULL token columns, GoTrue answers
+  -- every login with 500. Normalize them to '' so sign-in works.
+  update auth.users set
+    confirmation_token         = coalesce(confirmation_token, ''),
+    recovery_token             = coalesce(recovery_token, ''),
+    email_change               = coalesce(email_change, ''),
+    email_change_token_new     = coalesce(email_change_token_new, ''),
+    email_change_token_current = coalesce(email_change_token_current, ''),
+    phone_change               = coalesce(phone_change, ''),
+    phone_change_token         = coalesce(phone_change_token, ''),
+    reauthentication_token     = coalesce(reauthentication_token, ''),
+    email_confirmed_at         = coalesce(email_confirmed_at, now()),
+    raw_user_meta_data         = coalesce(raw_user_meta_data, '{}'::jsonb)
+                                   || '{"role":"admin","name":"أمير"}'::jsonb
+  where email = 'amir@kinetic.eg';
 
   insert into staff (staff_id, name, role, email, auth_uid)
   values ('ST-AMR', 'عمرو', 'admin', 'amr@clinic.eg', uid)

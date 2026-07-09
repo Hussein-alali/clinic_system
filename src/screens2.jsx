@@ -1774,9 +1774,6 @@ function OperationalReport() {
 // ───────────────── Settings ─────────────────
 function SettingsPage({ go }) {
   const [tab, setTab] = React.useState("clinic");
-  const [inviteOpen, setInviteOpen] = React.useState(false);
-  const [inviteEmail, setInviteEmail] = React.useState("");
-  const [inviteRole, setInviteRole] = React.useState("موظف استقبال");
   // Guard: only admins may reach Settings. Everyone else sees a friendly
   // 403 instead of clinic branding, user management, and integration keys.
   const role = (window.ME && window.ME.role) || "";
@@ -1818,52 +1815,7 @@ function SettingsPage({ go }) {
 
         <div className="card card-pad">
           {tab==="clinic" && <ClinicDetailsPanel/>}
-          {tab==="users" && (
-            <div>
-              <div className="h2" style={{marginBottom:14}}>المستخدمون والأدوار</div>
-              <div className="tbl-scroll">
-              <table className="tbl">
-                <thead><tr><th>الاسم</th><th>البريد الإلكتروني</th><th>الدور</th><th>Last نشط</th><th></th></tr></thead>
-                <tbody>
-                  {(DATA.staff||[]).length===0 && (
-                    <tr><td colSpan={5}><EmptyState icon={<I.Users size={22}/>} title="لا مستخدمين بعد" body="ادعُ أعضاء الفريق من زر «دعوة مستخدم» بعد إنشاء حساباتهم في Supabase."/></td></tr>
-                  )}
-                  {(DATA.staff||[]).map(s=>({
-                    n: s.name,
-                    e: s.email || "—",
-                    r: ({admin:"مدير", receptionist:"موظف استقبال", doctor:"طبيب", therapist:"الأخصائي"})[s.role] || s.role || "—",
-                    l: "—",
-                  })).map((u,i)=>(
-                    <tr key={i}>
-                      <td><div style={{display:"flex",alignItems:"center",gap:10}}><div className="av sm">{u.n.split(" ").map(x=>x[0]).join("").slice(0,2)}</div>{u.n}</div></td>
-                      <td className="mono" style={{fontSize:12}}>{u.e}</td>
-                      <td><span className={"badge " + (u.r==="مدير"?"b-violet":u.r==="طبيب"?"b-blue":"b-grey")}><span className="dot"></span>{u.r}</span></td>
-                      <td className="muted">{u.l}</td>
-                      <td>
-                        <RowMenu size={13} items={[
-                          { label:"إرسال دعوة جديدة", icon:<I.Send size={13}/>, onClick:()=>{ if (window.showToast) window.showToast(`تم إرسال دعوة إلى ${u.e}`, "success"); } },
-                          { label:"نسخ البريد", icon:<I.Mail size={13}/>, onClick:()=>{ try { navigator.clipboard.writeText(u.e); if (window.showToast) window.showToast("تم نسخ البريد","success"); } catch(_){} } },
-                          { label:"إزالة المستخدم", icon:<I.X size={13}/>, danger:true, onClick:async ()=>{
-                            if (!window.confirm(`إزالة ${u.n}؟`)) return;
-                            try {
-                              if (window.KineticData) {
-                                const rows = await window.KineticData.list("staff");
-                                const match = (rows || []).find(r => r.email === u.e);
-                                if (match) await window.KineticData.remove("staff", match.staff_id || match.id);
-                              }
-                              if (window.showToast) window.showToast(`تم إزالة ${u.n}`,"success");
-                            } catch (e) { console.warn("remove user failed", e); if (window.showToast) window.showToast("تعذّر الإزالة","error"); }
-                          }},
-                        ]}/>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              </div>
-              <button className="btn btn-blue" style={{marginTop:14}} onClick={()=>setInviteOpen(true)}><I.Plus size={13}/> دعوة مستخدم</button>
-            </div>
-          )}
+          {tab==="users" && <UsersPanel/>}
           {tab==="branding" && <BrandingPanel/>}
           {tab==="sections" && <CustomSectionsPanel/>}
           {tab!=="clinic" && tab!=="users" && tab!=="branding" && tab!=="sections" && (
@@ -1871,57 +1823,243 @@ function SettingsPage({ go }) {
           )}
         </div>
       </div>
-      {inviteOpen && (
-        <Modal title="دعوة مستخدم جديد" onClose={()=>setInviteOpen(false)}
-          footer={<>
-            <button className="btn btn-ghost" onClick={()=>setInviteOpen(false)}>إلغاء</button>
-            <button className="btn btn-blue" onClick={async ()=>{
-              const email = (inviteEmail || "").trim();
-              if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-                if (window.showToast) window.showToast("أدخل بريدًا إلكترونيًا صحيحًا", "error");
-                return;
-              }
-              // Map Arabic role labels to the canonical role slug used everywhere else.
-              const roleMap = { "مدير":"admin", "طبيب":"doctor", "الأخصائي":"therapist", "موظف استقبال":"receptionist" };
-              const canonicalRole = roleMap[inviteRole] || "receptionist";
-              try {
-                if (window.KineticData) {
-                  const staffId = "U-" + Date.now();
-                  await window.KineticData.upsert("staff", {
-                    staff_id: staffId,
-                    name: email.split("@")[0],
-                    email,
-                    role: canonicalRole,
-                    phone: null,
-                    auth_uid: null,
-                  });
-                }
-                if (window.showToast) window.showToast(`تم إرسال الدعوة إلى ${email}`, "success");
-                setInviteEmail("");
-                setInviteOpen(false);
-              } catch (e) {
-                console.warn("invite user failed", e);
-                if (window.showToast) window.showToast("تعذّر إرسال الدعوة", "error");
-              }
-            }}>
-              <I.Send size={13}/> إرسال الدعوة
-            </button>
-          </>}>
-          <Field label="البريد الإلكتروني" required>
-            <input className="input" type="email" placeholder="user@example.com" value={inviteEmail} onChange={e=>setInviteEmail(e.target.value)}/>
-          </Field>
-          <div style={{height:12}}/>
-          <Field label="الدور">
-            <select className="input" value={inviteRole} onChange={e=>setInviteRole(e.target.value)}>
-              <option>مدير</option>
-              <option>طبيب</option>
-              <option>الأخصائي</option>
-              <option>موظف استقبال</option>
-            </select>
-          </Field>
-        </Modal>
-      )}
     </Page>
+  );
+}
+
+// ── Admin: user management (create logins, reset passwords) ───
+const ROLE_AR = { admin:"مدير", receptionist:"موظف استقبال", doctor:"طبيب", therapist:"الأخصائي" };
+const ROLE_OPTIONS = [
+  { slug:"admin", label:"مدير" },
+  { slug:"receptionist", label:"موظف استقبال" },
+  { slug:"doctor", label:"طبيب" },
+  { slug:"therapist", label:"الأخصائي" },
+];
+const roleBadgeClass = (slug) => slug==="admin" ? "b-violet" : slug==="doctor" ? "b-blue" : slug==="therapist" ? "b-green" : "b-grey";
+
+function UsersPanel() {
+  const me = window.ME || {};
+  const staff = DATA.staff || [];
+  const [createOpen, setCreateOpen] = React.useState(false);
+  const [editRow, setEditRow] = React.useState(null);   // staff row being edited
+  const [pwOpen, setPwOpen] = React.useState(false);     // change MY password
+  const [profileOpen, setProfileOpen] = React.useState(false); // edit MY name
+
+  const isMe = (s) => me.email && (s.email || "").toLowerCase() === (me.email || "").toLowerCase();
+
+  async function resetFor(email) {
+    const res = await window.sendPasswordReset(email);
+    if (res.ok) window.showToast && window.showToast(res.demo ? "وضع تجريبي: لا إرسال فعلي" : `تم إرسال رابط إعادة التعيين إلى ${email}`, "success");
+    else window.showToast && window.showToast(res.error || "تعذّر الإرسال", "error");
+  }
+  async function removeMember(s) {
+    if (!window.confirm(`إزالة ${s.name}؟ (يزيل صف الموظف؛ حساب الدخول يُحذف من Supabase)`)) return;
+    try {
+      await window.KineticData.remove("staff", s.staff_id || s.id);
+      window.showToast && window.showToast(`تم إزالة ${s.name}`, "success");
+    } catch (e) { console.warn(e); window.showToast && window.showToast("تعذّر الإزالة", "error"); }
+  }
+
+  return (
+    <div>
+      {/* My account */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,gap:12,flexWrap:"wrap"}}>
+        <div>
+          <div className="h2">المستخدمون والأدوار</div>
+          <div className="muted" style={{fontSize:12.5,marginTop:2}}>أنشئ حسابات الدخول، عيّن الأدوار، وأعد تعيين كلمات المرور.</div>
+        </div>
+        <button className="btn btn-blue" onClick={()=>setCreateOpen(true)}><I.Plus size={14}/> إنشاء مستخدم</button>
+      </div>
+
+      <div className="card" style={{padding:14,marginBottom:18,display:"flex",alignItems:"center",gap:14,flexWrap:"wrap",background:"var(--blue-50)",border:"1px solid var(--blue-100)"}}>
+        <div className="av md" style={{background:"var(--blue-500)",color:"#fff"}}>{(me.name||"?").split(" ").map(x=>x[0]||"").join("").slice(0,2)}</div>
+        <div style={{flex:1,minWidth:160}}>
+          <div style={{fontWeight:600,fontSize:13.5}}>{me.name || "حسابي"} <span className="badge b-violet" style={{marginInlineStart:6}}><span className="dot"></span>{me.role || "مدير"}</span></div>
+          <div className="mono muted" style={{fontSize:12}}>{me.email || "—"}</div>
+        </div>
+        <button className="btn btn-secondary" style={{fontSize:12.5}} onClick={()=>setProfileOpen(true)}><I.Edit size={13}/> تعديل اسمي</button>
+        <button className="btn btn-secondary" style={{fontSize:12.5}} onClick={()=>setPwOpen(true)}><I.Lock size={13}/> تغيير كلمة المرور</button>
+      </div>
+
+      {/* Team table */}
+      <div className="tbl-scroll">
+      <table className="tbl">
+        <thead><tr><th>الاسم</th><th>البريد الإلكتروني</th><th>الدور</th><th></th></tr></thead>
+        <tbody>
+          {staff.length===0 && (
+            <tr><td colSpan={4}><EmptyState icon={<I.Users size={22}/>} title="لا مستخدمين بعد" body="أنشئ أول حساب دخول من زر «إنشاء مستخدم»."/></td></tr>
+          )}
+          {staff.map((s,i)=>(
+            <tr key={s.staff_id||s.id||i}>
+              <td><div style={{display:"flex",alignItems:"center",gap:10}}>
+                <div className="av sm">{(s.name||"?").split(" ").map(x=>x[0]||"").join("").slice(0,2)}</div>
+                {s.name}{isMe(s) && <span className="muted" style={{fontSize:11}}>(أنا)</span>}
+              </div></td>
+              <td className="mono" style={{fontSize:12}}>{s.email || "—"}</td>
+              <td><span className={"badge " + roleBadgeClass(s.role)}><span className="dot"></span>{ROLE_AR[s.role] || s.role || "—"}</span></td>
+              <td>
+                <RowMenu size={13} items={[
+                  isMe(s)
+                    ? { label:"تغيير كلمة المرور", icon:<I.Lock size={13}/>, onClick:()=>setPwOpen(true) }
+                    : { label:"إرسال رابط إعادة تعيين", icon:<I.Mail size={13}/>, onClick:()=>resetFor(s.email) },
+                  { label:"تعديل", icon:<I.Edit size={13}/>, onClick:()=>setEditRow(s) },
+                  { label:"نسخ البريد", icon:<I.Mail size={13}/>, onClick:()=>{ try{ navigator.clipboard.writeText(s.email||""); window.showToast&&window.showToast("تم نسخ البريد","success"); }catch(_){} } },
+                  ...(isMe(s) ? [] : [{ label:"إزالة", icon:<I.Trash size={13}/>, danger:true, onClick:()=>removeMember(s) }]),
+                ]}/>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      </div>
+
+      {createOpen && <CreateUserModal onClose={()=>setCreateOpen(false)}/>}
+      {editRow && <EditUserModal row={editRow} onClose={()=>setEditRow(null)}/>}
+      {pwOpen && <ChangePasswordModal onClose={()=>setPwOpen(false)}/>}
+      {profileOpen && <EditProfileModal onClose={()=>setProfileOpen(false)}/>}
+    </div>
+  );
+}
+
+function CreateUserModal({ onClose }) {
+  const [form, setForm] = React.useState({ name:"", email:"", password:"", role:"receptionist" });
+  const [busy, setBusy] = React.useState(false);
+  const [showPw, setShowPw] = React.useState(false);
+  const set = (k,v)=>setForm(f=>({...f,[k]:v}));
+  async function submit() {
+    setBusy(true);
+    const res = await window.adminCreateUser(form);
+    setBusy(false);
+    if (!res.ok) { window.showToast && window.showToast(res.error || "تعذّر إنشاء المستخدم", "error"); return; }
+    if (res.needsConfirm) window.showToast && window.showToast("تم الإنشاء — على المستخدم تأكيد بريده قبل الدخول", "success");
+    else window.showToast && window.showToast(res.demo ? "تم الإنشاء (وضع تجريبي)" : "تم إنشاء المستخدم", "success");
+    onClose();
+  }
+  return (
+    <Modal title="إنشاء مستخدم جديد" onClose={onClose}
+      footer={<>
+        <button className="btn btn-ghost" onClick={onClose}>إلغاء</button>
+        <button className="btn btn-blue" disabled={busy} onClick={submit}>
+          {busy ? <span className="spin" style={{width:14,height:14,border:"2px solid #fff",borderTopColor:"transparent",borderRadius:"50%"}}/> : <><I.Check size={13}/> إنشاء الحساب</>}
+        </button>
+      </>}>
+      <Field label="الاسم الكامل" required>
+        <input className="input" value={form.name} onChange={e=>set("name",e.target.value)} placeholder="مثال: دينا فؤاد"/>
+      </Field>
+      <div style={{height:12}}/>
+      <Field label="البريد الإلكتروني" required>
+        <input className="input" type="email" value={form.email} onChange={e=>set("email",e.target.value)} placeholder="user@clinic.eg"/>
+      </Field>
+      <div style={{height:12}}/>
+      <Field label="كلمة المرور" required hint="6 أحرف على الأقل">
+        <div style={{position:"relative"}}>
+          <input className="input" type={showPw?"text":"password"} value={form.password} onChange={e=>set("password",e.target.value)} style={{paddingRight:38}}/>
+          <button type="button" onClick={()=>setShowPw(s=>!s)} style={{position:"absolute",right:6,top:5,padding:6,border:"none",background:"transparent",cursor:"pointer",color:"var(--ink-500)"}}><I.Eye size={15}/></button>
+        </div>
+      </Field>
+      <div style={{height:12}}/>
+      <Field label="الدور" required>
+        <select className="input" value={form.role} onChange={e=>set("role",e.target.value)}>
+          {ROLE_OPTIONS.map(r=><option key={r.slug} value={r.slug}>{r.label}</option>)}
+        </select>
+      </Field>
+      <div className="muted" style={{fontSize:11.5,marginTop:14,lineHeight:1.6,padding:"10px 12px",background:"var(--ink-50)",borderRadius:8}}>
+        <I.Lock size={11} style={{marginInlineEnd:4}}/> لدخول فوري، عطّل «تأكيد البريد» في Supabase (Authentication → Providers → Email). وإلا يستلم المستخدم رابط تأكيد على بريده.
+      </div>
+    </Modal>
+  );
+}
+
+function EditUserModal({ row, onClose }) {
+  const [name, setName] = React.useState(row.name || "");
+  const [role, setRole] = React.useState(row.role || "receptionist");
+  const [busy, setBusy] = React.useState(false);
+  async function submit() {
+    setBusy(true);
+    const res = await window.updateStaffMember(row.staff_id || row.id, { name: name.trim(), role });
+    setBusy(false);
+    if (res.ok) window.showToast && window.showToast("تم حفظ التغييرات", "success");
+    else window.showToast && window.showToast(res.error || "تعذّر الحفظ", "error");
+    onClose();
+  }
+  const roleChanged = role !== (row.role || "receptionist");
+  return (
+    <Modal title={`تعديل ${row.name || "المستخدم"}`} onClose={onClose}
+      footer={<>
+        <button className="btn btn-ghost" onClick={onClose}>إلغاء</button>
+        <button className="btn btn-blue" disabled={busy} onClick={submit}><I.Check size={13}/> حفظ</button>
+      </>}>
+      <Field label="الاسم"><input className="input" value={name} onChange={e=>setName(e.target.value)}/></Field>
+      <div style={{height:12}}/>
+      <Field label="البريد الإلكتروني" hint="لا يمكن تغييره من هنا">
+        <input className="input" value={row.email || "—"} disabled style={{opacity:.7}}/>
+      </Field>
+      <div style={{height:12}}/>
+      <Field label="الدور">
+        <select className="input" value={role} onChange={e=>setRole(e.target.value)}>
+          {ROLE_OPTIONS.map(r=><option key={r.slug} value={r.slug}>{r.label}</option>)}
+        </select>
+      </Field>
+      {roleChanged && (
+        <div className="muted" style={{fontSize:11.5,marginTop:12,lineHeight:1.6,padding:"10px 12px",background:"var(--ink-50)",borderRadius:8}}>
+          صلاحيات الدخول الفعلية تُقرأ من حساب Supabase الخاص بالمستخدم. لتفعيل الدور الجديد بالكامل يعيد المستخدم تسجيل الدخول، وقد يتطلب تحديث بيانات الحساب من لوحة Supabase.
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function ChangePasswordModal({ onClose }) {
+  const [pw, setPw] = React.useState("");
+  const [pw2, setPw2] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [showPw, setShowPw] = React.useState(false);
+  async function submit() {
+    if (pw !== pw2) { window.showToast && window.showToast("كلمتا المرور غير متطابقتين", "error"); return; }
+    setBusy(true);
+    const res = await window.updateOwnPassword(pw);
+    setBusy(false);
+    if (res.ok) { window.showToast && window.showToast(res.demo ? "وضع تجريبي: لم تُحفظ" : "تم تغيير كلمة المرور", "success"); onClose(); }
+    else window.showToast && window.showToast(res.error || "تعذّر التغيير", "error");
+  }
+  return (
+    <Modal title="تغيير كلمة المرور" onClose={onClose}
+      footer={<>
+        <button className="btn btn-ghost" onClick={onClose}>إلغاء</button>
+        <button className="btn btn-blue" disabled={busy} onClick={submit}><I.Check size={13}/> حفظ</button>
+      </>}>
+      <Field label="كلمة المرور الجديدة" required hint="6 أحرف على الأقل">
+        <div style={{position:"relative"}}>
+          <input className="input" type={showPw?"text":"password"} value={pw} onChange={e=>setPw(e.target.value)} style={{paddingRight:38}}/>
+          <button type="button" onClick={()=>setShowPw(s=>!s)} style={{position:"absolute",right:6,top:5,padding:6,border:"none",background:"transparent",cursor:"pointer",color:"var(--ink-500)"}}><I.Eye size={15}/></button>
+        </div>
+      </Field>
+      <div style={{height:12}}/>
+      <Field label="تأكيد كلمة المرور" required>
+        <input className="input" type={showPw?"text":"password"} value={pw2} onChange={e=>setPw2(e.target.value)}/>
+      </Field>
+    </Modal>
+  );
+}
+
+function EditProfileModal({ onClose }) {
+  const [name, setName] = React.useState((window.ME && window.ME.name) || "");
+  const [busy, setBusy] = React.useState(false);
+  async function submit() {
+    setBusy(true);
+    const res = await window.updateOwnProfile({ name });
+    setBusy(false);
+    if (res.ok) { window.showToast && window.showToast("تم حفظ الملف", "success"); onClose(); }
+    else window.showToast && window.showToast(res.error || "تعذّر الحفظ", "error");
+  }
+  return (
+    <Modal title="تعديل ملفي" onClose={onClose}
+      footer={<>
+        <button className="btn btn-ghost" onClick={onClose}>إلغاء</button>
+        <button className="btn btn-blue" disabled={busy} onClick={submit}><I.Check size={13}/> حفظ</button>
+      </>}>
+      <Field label="الاسم"><input className="input" value={name} onChange={e=>setName(e.target.value)}/></Field>
+    </Modal>
   );
 }
 
