@@ -1710,7 +1710,7 @@ function OperationalReport() {
   const utilization = appts.length ? Math.round(booked.length / appts.length * 100) : 0;
 
   // By weekday (bookings carry a date in production).
-  const wd = ["أحد","إثن","ثلا","أرب","خمي","جمع","سبت"];
+  const wd = ["الأحد","الأثنين","الثلاثاء","الأربعاء","الخميس","الجمعة","السبت"];
   const byDay = wd.map(l => ({ label:l, v:0, color:"#7BBDE8" }));
   booked.forEach(a => { if (a.date) { const d = new Date(a.date); if (!isNaN(d)) byDay[d.getDay()].v += 1; } });
 
@@ -2067,11 +2067,11 @@ function EditProfileModal({ onClose }) {
 function ClinicDetailsPanel() {
   const seed = window.CLINIC || {};
   const [form, setForm] = React.useState({
-    name: seed.name || "كينيتك للعلاج الطبيعي",
-    branch: seed.branch || "مصر الجديدة",
-    phone: seed.phone || "+20 2 2638 1100",
+    name: seed.name || "BeActive",
+    branch: seed.branch || " الدقي",
+    phone: seed.phone || "+201099575454",
     email: seed.email || "hello@kinetic.eg",
-    address: seed.address || "14 ش صلاح سالم, مصر الجديدة، القاهرة",
+    address: seed.address || "الدقي -ميدان هيئة التدريس -عمارة14",
     tax_id: seed.tax_id || "514-203-091",
     hours: seed.hours || "الأحد–الخميس 08:00 – 20:00",
   });
