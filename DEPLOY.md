@@ -40,7 +40,28 @@ No environment variables are required.
 
 ## Adding more staff accounts
 
+Easiest: **Settings → المستخدمون والأدوار → إنشاء مستخدم** (creates the login +
+role for you). Or manually:
+
 1. Supabase Dashboard → Authentication → **Add user** (email + password).
 2. Edit the user → **User Metadata** → add:
    `{ "role": "receptionist" }` (or `doctor` / `therapist` / `admin`).
 3. Add a row in the `staff` table with `auth_uid` = the user's UUID.
+
+## Booking data (departments & doctors)
+
+The booking module reads **departments** and **doctors** from the database
+(tables created by `supabase-schema.sql`):
+
+- Add a **department** row (`name_ar`, `icon`, `color`, `sort_order`,
+  `active`) → it appears automatically on the booking page.
+- Add a **doctor** row (`name`, `department_id`, `specialization`,
+  `experience_years`, `status` = available/busy/leave, `active`) → it shows
+  under its department. Each department card counts its active doctors;
+  departments with zero active doctors are shown as "0 أطباء" and disabled.
+- **حجز سريع (Quick Booking)** — for phone/WhatsApp bookings: captures only
+  name, phone, department, doctor, date, time, notes. It links to an
+  existing patient by phone or creates one flagged **"ملف غير مكتمل"**
+  (Incomplete Profile), which shows a warning banner in the patient profile
+  until completed. Bookings persist to the `bookings` table
+  (`doctor_id` / `department_id` columns).

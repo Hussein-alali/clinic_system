@@ -315,7 +315,7 @@ function Patients({ go }) {
   });
 
   if (view === "add") return <PatientAdd onCancel={()=>setView("list")} onSave={()=>setView("list")}/>;
-  if (view === "detail" && selected) return <PatientDetail p={selected} onBack={()=>setView("list")} go={go}/>;
+  if (view === "detail" && selected) return <PatientDetail p={selected} onBack={()=>setView("list")} go={go} onEdit={()=>setView("add")}/>;
 
   return (
     <Page>
@@ -342,8 +342,8 @@ function Patients({ go }) {
           <input className="input" placeholder="ابحث بالاسم، رقم الملف، التشخيص…" value={search} onChange={e=>setSearch(e.target.value)} style={{paddingLeft:32}}/>
         </div>
         <div className="seg">
-          {["الكل","نشط","غير نشط"].map(s=>(
-            <button key={s} className={statusFilter===s?"on":""} onClick={()=>setStatusFilter(s)}>{s}</button>
+          {["الكل","نشط","غير نشط",INCOMPLETE_STATUS].map(s=>(
+            <button key={s} className={statusFilter===s?"on":""} onClick={()=>setStatusFilter(s)}>{s===INCOMPLETE_STATUS?"غير مكتمل":s}</button>
           ))}
         </div>
         <button className="btn btn-secondary"><I.Filter size={13}/> 4 مرشحات</button>
@@ -478,7 +478,7 @@ function Patients({ go }) {
 }
 
 // ── PatientDetail ──────────────────────────────────────────────
-function PatientDetail({ p, onBack, go }) {
+function PatientDetail({ p, onBack, go, onEdit }) {
   const [tab, setTab] = React.useState("نظرة عامة");
   // Real per-patient figures (production rows carry no seed metadata).
   const pid = p.patient_id || p.id;
@@ -495,6 +495,15 @@ function PatientDetail({ p, onBack, go }) {
         <span>المرضى</span><I.Chevron size={11}/><span style={{color:"var(--ink-700)"}}>{p.name}</span>
       </div>
 
+      {p.status === INCOMPLETE_STATUS && (
+        <div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 16px",marginTop:8,
+          background:"#FBF3E6",border:"1px solid #F0D9A8",borderRadius:12,color:"#8A5A00"}}>
+          <I.Bell size={16}/>
+          <div style={{flex:1,fontSize:13,fontWeight:500}}>معلومات المريض غير مكتملة — أُنشئ هذا الملف عبر الحجز السريع. أكمل البيانات الناقصة.</div>
+          {onEdit && <button className="btn btn-secondary" style={{fontSize:12}} onClick={onEdit}>إكمال البيانات</button>}
+        </div>
+      )}
+
       <div className="rgrid c-lg" style={{"--gtc":"1fr 340px",gap:24,marginTop:8}}>
         <div>
           {/* hero */}
@@ -506,7 +515,7 @@ function PatientDetail({ p, onBack, go }) {
             <div style={{flex:1,position:"relative",minWidth:220}}>
               <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
                 <h1 className="h1" style={{fontSize:24}}>{p.name}</h1>
-                <span className="badge b-green"><span className="dot"></span>{p.status}</span>
+                <span className={"badge " + (p.status===INCOMPLETE_STATUS?"b-amber":"b-green")}><span className="dot"></span>{p.status}</span>
                 <span className="mono" style={{fontSize:11,color:"var(--ink-500)",border:"1px solid var(--ink-200)",padding:"2px 8px",borderRadius:6}}>{p.id}</span>
               </div>
               <div style={{display:"flex",gap:"8px 18px",marginTop:8,fontSize:12.5,color:"var(--ink-500)",flexWrap:"wrap"}}>
@@ -1340,9 +1349,43 @@ Object.assign(window, { Patients, PatientDetail, SessionTimeline: null });
 // ===== src/appointments.jsx =====
 // Appointments — day calendar grid + booking flow
 
+// ── Booking data helpers (departments / doctors are DB-backed) ──
+const INCOMPLETE_STATUS = "ملف غير مكتمل";
+const DOCTOR_STATUS = {
+  available: { l: "متاح",     c: "#3FA984", badge: "b-green" },
+  busy:      { l: "مشغول",    c: "#D49044", badge: "b-amber" },
+  leave:     { l: "في إجازة", c: "#8898A8", badge: "b-grey" },
+};
+// Departments sorted by their display order, active only.
+function activeDepartments() {
+  return (DATA.departments || [])
+    .filter(d => d.active !== false)
+    .slice()
+    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+}
+// Active doctors assigned to a department.
+function doctorsInDept(deptId) {
+  return (DATA.doctors || []).filter(d => d.active !== false && d.department_id === deptId);
+}
+// Resolve a department's icon name to an icon element (falls back to Layers).
+function deptIcon(name, size = 18) {
+  const Ic = (window.I && window.I[name]) || window.I.Layers;
+  return <Ic size={size}/>;
+}
+// Digits-only phone comparison so "+20 100…" matches "0100…" etc.
+function normalizePhone(p) {
+  return String(p || "").replace(/\D/g, "").replace(/^0+/, "");
+}
+function findPatientByPhone(phone) {
+  const n = normalizePhone(phone);
+  if (!n) return null;
+  return (DATA.patients || []).find(p => normalizePhone(p.phone) === n) || null;
+}
+
 function Appointments({ go }) {
   const [tab, setTab] = React.useState("التقويم"); // calendar | list | book
   const [dateOffset, setDateOffset] = React.useState(0);
+  const [quickOpen, setQuickOpen] = React.useState(false);
 
   const myAppts = window.scopeAppts ? window.scopeAppts(DATA.appts) : DATA.appts;
   const booked = myAppts.filter(a=>a.status!=="متاح").length;
@@ -1366,13 +1409,158 @@ function Appointments({ go }) {
               </button>
             ))}
           </div>
+          <button className="btn btn-blue" onClick={()=>setQuickOpen(true)}><I.Plus size={14}/> حجز سريع</button>
         </div>
       </div>
 
       {tab==="التقويم" && <CalendarView dateOffset={dateOffset} setDateOffset={setDateOffset}/>}
       {tab==="قائمة" && <AppointmentList/>}
       {tab==="حجز" && <BookingFlow onDone={()=>setTab("التقويم")}/>}
+
+      {quickOpen && <QuickBookingModal onClose={()=>setQuickOpen(false)} onDone={()=>{ setQuickOpen(false); setTab("التقويم"); }}/>}
     </Page>
+  );
+}
+
+// ── Quick Booking (حجز سريع) ───────────────────────────────────
+// For phone/WhatsApp bookings where the receptionist has minimal info.
+// Only name, phone, department, doctor, date, time (+ optional notes).
+// Links to an existing patient by phone, or creates one flagged as
+// "ملف غير مكتمل" so it can be completed later without touching bookings.
+function QuickBookingModal({ onClose, onDone }) {
+  const depts = activeDepartments();
+  const [form, setForm] = React.useState({
+    name: "", phone: "", deptId: "", doctorId: "",
+    date: new Date().toISOString().slice(0, 10), time: "", notes: "",
+  });
+  const [busy, setBusy] = React.useState(false);
+  const set = (k, v) => setForm(f => {
+    const next = { ...f, [k]: v };
+    if (k === "deptId") next.doctorId = ""; // reset doctor when dept changes
+    return next;
+  });
+  const deptDoctors = form.deptId ? doctorsInDept(form.deptId) : [];
+
+  async function save() {
+    const name = form.name.trim();
+    const phone = form.phone.trim();
+    if (!name)  return window.showToast && window.showToast("أدخل اسم المريض", "error");
+    if (!phone) return window.showToast && window.showToast("أدخل رقم الهاتف", "error");
+    if (!form.deptId)   return window.showToast && window.showToast("اختر القسم", "error");
+    if (!form.doctorId) return window.showToast && window.showToast("اختر الطبيب", "error");
+    if (!form.date)     return window.showToast && window.showToast("اختر التاريخ", "error");
+    if (!form.time)     return window.showToast && window.showToast("اختر الوقت", "error");
+
+    setBusy(true);
+    try {
+      // 1. Resolve or create the patient (by phone).
+      let patient = findPatientByPhone(phone);
+      let createdNew = false;
+      if (!patient) {
+        const pid = "P-" + Date.now().toString().slice(-8);
+        patient = await window.KineticData.upsert("patients", {
+          patient_id: pid, name, phone,
+          diagnosis: "", notes: "حجز سريع — بيانات ناقصة",
+          status: INCOMPLETE_STATUS,
+          registered: new Date().toISOString().slice(0, 10),
+          created_at: new Date().toISOString(),
+        });
+        createdNew = true;
+      }
+      const patientId = patient.patient_id || patient.id;
+
+      // 2. Create the appointment linked to that patient.
+      const doctor = (DATA.doctors || []).find(d => d.id === form.doctorId);
+      const dept = depts.find(d => d.id === form.deptId);
+      const bid = "A-" + Date.now().toString().slice(-8);
+      await window.KineticData.upsert("appts", {
+        booking_id: bid,
+        patient_id: patientId,
+        patient: patient.name || name,
+        doctor_id: form.doctorId,
+        department_id: form.deptId,
+        dr: doctor ? doctor.name : "",
+        dept: dept ? dept.name_ar : "",
+        date: form.date,
+        time: form.time,
+        status: "مؤكد",
+        type: dept ? dept.name_ar : "",
+        notes: form.notes.trim(),
+        dur: 30,
+        created_at: new Date().toISOString(),
+      });
+
+      window.showToast && window.showToast(
+        createdNew ? "تم الحجز وإنشاء ملف مبدئي للمريض" : "تم الحجز وربطه بملف المريض",
+        "success"
+      );
+      onDone && onDone();
+    } catch (e) {
+      console.warn("quick booking failed", e);
+      window.showToast && window.showToast("تعذّر إتمام الحجز", "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const existing = findPatientByPhone(form.phone);
+
+  return (
+    <Modal title="حجز سريع" onClose={onClose} width={560}
+      footer={<>
+        <button className="btn btn-ghost" onClick={onClose}>إلغاء</button>
+        <button className="btn btn-blue" disabled={busy} onClick={save}>
+          {busy ? <span className="spin" style={{width:14,height:14,border:"2px solid #fff",borderTopColor:"transparent",borderRadius:"50%"}}/> : <><I.Check size={13}/> تأكيد الحجز</>}
+        </button>
+      </>}>
+      <div className="muted" style={{fontSize:12.5,marginBottom:14,lineHeight:1.6,padding:"10px 12px",background:"var(--blue-50)",border:"1px solid var(--blue-100)",borderRadius:8}}>
+        للحجوزات الهاتفية والواتساب — أدخل الحد الأدنى من البيانات فقط. يُستكمل ملف المريض لاحقًا.
+      </div>
+      <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
+        <Field label="اسم المريض" required>
+          <input className="input" value={form.name} onChange={e=>set("name", e.target.value)} placeholder="الاسم الكامل" autoFocus/>
+        </Field>
+        <Field label="رقم الهاتف" required>
+          <input className="input" value={form.phone} onChange={e=>set("phone", e.target.value)} placeholder="+20 1xx xxx xxxx" dir="ltr" style={{textAlign:"right"}}/>
+        </Field>
+      </div>
+      {existing && (
+        <div style={{fontSize:12,color:"var(--green)",margin:"2px 0 10px",display:"flex",alignItems:"center",gap:6}}>
+          <I.Check size={12}/> رقم معروف — سيُربط الحجز بملف <strong>{existing.name}</strong>
+        </div>
+      )}
+      <div style={{height:2}}/>
+      <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
+        <Field label="القسم" required>
+          <select className="input" value={form.deptId} onChange={e=>set("deptId", e.target.value)}>
+            <option value="">اختر القسم…</option>
+            {depts.map(d=>{
+              const n = doctorsInDept(d.id).length;
+              return <option key={d.id} value={d.id} disabled={n===0}>{d.name_ar}{n===0?" (لا أطباء)":""}</option>;
+            })}
+          </select>
+        </Field>
+        <Field label="الطبيب" required>
+          <select className="input" value={form.doctorId} onChange={e=>set("doctorId", e.target.value)} disabled={!form.deptId}>
+            <option value="">{form.deptId ? "اختر الطبيب…" : "اختر القسم أولاً"}</option>
+            {deptDoctors.map(d=>(
+              <option key={d.id} value={d.id}>{d.name}{d.specialization?` — ${d.specialization}`:""}</option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
+        <Field label="التاريخ" required>
+          <input className="input" type="date" value={form.date} onChange={e=>set("date", e.target.value)}/>
+        </Field>
+        <Field label="الوقت" required>
+          <input className="input" type="time" value={form.time} onChange={e=>set("time", e.target.value)}/>
+        </Field>
+      </div>
+      <Field label="ملاحظات (اختياري)">
+        <textarea className="input" rows={2} style={{padding:10,resize:"vertical"}} value={form.notes} onChange={e=>set("notes", e.target.value)} placeholder="سبب الزيارة، تفضيلات الموعد…"/>
+      </Field>
+    </Modal>
   );
 }
 
@@ -1835,12 +2023,71 @@ function AppointmentList() {
 }
 
 // ── BookingFlow — 5 steps ──────────────────────────────────────
+// Standard hourly slots used for "next available" hints.
+const STD_SLOTS = ["09:00","10:00","11:00","12:00","13:00","14:00","15:00","16:00","17:00"];
+// Earliest free standard slot for a doctor across the next 14 days.
+function nextAvailableLabel(doctorId) {
+  for (let i = 0; i < 14; i++) {
+    const d = new Date(Date.now() + i * 864e5);
+    const iso = d.toISOString().slice(0, 10);
+    const booked = new Set((DATA.appts || [])
+      .filter(a => a.doctor_id === doctorId && a.date === iso && a.status !== "ملغي")
+      .map(a => a.time));
+    const free = STD_SLOTS.find(t => !booked.has(t));
+    if (free) {
+      const lbl = i === 0 ? "اليوم" : i === 1 ? "غدًا" : d.toLocaleDateString("ar-EG", { day: "numeric", month: "short" });
+      return `${lbl} ${free}`;
+    }
+  }
+  return "لا يوجد قريبًا";
+}
+
+// ── BookingFlow — 5 steps, all DB-driven, persists on confirm ──
 function BookingFlow({ onDone }) {
   const [step, setStep] = React.useState(1);
-  const [picks, setPicks] = React.useState({ dept:null, doctor:null, therapist:null, date:null, slot:null });
-  const steps = ["القسم","طبيب","الأخصائي","التاريخ","Time"];
+  const [picks, setPicks] = React.useState({ deptId:null, doctorId:null, therapist:null, date:null, slot:null, patientId:null, notes:"" });
+  const [busy, setBusy] = React.useState(false);
+  const steps = ["القسم","الطبيب","الأخصائي","التاريخ","الوقت"];
+  const update = (patch) => setPicks(p => ({ ...p, ...patch }));
+  const therapists = window.scopeTherapists ? window.scopeTherapists(DATA.therapists) : DATA.therapists;
 
-  function next() { if (step<5) setStep(step+1); else onDone(); }
+  async function confirm() {
+    if (!picks.date) return window.showToast && window.showToast("اختر التاريخ", "error");
+    if (!picks.slot) return window.showToast && window.showToast("اختر الوقت", "error");
+    if (!picks.patientId) return window.showToast && window.showToast("اختر المريض", "error");
+    setBusy(true);
+    try {
+      const doctor = (DATA.doctors || []).find(d => d.id === picks.doctorId);
+      const dept = (DATA.departments || []).find(d => d.id === picks.deptId);
+      const patient = (DATA.patients || []).find(p => (p.patient_id || p.id) === picks.patientId);
+      const therapistRow = (DATA.therapists || []).find(t => t.name === picks.therapist);
+      await window.KineticData.upsert("appts", {
+        booking_id: "A-" + Date.now().toString().slice(-8),
+        patient_id: picks.patientId,
+        patient: patient ? patient.name : "",
+        doctor_id: picks.doctorId || null,
+        department_id: picks.deptId || null,
+        therapist_id: therapistRow ? therapistRow.id : null,
+        dr: doctor ? doctor.name : "",
+        th: picks.therapist || "",
+        dept: dept ? dept.name_ar : "",
+        date: picks.date,
+        time: picks.slot,
+        status: "مؤكد",
+        type: dept ? dept.name_ar : "",
+        notes: picks.notes || "",
+        dur: 45,
+        created_at: new Date().toISOString(),
+      });
+      window.showToast && window.showToast("تم تأكيد الحجز", "success");
+      onDone && onDone();
+    } catch (e) {
+      console.warn("booking failed", e);
+      window.showToast && window.showToast("تعذّر الحجز", "error");
+    } finally { setBusy(false); }
+  }
+
+  function next() { if (step < 5) setStep(step + 1); else confirm(); }
 
   return (
     <div>
@@ -1865,36 +2112,16 @@ function BookingFlow({ onDone }) {
       </div>
 
       <div className="card card-pad" style={{minHeight:420,marginBottom:18}}>
-        {step===1 && <PickGrid title="اختر القسم"
-          items={[
-            { id:"ortho", l:"تأهيل عظام",   sub:"مفاصل، عمود فقري، بعد العمليات",            ic:<I.Stethoscope size={18}/>, count:"3 أطباء" },
-            { id:"sport", l:"إصابة رياضية",       sub:"رباط صليبي، غضروف، عضلات خلفية",          ic:<I.Activity size={18}/>,    count:"2 أطباء" },
-            { id:"neuro", l:"أعصاب",        sub:"جلطة، باركنسون، تصلب",             ic:<I.Heart size={18}/>,       count:"1 طبيب" },
-            { id:"pedi",  l:"أطفال",           sub:"تأخر نمو، مشي",         ic:<I.Users size={18}/>,       count:"1 طبيب" },
-            { id:"chron", l:"أمراض مزمنة pain",        sub:"أسفل الظهر، الرقبة، فيبروميالجيا",    ic:<I.Sparkle size={18}/>,     count:"3 أطباء" },
-            { id:"women", l:"صحة المرأة",      sub:"حمل، بعد الولادة، قاع الحوض",ic:<I.Heart size={18}/>,       count:"1 طبيب" },
-          ]}
-          onPick={v=>{ setPicks({...picks,dept:v}); next();}}
-          selected={picks.dept}
-        />}
-        {step===2 && <PickGrid title="اختر طبيبًا"
-          items={[
-            { id:"ya",   l:"د. ياسمين عادل",  sub:"تأهيل عظام · 12 yrs",  ic:"YA", color:"#7BBDE8", count:"Next: tomorrow 09:00" },
-            { id:"mr",   l:"د. مهند رشدي",   sub:"تأهيل بعد العمليات · 8 yrs",      ic:"MR", color:"#7E6BD3", count:"Next: today 11:15" },
-            { id:"tn",   l:"د. طارق نور",   sub:"إصابات رياضية · 15 سنة",   ic:"TN", color:"#3FA984", count:"Next: tomorrow 13:30" },
-          ]}
+        {step===1 && <DepartmentPick selected={picks.deptId} onPick={id=>{ update({deptId:id, doctorId:null}); next(); }}/>}
+        {step===2 && <DoctorPick deptId={picks.deptId} selected={picks.doctorId} onPick={id=>{ update({doctorId:id}); next(); }} onBack={()=>setStep(1)}/>}
+        {step===3 && (therapists.length ? <PickGrid title="اختر أخصائيًا"
+          items={therapists.map(t=>({ id:t.name, l:t.name, sub:`${t.spec} · حمل ${t.load}/${t.max}`, ic:t.name.split(" ").map(x=>x[0]).join(""), color:t.color, count:`${t.max-t.load} فترة متاحة` }))}
           avatar
-          onPick={v=>{ setPicks({...picks,doctor:v}); next();}}
-          selected={picks.doctor}
-        />}
-        {step===3 && <PickGrid title="اختر أخصائيًا"
-          items={DATA.therapists.map(t=>({ id:t.name, l:t.name, sub:`${t.spec} · حمل ${t.load}/${t.max}`, ic:t.name.split(" ").map(x=>x[0]).join(""), color:t.color, count:`${t.max-t.load} open slots` }))}
-          avatar
-          onPick={v=>{ setPicks({...picks,therapist:v}); next();}}
+          onPick={v=>{ update({therapist:v}); next();}}
           selected={picks.therapist}
-        />}
-        {step===4 && <DatePick onPick={v=>{ setPicks({...picks,date:v}); next();}}/>}
-        {step===5 && <SlotPick onPick={v=>{ setPicks({...picks,slot:v}); next();}} picks={picks}/>}
+        /> : <EmptyState icon={<I.Users size={22}/>} title="لا أخصائيين بعد" body="أضف الأخصائيين من الإعدادات."/>)}
+        {step===4 && <DatePick value={picks.date} onPick={v=>{ update({date:v}); next();}}/>}
+        {step===5 && <SlotPick picks={picks} update={update}/>}
       </div>
 
       <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
@@ -1903,10 +2130,99 @@ function BookingFlow({ onDone }) {
         </button>
         <div style={{display:"flex",gap:10}}>
           <button className="btn btn-ghost" onClick={onDone}>إلغاء</button>
-          <button className="btn btn-blue" onClick={next}>
-            {step<5 ? "متابعة" : "تأكيد الحجز"} <I.ArrowRight size={13}/>
+          <button className="btn btn-blue" disabled={busy} onClick={next}>
+            {busy ? <span className="spin" style={{width:14,height:14,border:"2px solid #fff",borderTopColor:"transparent",borderRadius:"50%"}}/> : <>{step<5 ? "متابعة" : "تأكيد الحجز"} <I.ArrowRight size={13}/></>}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Step 1 — departments from the DB with live active-doctor counts.
+function DepartmentPick({ selected, onPick }) {
+  const depts = activeDepartments();
+  if (depts.length === 0) {
+    return <EmptyState icon={<I.Layers size={22}/>} title="لا أقسام بعد" body="تُضاف الأقسام من قاعدة البيانات ثم تظهر هنا تلقائيًا."/>;
+  }
+  return (
+    <div>
+      <div className="h2" style={{marginBottom:18}}>اختر القسم</div>
+      <div className="grid-3" style={{gap:14}}>
+        {depts.map(d=>{
+          const n = doctorsInDept(d.id).length;
+          const disabled = n === 0;
+          const isSel = selected === d.id;
+          return (
+            <button key={d.id} disabled={disabled} onClick={()=>onPick(d.id)}
+              style={{
+                padding:18,textAlign:"left",cursor:disabled?"not-allowed":"pointer",opacity:disabled?.55:1,
+                border:`1px solid ${isSel?"var(--blue-500)":"var(--ink-200)"}`,
+                borderRadius:14,background: isSel?"var(--blue-50)":"#fff",
+                display:"flex",flexDirection:"column",gap:10, transition:"all .15s"
+              }}>
+              <div className="av lg" style={{background:(d.color||"#7BBDE8")+"22",color:d.color||"var(--blue-700)"}}>{deptIcon(d.icon)}</div>
+              <div>
+                <div style={{fontWeight:600,fontSize:14.5}}>{d.name_ar}</div>
+                <div className="muted" style={{fontSize:12,marginTop:3}}>{d.description}</div>
+              </div>
+              <div style={{marginTop:"auto",fontSize:11.5,color:disabled?"var(--ink-400)":"var(--blue-700)",display:"flex",alignItems:"center",gap:4}}>
+                <span className="dot" style={{background:disabled?"var(--ink-400)":"var(--blue-700)"}}></span>{n} {n===1?"طبيب":"أطباء"}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Step 2 — active doctors in the chosen department, rich cards + empty state.
+function DoctorPick({ deptId, selected, onPick, onBack }) {
+  const doctors = deptId ? doctorsInDept(deptId) : [];
+  if (doctors.length === 0) {
+    return (
+      <div>
+        <div className="h2" style={{marginBottom:8}}>اختر طبيبًا</div>
+        <EmptyState icon={<I.Stethoscope size={22}/>} title="لا أطباء في هذا القسم"
+          body="اختر قسمًا آخر أو عُد للخطوة السابقة."
+          action={<button className="btn btn-secondary" onClick={onBack}><I.ArrowLeft size={13}/> رجوع للأقسام</button>}/>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <div className="h2" style={{marginBottom:18}}>اختر طبيبًا</div>
+      <div className="grid-3" style={{gap:14}}>
+        {doctors.map(d=>{
+          const st = DOCTOR_STATUS[d.status] || DOCTOR_STATUS.available;
+          const isSel = selected === d.id;
+          return (
+            <button key={d.id} onClick={()=>onPick(d.id)}
+              style={{
+                padding:16,textAlign:"left",cursor:"pointer",
+                border:`1px solid ${isSel?"var(--blue-500)":"var(--ink-200)"}`,
+                borderRadius:14,background: isSel?"var(--blue-50)":"#fff",
+                display:"flex",flexDirection:"column",gap:8, transition:"all .15s"
+              }}>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                {d.photo
+                  ? <img src={d.photo} alt="" style={{width:44,height:44,borderRadius:12,objectFit:"cover"}}/>
+                  : <div className="av lg" style={{background:(d.color||"#7BBDE8")+"33",color:d.color||"var(--blue-700)"}}>{(d.name||"").replace("د. ","").split(" ").map(x=>x[0]||"").join("").slice(0,2)}</div>}
+                <div style={{minWidth:0}}>
+                  <div style={{fontWeight:600,fontSize:14}}>{d.name}</div>
+                  <div className="muted" style={{fontSize:11.5}}>{d.specialization || "—"}</div>
+                </div>
+              </div>
+              <div className="muted" style={{fontSize:11.5,display:"flex",alignItems:"center",gap:5}}><I.Activity size={12}/> خبرة {d.experience_years||0} سنة</div>
+              {d.schedule && <div className="muted" style={{fontSize:11.5,display:"flex",alignItems:"center",gap:5}}><I.Clock size={12}/> {d.schedule}</div>}
+              <div style={{marginTop:"auto",display:"flex",alignItems:"center",justifyContent:"space-between",gap:6,paddingTop:6}}>
+                <span className={"badge " + st.badge}><span className="dot"></span>{st.l}</span>
+                <span className="mono" style={{fontSize:11,color:"var(--blue-700)"}}>أقرب: {nextAvailableLabel(d.id)}</span>
+              </div>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -1947,36 +2263,44 @@ function PickGrid({ title, items, onPick, selected, avatar }) {
   );
 }
 
-function DatePick({ onPick }) {
-  // Simple month calendar for مايو 2026
+function DatePick({ value, onPick }) {
+  const [viewMonth, setViewMonth] = React.useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
   const days = ["أحد","إثن","ثلا","أرب","خمي","جمع","سبت"];
-  const startDow = 5; // May 1 is Friday
-  const total = 31;
-  const [pick, setPick] = React.useState(26);
+  const y = viewMonth.getFullYear(), m = viewMonth.getMonth();
+  const startDow = new Date(y, m, 1).getDay();
+  const total = new Date(y, m + 1, 0).getDate();
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const iso = (n) => `${y}-${String(m+1).padStart(2,"0")}-${String(n).padStart(2,"0")}`;
+  const monthLabel = viewMonth.toLocaleDateString("ar-EG", { month: "long", year: "numeric" });
+  const quick = [
+    { l:"اليوم", d: todayIso },
+    { l:"غدًا", d: new Date(Date.now()+864e5).toISOString().slice(0,10) },
+    { l:"بعد غد", d: new Date(Date.now()+2*864e5).toISOString().slice(0,10) },
+  ];
   return (
     <div>
       <div className="h2" style={{marginBottom:18}}>اختر تاريخًا</div>
       <div className="rgrid c-lg" style={{"--gtc":"1.4fr 1fr",gap:24}}>
         <div className="card" style={{padding:18,boxShadow:"none"}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
-            <button className="btn btn-ghost btn-icon"><I.ArrowLeft size={14}/></button>
-            <div className="h3">مايو 2026</div>
-            <button className="btn btn-ghost btn-icon"><I.ArrowRight size={14}/></button>
+            <button className="btn btn-ghost btn-icon" aria-label="الشهر السابق" onClick={()=>setViewMonth(new Date(y,m-1,1))}><I.ArrowRight size={14}/></button>
+            <div className="h3">{monthLabel}</div>
+            <button className="btn btn-ghost btn-icon" aria-label="الشهر التالي" onClick={()=>setViewMonth(new Date(y,m+1,1))}><I.ArrowLeft size={14}/></button>
           </div>
           <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:6}}>
             {days.map((d,i)=>(<div key={i} className="muted" style={{textAlign:"center",fontSize:11,padding:"6px 0"}}>{d}</div>))}
             {Array.from({length:startDow}).map((_,i)=>(<div key={"e"+i}></div>))}
             {Array.from({length:total},(_,i)=>i+1).map(n=>{
-              const isPast = n < 24;
-              const isWeekend = (startDow + n - 1) % 7 === 0 || (startDow + n - 1) % 7 === 6;
-              const isSel = n === pick;
+              const dIso = iso(n);
+              const isPast = dIso < todayIso;
+              const isSel = value === dIso;
               return (
-                <button key={n} disabled={isPast} onClick={()=>{setPick(n);onPick(`May ${n}, 2026`);}}
+                <button key={n} disabled={isPast} onClick={()=>onPick(dIso)}
                   style={{
                     height:38,borderRadius:9,cursor:isPast?"default":"pointer",
                     border:isSel?"1px solid var(--blue-500)":"1px solid transparent",
                     background: isSel?"var(--blue-500)":"transparent",
-                    color: isSel?"#fff":isPast?"var(--ink-300)":isWeekend?"var(--ink-500)":"var(--ink-900)",
+                    color: isSel?"#fff":isPast?"var(--ink-300)":"var(--ink-900)",
                     fontWeight:isSel?600:500,fontSize:13
                   }} className="mono">{n}</button>
               );
@@ -1986,14 +2310,14 @@ function DatePick({ onPick }) {
         <div>
           <div className="label">اختيار سريع</div>
           <div style={{display:"flex",flexDirection:"column",gap:8}}>
-            {["غدًا، 25 مايو","هذا الأسبوع (أي يوم)","الإثنين القادم، 1 يونيو","نطاق مخصص…"].map((q,i)=>(
-              <button key={q} className="btn btn-secondary" style={{justifyContent:"flex-start",padding:"11px 14px"}}>
-                <I.Calendar size={14}/> {q}
+            {quick.map(q=>(
+              <button key={q.l} className="btn btn-secondary" style={{justifyContent:"flex-start",padding:"11px 14px"}} onClick={()=>onPick(q.d)}>
+                <I.Calendar size={14}/> {q.l}
               </button>
             ))}
           </div>
           <div style={{padding:14,background:"var(--blue-50)",border:"1px solid var(--blue-100)",borderRadius:12,marginTop:18,fontSize:12.5}}>
-            <strong>لماذا نسأل:</strong> اختيار تاريخ يساعدنا على عرض الأوقات المتاحة فعلًا لكريم صالح فقط.
+            اختيار التاريخ يعرض الأوقات المتاحة فعليًا للطبيب المحدد فقط.
           </div>
         </div>
       </div>
@@ -2001,62 +2325,64 @@ function DatePick({ onPick }) {
   );
 }
 
-function SlotPick({ onPick, picks }) {
-  const morning = ["08:30","09:00","09:30","10:00","10:30","11:00","11:30"];
-  const afternoon = ["13:00","13:30","14:00","14:30","15:00","15:30","16:00","16:30","17:00"];
-  const unavail = new Set(["09:30","11:00","14:30","16:30"]);
-  const [pick, setPick] = React.useState("10:00");
+function SlotPick({ picks, update }) {
+  const ALL = ["08:30","09:00","09:30","10:00","10:30","11:00","11:30","12:00","13:00","13:30","14:00","14:30","15:00","15:30","16:00","16:30","17:00"];
+  const morning = ALL.filter(t => t < "12:00");
+  const afternoon = ALL.filter(t => t >= "12:00");
+  const patients = (window.scopePatients ? window.scopePatients(DATA.patients) : DATA.patients) || [];
+  const doctor = (DATA.doctors || []).find(d => d.id === picks.doctorId);
+  const dept = (DATA.departments || []).find(d => d.id === picks.deptId);
+  // Slots already taken for this doctor on the chosen date (real bookings).
+  const booked = new Set((DATA.appts || [])
+    .filter(a => a.doctor_id === picks.doctorId && a.date === picks.date && a.status !== "ملغي" && a.status !== "متاح")
+    .map(a => a.time));
+  const patient = patients.find(p => (p.patient_id || p.id) === picks.patientId);
+
+  const SlotBtn = ({ t }) => {
+    const u = booked.has(t);
+    const sel = picks.slot === t;
+    return (
+      <button disabled={u} onClick={()=>update({ slot: t })} className="mono"
+        style={{
+          padding:"10px 16px",borderRadius:10,border:"1px solid var(--ink-200)",
+          background: sel?"var(--blue-500)":u?"var(--ink-100)":"#fff",
+          color: sel?"#fff":u?"var(--ink-300)":"var(--ink-900)",
+          textDecoration:u?"line-through":"none",
+          cursor:u?"not-allowed":"pointer", fontSize:13, fontWeight:500
+        }}>{t}</button>
+    );
+  };
+
   return (
     <div>
-      <div className="h2" style={{marginBottom:6}}>اختر وقتًا</div>
-      <div className="muted" style={{marginBottom:18,fontSize:13}}>عرض المتاح حالياً لكريم صالح · الثلاثاء 26 مايو · جلسات 45 دقيقة</div>
+      <div className="h2" style={{marginBottom:6}}>اختر الوقت والمريض</div>
+      <div className="muted" style={{marginBottom:18,fontSize:13}}>
+        {doctor ? `المتاح لـ${doctor.name}` : "المتاح"} · {picks.date || "—"} · جلسات 45 دقيقة
+      </div>
+
+      <div className="label">المريض</div>
+      <div style={{marginBottom:18,maxWidth:420}}>
+        <PatientCombobox value={picks.patientId || ""} onChange={id=>update({ patientId: id })} patients={patients}/>
+      </div>
 
       <div className="label">الصباح</div>
-      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:18}}>
-        {morning.map(t=>{
-          const u = unavail.has(t);
-          const sel = pick === t;
-          return (
-            <button key={t} disabled={u} onClick={()=>{setPick(t);onPick(t);}}
-              style={{
-                padding:"10px 16px",borderRadius:10,
-                border:`1px solid ${sel?"var(--blue-500)":u?"var(--ink-200)":"var(--ink-200)"}`,
-                background: sel?"var(--blue-500)":u?"var(--ink-100)":"#fff",
-                color: sel?"#fff":u?"var(--ink-300)":"var(--ink-900)",
-                textDecoration:u?"line-through":"none",
-                cursor:u?"not-allowed":"pointer", fontSize:13, fontWeight:500
-              }} className="mono">{t}</button>
-          );
-        })}
-      </div>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:18}}>{morning.map(t=><SlotBtn key={t} t={t}/>)}</div>
 
       <div className="label">بعد الظهر</div>
-      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:18}}>
-        {afternoon.map(t=>{
-          const u = unavail.has(t);
-          const sel = pick === t;
-          return (
-            <button key={t} disabled={u} onClick={()=>{setPick(t);onPick(t);}}
-              style={{
-                padding:"10px 16px",borderRadius:10,
-                border:`1px solid ${sel?"var(--blue-500)":u?"var(--ink-200)":"var(--ink-200)"}`,
-                background: sel?"var(--blue-500)":u?"var(--ink-100)":"#fff",
-                color: sel?"#fff":u?"var(--ink-300)":"var(--ink-900)",
-                textDecoration:u?"line-through":"none",
-                cursor:u?"not-allowed":"pointer", fontSize:13, fontWeight:500
-              }} className="mono">{t}</button>
-          );
-        })}
-      </div>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:18}}>{afternoon.map(t=><SlotBtn key={t} t={t}/>)}</div>
+
+      <div className="label">ملاحظات (اختياري)</div>
+      <textarea className="input" rows={2} style={{padding:10,resize:"vertical",marginBottom:8}} value={picks.notes || ""} onChange={e=>update({ notes: e.target.value })} placeholder="سبب الزيارة…"/>
 
       <div style={{padding:18,background:"var(--ink-50)",borderRadius:12,marginTop:8}}>
         <div className="h3" style={{marginBottom:10}}>ملخّص الحجز</div>
         <div className="grid-4" style={{fontSize:12.5}}>
-          <div><div className="muted">القسم</div><div>تأهيل عظام</div></div>
-          <div><div className="muted">الطبيب</div><div>د. ياسمين عادل</div></div>
-          <div><div className="muted">الأخصائي</div><div>كريم صالح</div></div>
-          <div><div className="muted">وقت</div><div className="mono">Tue May 26 · {pick}</div></div>
+          <div><div className="muted">القسم</div><div>{dept?dept.name_ar:"—"}</div></div>
+          <div><div className="muted">الطبيب</div><div>{doctor?doctor.name:"—"}</div></div>
+          <div><div className="muted">الأخصائي</div><div>{picks.therapist||"—"}</div></div>
+          <div><div className="muted">الوقت</div><div className="mono">{picks.date||"—"} {picks.slot||""}</div></div>
         </div>
+        <div style={{marginTop:8,fontSize:12.5}}><span className="muted">المريض: </span>{patient?patient.name:"—"}</div>
       </div>
     </div>
   );
