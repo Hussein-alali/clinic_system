@@ -376,25 +376,7 @@ function SessionDetail({ s, elapsed, update, onEnd, onTogglePause }){
         </div>
 
         <div className="card card-pad">
-          <div className="h3" style={{marginBottom:6}}>توقيع المريض</div>
-          <div className="muted" style={{fontSize:12,marginBottom:12}}>مطلوب لإنهاء الجلسة وخصم الباقة.</div>
-          <div onClick={()=>update({signed:!s.signed})}
-            style={{height:110,border:`1.5px dashed ${s.signed?"var(--green)":"var(--ink-300)"}`,borderRadius:12,
-              background:s.signed?"var(--green-bg)":"var(--ink-50)",display:"flex",alignItems:"center",
-              justifyContent:"center",cursor:"pointer",transition:"all .15s"}}>
-            {s.signed ? (
-              <svg viewBox="0 0 240 80" width="180" height="56">
-                <path d="M10 50 C 30 20, 50 70, 70 40 S 110 10, 130 45 S 180 70, 210 30" fill="none" stroke="var(--ink-900)" strokeWidth="2" strokeLinecap="round"/>
-              </svg>
-            ) : (
-              <div style={{textAlign:"center",color:"var(--ink-500)"}}>
-                <I.Edit size={18} style={{marginBottom:6}}/>
-                <div style={{fontSize:12.5}}>اضغط للتوقيع أو مرّر للمريض</div>
-              </div>
-            )}
-          </div>
-          {s.signed && <div style={{display:"flex",alignItems:"center",gap:8,marginTop:10,fontSize:12,color:"var(--green)"}}><I.Check size={13}/> وُقّع بواسطة {initials2(p.name)} · {fmtClock(elapsed)}</div>}
-          <button className="btn btn-blue" style={{width:"100%",justifyContent:"center",marginTop:14}} disabled={!s.signed} onClick={onEnd}>
+          <button className="btn btn-blue" style={{width:"100%",justifyContent:"center"}} onClick={onEnd}>
             <I.Check size={14}/> إنهاء الجلسة
           </button>
         </div>
