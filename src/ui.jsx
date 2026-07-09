@@ -925,7 +925,9 @@ function isDemoMode() {
 function AuthScreen({ onLogin, onBookAsGuest }) {
   // ── State ──────────────────────────────────────────────────
   const [mode, setMode] = React.useState("login"); // login | forgot | reset
-  const [email, setEmail] = React.useState("amir@kinetic.eg");
+  // Prefill a sample account only in demo; production starts blank so no
+  // specific account is hardcoded in the UI.
+  const [email, setEmail] = React.useState(isDemoMode() ? "amir@kinetic.eg" : "");
   // Empty by default. The placeholder bullets used to seed this field
   // caused a real password containing "•" to bypass Supabase Auth.
   const [pw, setPw] = React.useState("");
@@ -1162,7 +1164,7 @@ function AuthScreen({ onLogin, onBookAsGuest }) {
                 سنرسل رابطًا لمرة واحدة إلى بريدك المسجّل.
               </div>
               <div className="label">البريد الإلكتروني</div>
-              <input className="input" type="email" defaultValue="amir@kinetic.eg" style={{height:42,marginBottom:18}}/>
+              <input className="input" type="email" defaultValue={isDemoMode() ? "amir@kinetic.eg" : ""} placeholder="you@clinic.com" style={{height:42,marginBottom:18}}/>
               <button className="btn btn-blue" style={{width:"100%",height:44,justifyContent:"center"}} onClick={()=>setMode("login")}>
                 إرسال رابط الإعادة <I.ArrowRight size={15}/>
               </button>

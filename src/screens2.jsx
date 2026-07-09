@@ -716,17 +716,21 @@ function ReceiptsView() {
 }
 
 function InvoiceModal({ invoice, onClose }) {
+  const clinic = window.CLINIC || {};
+  const clinicName = clinic.name || "العيادة";
+  const lineDesc = invoice.desc || "خدمات علاجية";
+  const waPhone = String(clinic.phone || "").replace(/\D/g, "");
   return (
     <Modal open onClose={onClose} title={`فاتورة ${invoice.id}`} width={680}
       footer={<>
         <button className="btn btn-secondary" onClick={()=>window.print()}><I.Print size={13}/> طباعة</button>
         <button className="btn btn-secondary" onClick={()=>{
-          const rows=["البند,الكمية,السعر","الأساسية 10 — علاج يدوي,1,"+invoice.amount];
+          const rows=["البند,الكمية,السعر",`${lineDesc},1,${invoice.amount}`];
           downloadCsv(rows, `invoice-${invoice.id}.csv`);
           if(window.showToast)window.showToast("تم تحميل الفاتورة","success");
         }}><I.Download size={13}/> تحميل PDF</button>
-        <button className="btn btn-blue" onClick={()=>{
-          window.open(`https://wa.me/201002341180?text=فاتورة+${invoice.id}+بمبلغ+${invoice.amount}+جنيه+مصري`,"_blank");
+        <button className="btn btn-blue" disabled={!waPhone} onClick={()=>{
+          window.open(`https://wa.me/${waPhone}?text=فاتورة+${invoice.id}+بمبلغ+${invoice.amount}+جنيه+مصري`,"_blank");
         }}><I.Send size={13}/> Send via واتساب</button>
       </>}>
       <div style={{padding:"clamp(14px, 3vw, 24px)",background:"var(--ink-50)",border:"1px solid var(--ink-200)",borderRadius:12}}>
@@ -735,12 +739,12 @@ function InvoiceModal({ invoice, onClose }) {
           <div>
             <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
               <I.Logo size={26}/>
-              <span style={{fontSize:18,fontWeight:600}}>كينيتك للعلاج الطبيعي</span>
+              <span style={{fontSize:18,fontWeight:600}}>{clinicName}</span>
             </div>
             <div className="muted" style={{fontSize:12,lineHeight:1.5}}>
-              14 ش صلاح سالم, مصر الجديدة<br/>
-              القاهرة، مصر · الرقم الضريبي 514-203-091<br/>
-              billing@kinetic.eg
+              {clinic.address && <>{clinic.address}<br/></>}
+              {clinic.tax_id && <>الرقم الضريبي {clinic.tax_id}<br/></>}
+              {clinic.email || ""}
             </div>
           </div>
           <div style={{textAlign:"right"}}>
@@ -801,7 +805,7 @@ function NewInvoiceModal({ onClose }) {
   const patients = (window.scopePatients ? window.scopePatients(DATA.patients) : DATA.patients) || [];
   const today = new Date().toISOString().slice(0,10);
   const dueDefault = new Date(Date.now() + 14*86400000).toISOString().slice(0,10);
-  const [items, setItems] = React.useState([{ name:"الأساسية 10 — علاج يدوي", qty:1, price:7250 }]);
+  const [items, setItems] = React.useState([{ name:"", qty:1, price:0 }]);
   const [patientId, setPatientId] = React.useState(patients[0] ? (patients[0].patient_id || patients[0].id) : "");
   const [date, setDate] = React.useState(today);
   const [due, setDue] = React.useState(dueDefault);
@@ -1473,11 +1477,12 @@ function CampaignAnalytics({ c, onBack }) {
         </div>
         <div className="card card-pad">
           <div className="h2" style={{marginBottom:14}}>رسائل فاشلة</div>
-          {[
+          {!window.IS_DEMO && <div className="muted" style={{fontSize:13,padding:"14px 0"}}>لا رسائل فاشلة — تُعرض التسليمات المرتدة هنا بعد ربط واتساب للأعمال.</div>}
+          {(window.IS_DEMO ? [
             {p:"+20 100 ███ ███",r:"Invalid واتساب number"},
             {p:"+20 122 ███ ███",r:"المستخدم حظر الحساب"},
             {p:"+20 101 ███ ███",r:"Number not on واتساب"},
-          ].map((f,i)=>(
+          ] : []).map((f,i)=>(
             <div key={i} style={{padding:"10px 0",borderBottom:i<2?"1px dashed var(--ink-100)":"none",display:"flex",alignItems:"center",gap:10}}>
               <I.X size={14} style={{color:"var(--red)"}}/>
               <span className="mono" style={{fontSize:12.5,flex:1}}>{f.p}</span>
@@ -1801,6 +1806,7 @@ function SettingsPage({ go }) {
             { id:"clinic",   l:"بيانات العيادة",   ic:<I.MapPin size={14}/>},
             { id:"branding", l:"الهوية البصرية",         ic:<I.Image size={14}/>},
             { id:"sections", l:"أقسام مخصصة",       ic:<I.Layers size={14}/>},
+            { id:"depts",    l:"الأقسام والأطباء",   ic:<I.Stethoscope size={14}/>},
             { id:"users",    l:"المستخدمون والأدوار",    ic:<I.Users size={14}/>},
             { id:"billing",  l:"الفوترة",          ic:<I.CreditCard size={14}/>},
             { id:"notifs",   l:"الإشعارات",    ic:<I.Bell size={14}/>},
@@ -1815,15 +1821,232 @@ function SettingsPage({ go }) {
 
         <div className="card card-pad">
           {tab==="clinic" && <ClinicDetailsPanel/>}
+          {tab==="depts" && <DeptDoctorsPanel/>}
           {tab==="users" && <UsersPanel/>}
           {tab==="branding" && <BrandingPanel/>}
           {tab==="sections" && <CustomSectionsPanel/>}
-          {tab!=="clinic" && tab!=="users" && tab!=="branding" && tab!=="sections" && (
+          {tab!=="clinic" && tab!=="users" && tab!=="branding" && tab!=="sections" && tab!=="depts" && (
             <EmptyState icon={<I.Settings size={22}/>} title="قريبًا" body={`The "${tab}" section is part من the next release. Reach out to support if you need something configured.`}/>
           )}
         </div>
       </div>
     </Page>
+  );
+}
+
+// ── Admin: departments & doctors CRUD ────────────────────────
+// Full create/read/update/delete for the booking taxonomy. Everything
+// writes through KineticData → Supabase (+ LS), and the booking module
+// re-renders automatically via the kinetic:data-updated event, so a new
+// department/doctor appears everywhere with no code change.
+const DEPT_ICONS = ["Stethoscope","Activity","Heart","Users","Sparkle","Layers","Bone","Brain"];
+const DOC_STATUS_OPTS = [
+  { v:"available", l:"متاح" }, { v:"busy", l:"مشغول" }, { v:"leave", l:"في إجازة" },
+];
+const DOC_STATUS_AR = { available:"متاح", busy:"مشغول", leave:"في إجازة" };
+const newId = (p) => p + Date.now().toString(36) + Math.random().toString(36).slice(2,5);
+
+function DeptDoctorsPanel() {
+  const depts = (DATA.departments || []).slice().sort((a,b)=>(a.sort_order||0)-(b.sort_order||0));
+  const doctors = DATA.doctors || [];
+  const [deptModal, setDeptModal] = React.useState(null);   // dept row or {} for new
+  const [docModal, setDocModal] = React.useState(null);
+  const deptName = (id) => (depts.find(d=>d.id===id)||{}).name_ar || "—";
+  const countDocs = (id) => doctors.filter(d=>d.active!==false && d.department_id===id).length;
+
+  async function removeDept(d) {
+    if (doctors.some(x=>x.department_id===d.id)) { window.showToast && window.showToast("أزل أطباء القسم أولاً","error"); return; }
+    if (!window.confirm(`حذف قسم «${d.name_ar}»؟`)) return;
+    try { await window.KineticData.remove("departments", d.id); window.showToast && window.showToast("تم حذف القسم","success"); }
+    catch(e){ console.warn(e); window.showToast && window.showToast("تعذّر الحذف","error"); }
+  }
+  async function removeDoc(d) {
+    if (!window.confirm(`حذف الطبيب «${d.name}»؟`)) return;
+    try { await window.KineticData.remove("doctors", d.id); window.showToast && window.showToast("تم حذف الطبيب","success"); }
+    catch(e){ console.warn(e); window.showToast && window.showToast("تعذّر الحذف","error"); }
+  }
+  async function toggleActive(table, row) {
+    try { await window.KineticData.upsert(table, { ...row, active: row.active===false }); }
+    catch(e){ console.warn(e); window.showToast && window.showToast("تعذّر التحديث","error"); }
+  }
+
+  return (
+    <div>
+      {/* Departments */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,gap:12,flexWrap:"wrap"}}>
+        <div>
+          <div className="h2">الأقسام</div>
+          <div className="muted" style={{fontSize:12.5,marginTop:2}}>تظهر في صفحة الحجز تلقائيًا فور إضافتها.</div>
+        </div>
+        <button className="btn btn-blue" onClick={()=>setDeptModal({})}><I.Plus size={14}/> إضافة قسم</button>
+      </div>
+      <div className="tbl-scroll" style={{marginBottom:26}}>
+        <table className="tbl">
+          <thead><tr><th>القسم</th><th>بالإنجليزية</th><th>الأطباء</th><th>الحالة</th><th></th></tr></thead>
+          <tbody>
+            {depts.length===0 && <tr><td colSpan={5}><EmptyState icon={<I.Layers size={22}/>} title="لا أقسام بعد" body="أضف أول قسم من زر «إضافة قسم»."/></td></tr>}
+            {depts.map(d=>(
+              <tr key={d.id}>
+                <td><div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span className="av sm" style={{background:(d.color||"#7BBDE8")+"22",color:d.color||"var(--blue-700)"}}>{(window.I[d.icon]||I.Layers)({size:14})}</span>
+                  {d.name_ar}
+                </div></td>
+                <td className="muted" style={{fontSize:12.5}}>{d.name_en||"—"}</td>
+                <td className="mono">{countDocs(d.id)}</td>
+                <td>
+                  <button className={"badge " + (d.active!==false?"b-green":"b-grey")} style={{cursor:"pointer",border:"none"}} onClick={()=>toggleActive("departments", d)}>
+                    <span className="dot"></span>{d.active!==false?"نشط":"موقوف"}
+                  </button>
+                </td>
+                <td><RowMenu size={13} items={[
+                  { label:"تعديل", icon:<I.Edit size={13}/>, onClick:()=>setDeptModal(d) },
+                  { label:"حذف", icon:<I.Trash size={13}/>, danger:true, onClick:()=>removeDept(d) },
+                ]}/></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Doctors */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,gap:12,flexWrap:"wrap"}}>
+        <div>
+          <div className="h2">الأطباء</div>
+          <div className="muted" style={{fontSize:12.5,marginTop:2}}>يظهرون في الحجز ضمن أقسامهم عند تفعيلهم.</div>
+        </div>
+        <button className="btn btn-blue" onClick={()=>setDocModal({})} disabled={depts.length===0}><I.Plus size={14}/> إضافة طبيب</button>
+      </div>
+      <div className="tbl-scroll">
+        <table className="tbl">
+          <thead><tr><th>الطبيب</th><th>القسم</th><th>التخصص</th><th>الخبرة</th><th>التوفر</th><th>الحالة</th><th></th></tr></thead>
+          <tbody>
+            {doctors.length===0 && <tr><td colSpan={7}><EmptyState icon={<I.Stethoscope size={22}/>} title="لا أطباء بعد" body={depts.length? "أضف أول طبيب من زر «إضافة طبيب».":"أضف قسمًا أولاً ثم أضف الأطباء."}/></td></tr>}
+            {doctors.map(d=>(
+              <tr key={d.id}>
+                <td><div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span className="av sm" style={{background:(d.color||"#7BBDE8")+"33",color:d.color||"var(--blue-700)"}}>{(d.name||"").replace("د. ","").split(" ").map(x=>x[0]||"").join("").slice(0,2)}</span>
+                  {d.name}
+                </div></td>
+                <td className="muted" style={{fontSize:12.5}}>{deptName(d.department_id)}</td>
+                <td className="muted" style={{fontSize:12.5}}>{d.specialization||"—"}</td>
+                <td className="mono">{d.experience_years||0} س</td>
+                <td><span className={"badge " + (d.status==="available"?"b-green":d.status==="busy"?"b-amber":"b-grey")}><span className="dot"></span>{DOC_STATUS_AR[d.status]||d.status||"—"}</span></td>
+                <td>
+                  <button className={"badge " + (d.active!==false?"b-green":"b-grey")} style={{cursor:"pointer",border:"none"}} onClick={()=>toggleActive("doctors", d)}>
+                    <span className="dot"></span>{d.active!==false?"مفعّل":"موقوف"}
+                  </button>
+                </td>
+                <td><RowMenu size={13} items={[
+                  { label:"تعديل", icon:<I.Edit size={13}/>, onClick:()=>setDocModal(d) },
+                  { label:"حذف", icon:<I.Trash size={13}/>, danger:true, onClick:()=>removeDoc(d) },
+                ]}/></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {deptModal && <DeptModal row={deptModal} onClose={()=>setDeptModal(null)}/>}
+      {docModal && <DoctorModal row={docModal} depts={depts} onClose={()=>setDocModal(null)}/>}
+    </div>
+  );
+}
+
+function DeptModal({ row, onClose }) {
+  const isNew = !row.id;
+  const [f, setF] = React.useState({
+    name_ar: row.name_ar||"", name_en: row.name_en||"", description: row.description||"",
+    icon: row.icon||"Stethoscope", color: row.color||"#7BBDE8",
+    sort_order: row.sort_order||0, active: row.active!==false,
+  });
+  const [busy, setBusy] = React.useState(false);
+  const set = (k,v)=>setF(s=>({...s,[k]:v}));
+  async function save() {
+    if (!f.name_ar.trim()) return window.showToast && window.showToast("أدخل اسم القسم","error");
+    setBusy(true);
+    try {
+      await window.KineticData.upsert("departments", {
+        id: row.id || newId("D-"), ...f, name_ar: f.name_ar.trim(),
+        sort_order: Number(f.sort_order)||0,
+      });
+      window.showToast && window.showToast(isNew?"تمت إضافة القسم":"تم تحديث القسم","success");
+      onClose();
+    } catch(e){ console.warn(e); window.showToast && window.showToast("تعذّر الحفظ","error"); }
+    finally { setBusy(false); }
+  }
+  return (
+    <Modal title={isNew?"قسم جديد":"تعديل قسم"} onClose={onClose} width={520}
+      footer={<><button className="btn btn-ghost" onClick={onClose}>إلغاء</button>
+        <button className="btn btn-blue" disabled={busy} onClick={save}><I.Check size={13}/> حفظ</button></>}>
+      <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
+        <Field label="الاسم بالعربية" required><input className="input" value={f.name_ar} onChange={e=>set("name_ar",e.target.value)}/></Field>
+        <Field label="الاسم بالإنجليزية"><input className="input" value={f.name_en} onChange={e=>set("name_en",e.target.value)} dir="ltr"/></Field>
+      </div>
+      <div style={{height:12}}/>
+      <Field label="الوصف"><input className="input" value={f.description} onChange={e=>set("description",e.target.value)}/></Field>
+      <div style={{height:12}}/>
+      <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr 1fr",gap:12}}>
+        <Field label="الأيقونة"><select className="input" value={f.icon} onChange={e=>set("icon",e.target.value)}>{DEPT_ICONS.filter(n=>window.I[n]).map(n=><option key={n} value={n}>{n}</option>)}</select></Field>
+        <Field label="اللون"><input className="input" type="color" value={f.color} onChange={e=>set("color",e.target.value)} style={{padding:4,height:40}}/></Field>
+        <Field label="الترتيب"><input className="input" type="number" value={f.sort_order} onChange={e=>set("sort_order",e.target.value)}/></Field>
+      </div>
+      <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,marginTop:14,cursor:"pointer"}}>
+        <input type="checkbox" checked={f.active} onChange={e=>set("active",e.target.checked)}/> قسم نشط (يظهر في الحجز)
+      </label>
+    </Modal>
+  );
+}
+
+function DoctorModal({ row, depts, onClose }) {
+  const isNew = !row.id;
+  const [f, setF] = React.useState({
+    name: row.name||"", department_id: row.department_id||(depts[0]&&depts[0].id)||"",
+    specialization: row.specialization||"", experience_years: row.experience_years||0,
+    schedule: row.schedule||"", status: row.status||"available",
+    color: row.color||"#7BBDE8", active: row.active!==false,
+  });
+  const [busy, setBusy] = React.useState(false);
+  const set = (k,v)=>setF(s=>({...s,[k]:v}));
+  async function save() {
+    if (!f.name.trim()) return window.showToast && window.showToast("أدخل اسم الطبيب","error");
+    if (!f.department_id) return window.showToast && window.showToast("اختر القسم","error");
+    setBusy(true);
+    try {
+      await window.KineticData.upsert("doctors", {
+        id: row.id || newId("DR-"), ...f, name: f.name.trim(),
+        experience_years: Number(f.experience_years)||0,
+      });
+      window.showToast && window.showToast(isNew?"تمت إضافة الطبيب":"تم تحديث الطبيب","success");
+      onClose();
+    } catch(e){ console.warn(e); window.showToast && window.showToast("تعذّر الحفظ","error"); }
+    finally { setBusy(false); }
+  }
+  return (
+    <Modal title={isNew?"طبيب جديد":"تعديل طبيب"} onClose={onClose} width={540}
+      footer={<><button className="btn btn-ghost" onClick={onClose}>إلغاء</button>
+        <button className="btn btn-blue" disabled={busy} onClick={save}><I.Check size={13}/> حفظ</button></>}>
+      <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
+        <Field label="الاسم" required><input className="input" value={f.name} onChange={e=>set("name",e.target.value)} placeholder="د. …"/></Field>
+        <Field label="القسم" required><select className="input" value={f.department_id} onChange={e=>set("department_id",e.target.value)}>
+          {depts.map(d=><option key={d.id} value={d.id}>{d.name_ar}</option>)}
+        </select></Field>
+      </div>
+      <div style={{height:12}}/>
+      <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
+        <Field label="التخصص"><input className="input" value={f.specialization} onChange={e=>set("specialization",e.target.value)}/></Field>
+        <Field label="سنوات الخبرة"><input className="input" type="number" value={f.experience_years} onChange={e=>set("experience_years",e.target.value)}/></Field>
+      </div>
+      <div style={{height:12}}/>
+      <Field label="أوقات العمل"><input className="input" value={f.schedule} onChange={e=>set("schedule",e.target.value)} placeholder="مثال: الأحد–الخميس 09:00–17:00"/></Field>
+      <div style={{height:12}}/>
+      <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
+        <Field label="التوفر"><select className="input" value={f.status} onChange={e=>set("status",e.target.value)}>{DOC_STATUS_OPTS.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}</select></Field>
+        <Field label="اللون"><input className="input" type="color" value={f.color} onChange={e=>set("color",e.target.value)} style={{padding:4,height:40}}/></Field>
+      </div>
+      <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,marginTop:14,cursor:"pointer"}}>
+        <input type="checkbox" checked={f.active} onChange={e=>set("active",e.target.checked)}/> طبيب مفعّل (متاح للحجز)
+      </label>
+    </Modal>
   );
 }
 
@@ -2066,14 +2289,21 @@ function EditProfileModal({ onClose }) {
 // ── Admin: Clinic details (name, contact, tax id) ────────────
 function ClinicDetailsPanel() {
   const seed = window.CLINIC || {};
+  // Sample values only in demo; production starts blank so the admin enters
+  // the clinic's real identity (persisted to clinic_settings).
+  const d = window.IS_DEMO ? {
+    name:"كينيتك للعلاج الطبيعي", branch:"مصر الجديدة", phone:"+20 2 2638 1100",
+    email:"hello@kinetic.eg", address:"14 ش صلاح سالم, مصر الجديدة، القاهرة",
+    tax_id:"514-203-091", hours:"الأحد–الخميس 08:00 – 20:00",
+  } : {};
   const [form, setForm] = React.useState({
-    name: seed.name || "كينيتك للعلاج الطبيعي",
-    branch: seed.branch || "مصر الجديدة",
-    phone: seed.phone || "+20 2 2638 1100",
-    email: seed.email || "hello@kinetic.eg",
-    address: seed.address || "14 ش صلاح سالم, مصر الجديدة، القاهرة",
-    tax_id: seed.tax_id || "514-203-091",
-    hours: seed.hours || "الأحد–الخميس 08:00 – 20:00",
+    name: seed.name || d.name || "",
+    branch: seed.branch || d.branch || "",
+    phone: seed.phone || d.phone || "",
+    email: seed.email || d.email || "",
+    address: seed.address || d.address || "",
+    tax_id: seed.tax_id || d.tax_id || "",
+    hours: seed.hours || d.hours || "",
   });
   const [saving, setSaving] = React.useState(false);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -3687,7 +3917,7 @@ function PublicBookingScreen({ onBack, onDone }) {
           </div>
         </div>
         <div style={{flex:1}}/>
-        <span className="muted" style={{fontSize:13}}>تحتاج مساعدة؟ <a href="tel:+20226381100" style={{color:"var(--blue-700)",fontWeight:500}}>+20 2 2638 1100</a></span>
+        {(window.CLINIC && window.CLINIC.phone) && <span className="muted" style={{fontSize:13}}>تحتاج مساعدة؟ <a href={`tel:${String(window.CLINIC.phone).replace(/[^\d+]/g,"")}`} style={{color:"var(--blue-700)",fontWeight:500}}>{window.CLINIC.phone}</a></span>}
         <button className="btn btn-ghost" onClick={onBack}><I.X size={14}/> إغلاق</button>
       </header>
 
