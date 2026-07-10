@@ -2267,9 +2267,7 @@ function DepartmentPick({ selected, onPick }) {
                 <div style={{fontWeight:600,fontSize:14.5}}>{d.name_ar}</div>
                 <div className="muted" style={{fontSize:12,marginTop:3}}>{d.description}</div>
               </div>
-              <div style={{marginTop:"auto",fontSize:11.5,color:disabled?"var(--ink-400)":"var(--blue-700)",display:"flex",alignItems:"center",gap:4}}>
-                <span className="dot" style={{background:disabled?"var(--ink-400)":"var(--blue-700)"}}></span>{n} {n===1?"طبيب":"أطباء"}
-              </div>
+              {disabled && <div style={{marginTop:"auto",fontSize:11.5,color:"var(--ink-400)"}}>غير متاح حاليًا</div>}
             </button>
           );
         })}

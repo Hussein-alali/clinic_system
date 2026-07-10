@@ -114,13 +114,13 @@ const seedTherapists = [
 
 // Departments and doctors are DB-backed (departments / doctors tables).
 // These seeds only load in demo mode; production hydrates from Supabase.
-// D-pedi and D-women intentionally have no doctors to exercise the
-// "0 أطباء / disabled" path.
+// D-other and D-women intentionally have no doctors to exercise the
+// empty-department / disabled-card path.
 const seedDepartments = [
   { id:"D-ortho", name_ar:"تأهيل عظام",   name_en:"Orthopedic Rehab", description:"مفاصل، عمود فقري، بعد العمليات", icon:"Stethoscope", color:"#7BBDE8", sort_order:1, active:true },
   { id:"D-sport", name_ar:"إصابات رياضية", name_en:"Sports Injury",     description:"رباط صليبي، غضروف، عضلات خلفية", icon:"Activity",    color:"#3FA984", sort_order:2, active:true },
   { id:"D-neuro", name_ar:"أعصاب",         name_en:"Neuro Rehab",       description:"جلطة، باركنسون، تصلب",           icon:"Heart",       color:"#7E6BD3", sort_order:3, active:true },
-  { id:"D-pedi",  name_ar:"أطفال",          name_en:"Pediatrics",        description:"تأخر نمو، مشي",                  icon:"Users",       color:"#D49044", sort_order:4, active:true },
+  { id:"D-other", name_ar:"أخرى",           name_en:"Other",             description:"حالات وتخصصات أخرى",             icon:"Layers",      color:"#D49044", sort_order:4, active:true },
   { id:"D-chron", name_ar:"آلام مزمنة",     name_en:"Chronic Pain",      description:"أسفل الظهر، الرقبة، فيبروميالجيا", icon:"Sparkle",     color:"#3A7FB5", sort_order:5, active:true },
   { id:"D-women", name_ar:"صحة المرأة",     name_en:"Women's Health",    description:"حمل، بعد الولادة، قاع الحوض",     icon:"Heart",       color:"#D8665A", sort_order:6, active:true },
 ];
