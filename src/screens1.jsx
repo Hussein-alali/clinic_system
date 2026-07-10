@@ -2044,26 +2044,65 @@ function nextAvailableLabel(doctorId) {
 // ── BookingFlow — 5 steps, all DB-driven, persists on confirm ──
 function BookingFlow({ onDone }) {
   const [step, setStep] = React.useState(1);
-  const [picks, setPicks] = React.useState({ deptId:null, doctorId:null, therapist:null, date:null, slot:null, patientId:null, notes:"" });
+  const [picks, setPicks] = React.useState({
+    // Step 1 — patient first: pick an existing record or enter initial info.
+    patientMode: "existing",           // existing | new
+    patientId: null,
+    newName: "", newPhone: "",
+    deptId:null, doctorId:null, therapist:null, date:null, slot:null, notes:"",
+  });
   const [busy, setBusy] = React.useState(false);
-  const steps = ["القسم","الطبيب","الأخصائي","التاريخ","الوقت"];
+  const steps = ["المريض","القسم","الطبيب","الأخصائي","التاريخ","الوقت"];
+  const LAST = steps.length;
   const update = (patch) => setPicks(p => ({ ...p, ...patch }));
   const therapists = window.scopeTherapists ? window.scopeTherapists(DATA.therapists) : DATA.therapists;
+
+  // Validate the patient step before advancing.
+  function patientStepValid() {
+    if (picks.patientMode === "existing") {
+      if (!picks.patientId) { window.showToast && window.showToast("اختر المريض أو أدخل بياناته الأولية", "error"); return false; }
+      return true;
+    }
+    if (!picks.newName.trim()) { window.showToast && window.showToast("أدخل اسم المريض", "error"); return false; }
+    if (!picks.newPhone.trim()) { window.showToast && window.showToast("أدخل رقم الهاتف", "error"); return false; }
+    return true;
+  }
+
+  // Resolve the patient at confirm time: existing id, phone match, or a new
+  // record flagged "ملف غير مكتمل" (same policy as Quick Booking).
+  async function resolvePatient() {
+    if (picks.patientMode === "existing") {
+      return (DATA.patients || []).find(p => (p.patient_id || p.id) === picks.patientId) || null;
+    }
+    const matched = findPatientByPhone(picks.newPhone);
+    if (matched) return matched;
+    return await window.KineticData.upsert("patients", {
+      patient_id: "P-" + Date.now().toString().slice(-8),
+      name: picks.newName.trim(),
+      phone: picks.newPhone.trim(),
+      diagnosis: "", notes: "حجز جديد — بيانات أولية",
+      status: INCOMPLETE_STATUS,
+      registered: new Date().toISOString().slice(0, 10),
+      created_at: new Date().toISOString(),
+    });
+  }
 
   async function confirm() {
     if (!picks.date) return window.showToast && window.showToast("اختر التاريخ", "error");
     if (!picks.slot) return window.showToast && window.showToast("اختر الوقت", "error");
-    if (!picks.patientId) return window.showToast && window.showToast("اختر المريض", "error");
+    if (!patientStepValid()) return;
     setBusy(true);
     try {
+      const patient = await resolvePatient();
+      if (!patient) throw new Error("patient-missing");
+      const patientId = patient.patient_id || patient.id;
       const doctor = (DATA.doctors || []).find(d => d.id === picks.doctorId);
       const dept = (DATA.departments || []).find(d => d.id === picks.deptId);
-      const patient = (DATA.patients || []).find(p => (p.patient_id || p.id) === picks.patientId);
       const therapistRow = (DATA.therapists || []).find(t => t.name === picks.therapist);
       await window.KineticData.upsert("appts", {
         booking_id: "A-" + Date.now().toString().slice(-8),
-        patient_id: picks.patientId,
-        patient: patient ? patient.name : "",
+        patient_id: patientId,
+        patient: patient.name || "",
         doctor_id: picks.doctorId || null,
         department_id: picks.deptId || null,
         therapist_id: therapistRow ? therapistRow.id : null,
@@ -2086,7 +2125,10 @@ function BookingFlow({ onDone }) {
     } finally { setBusy(false); }
   }
 
-  function next() { if (step < 5) setStep(step + 1); else confirm(); }
+  function next() {
+    if (step === 1 && !patientStepValid()) return;
+    if (step < LAST) setStep(step + 1); else confirm();
+  }
 
   return (
     <div>
@@ -2111,16 +2153,17 @@ function BookingFlow({ onDone }) {
       </div>
 
       <div className="card card-pad" style={{minHeight:420,marginBottom:18}}>
-        {step===1 && <DepartmentPick selected={picks.deptId} onPick={id=>{ update({deptId:id, doctorId:null}); next(); }}/>}
-        {step===2 && <DoctorPick deptId={picks.deptId} selected={picks.doctorId} onPick={id=>{ update({doctorId:id}); next(); }} onBack={()=>setStep(1)}/>}
-        {step===3 && (therapists.length ? <PickGrid title="اختر أخصائيًا"
+        {step===1 && <PatientStep picks={picks} update={update}/>}
+        {step===2 && <DepartmentPick selected={picks.deptId} onPick={id=>{ update({deptId:id, doctorId:null}); next(); }}/>}
+        {step===3 && <DoctorPick deptId={picks.deptId} selected={picks.doctorId} onPick={id=>{ update({doctorId:id}); next(); }} onBack={()=>setStep(2)}/>}
+        {step===4 && (therapists.length ? <PickGrid title="اختر أخصائيًا"
           items={therapists.map(t=>({ id:t.name, l:t.name, sub:`${t.spec} · حمل ${t.load}/${t.max}`, ic:t.name.split(" ").map(x=>x[0]).join(""), color:t.color, count:`${t.max-t.load} فترة متاحة` }))}
           avatar
           onPick={v=>{ update({therapist:v}); next();}}
           selected={picks.therapist}
         /> : <EmptyState icon={<I.Users size={22}/>} title="لا أخصائيين بعد" body="أضف الأخصائيين من الإعدادات."/>)}
-        {step===4 && <DatePick value={picks.date} onPick={v=>{ update({date:v}); next();}}/>}
-        {step===5 && <SlotPick picks={picks} update={update}/>}
+        {step===5 && <DatePick value={picks.date} onPick={v=>{ update({date:v}); next();}}/>}
+        {step===6 && <SlotPick picks={picks} update={update}/>}
       </div>
 
       <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
@@ -2130,10 +2173,69 @@ function BookingFlow({ onDone }) {
         <div style={{display:"flex",gap:10}}>
           <button className="btn btn-ghost" onClick={onDone}>إلغاء</button>
           <button className="btn btn-blue" disabled={busy} onClick={next}>
-            {busy ? <span className="spin" style={{width:14,height:14,border:"2px solid #fff",borderTopColor:"transparent",borderRadius:"50%"}}/> : <>{step<5 ? "متابعة" : "تأكيد الحجز"} <I.ArrowRight size={13}/></>}
+            {busy ? <span className="spin" style={{width:14,height:14,border:"2px solid #fff",borderTopColor:"transparent",borderRadius:"50%"}}/> : <>{step<LAST ? "متابعة" : "تأكيد الحجز"} <I.ArrowRight size={13}/></>}
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Step 1 — the patient comes first: search the database for an existing
+// record, or capture the initial info (name + phone) for a new one. New
+// patients are created on confirm with status "ملف غير مكتمل" so the
+// receptionist completes the file later (same policy as Quick Booking).
+function PatientStep({ picks, update }) {
+  const patients = (window.scopePatients ? window.scopePatients(DATA.patients) : DATA.patients) || [];
+  const isNew = picks.patientMode === "new";
+  const matched = isNew ? findPatientByPhone(picks.newPhone) : null;
+  const selected = patients.find(p => (p.patient_id || p.id) === picks.patientId);
+  return (
+    <div>
+      <div className="h2" style={{marginBottom:6}}>بيانات المريض</div>
+      <div className="muted" style={{fontSize:13,marginBottom:18}}>ابدأ بتحديد المريض — ابحث عن ملف موجود أو أدخل البيانات الأولية لمريض جديد.</div>
+
+      <div className="seg" style={{marginBottom:18}}>
+        <button className={!isNew?"on":""} onClick={()=>update({patientMode:"existing"})}>مريض مسجّل</button>
+        <button className={isNew?"on":""} onClick={()=>update({patientMode:"new"})}>مريض جديد</button>
+      </div>
+
+      {!isNew ? (
+        <div style={{maxWidth:460}}>
+          <div className="label">ابحث عن المريض</div>
+          <PatientCombobox value={picks.patientId || ""} onChange={id=>update({ patientId: id })} patients={patients}/>
+          {selected && (
+            <div style={{marginTop:14,padding:14,border:"1px solid var(--ink-200)",borderRadius:12,display:"flex",alignItems:"center",gap:12}}>
+              <div className="av md">{initialsOf(selected.name)}</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontWeight:600,fontSize:13.5}}>{selected.name}</div>
+                <div className="muted mono" style={{fontSize:11.5}}>{selected.patient_id || selected.id}{selected.phone ? ` · ${selected.phone}` : ""}</div>
+              </div>
+              <I.Check size={16} style={{color:"var(--green)"}}/>
+            </div>
+          )}
+          {patients.length===0 && <div className="muted" style={{fontSize:12.5,marginTop:12}}>لا مرضى مسجّلين بعد — اختر «مريض جديد» لإدخال البيانات الأولية.</div>}
+        </div>
+      ) : (
+        <div style={{maxWidth:520}}>
+          <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
+            <Field label="اسم المريض" required>
+              <input className="input" value={picks.newName} onChange={e=>update({newName:e.target.value})} placeholder="الاسم الكامل" autoFocus/>
+            </Field>
+            <Field label="رقم الهاتف" required>
+              <input className="input" value={picks.newPhone} onChange={e=>update({newPhone:e.target.value})} placeholder="+20 1xx xxx xxxx" dir="ltr" style={{textAlign:"right"}}/>
+            </Field>
+          </div>
+          {matched && (
+            <div style={{fontSize:12,color:"var(--green)",marginTop:4,display:"flex",alignItems:"center",gap:6}}>
+              <I.Check size={12}/> رقم معروف — سيُربط الحجز بملف <strong>{matched.name}</strong>
+            </div>
+          )}
+          <div className="muted" style={{fontSize:12,marginTop:12,lineHeight:1.6,padding:"10px 12px",background:"var(--blue-50)",border:"1px solid var(--blue-100)",borderRadius:8}}>
+            سيُنشأ ملف مبدئي بحالة «ملف غير مكتمل» عند تأكيد الحجز، وتُستكمل بقية البيانات لاحقًا من صفحة المرضى.
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2328,14 +2430,17 @@ function SlotPick({ picks, update }) {
   const ALL = ["08:30","09:00","09:30","10:00","10:30","11:00","11:30","12:00","13:00","13:30","14:00","14:30","15:00","15:30","16:00","16:30","17:00"];
   const morning = ALL.filter(t => t < "12:00");
   const afternoon = ALL.filter(t => t >= "12:00");
-  const patients = (window.scopePatients ? window.scopePatients(DATA.patients) : DATA.patients) || [];
   const doctor = (DATA.doctors || []).find(d => d.id === picks.doctorId);
   const dept = (DATA.departments || []).find(d => d.id === picks.deptId);
   // Slots already taken for this doctor on the chosen date (real bookings).
   const booked = new Set((DATA.appts || [])
     .filter(a => a.doctor_id === picks.doctorId && a.date === picks.date && a.status !== "ملغي" && a.status !== "متاح")
     .map(a => a.time));
-  const patient = patients.find(p => (p.patient_id || p.id) === picks.patientId);
+  // Patient was resolved in step 1 (existing record or new initial info).
+  const existing = (DATA.patients || []).find(p => (p.patient_id || p.id) === picks.patientId);
+  const patientName = picks.patientMode === "new"
+    ? (findPatientByPhone(picks.newPhone) || { name: picks.newName }).name
+    : (existing && existing.name);
 
   const SlotBtn = ({ t }) => {
     const u = booked.has(t);
@@ -2354,14 +2459,9 @@ function SlotPick({ picks, update }) {
 
   return (
     <div>
-      <div className="h2" style={{marginBottom:6}}>اختر الوقت والمريض</div>
+      <div className="h2" style={{marginBottom:6}}>اختر الوقت</div>
       <div className="muted" style={{marginBottom:18,fontSize:13}}>
         {doctor ? `المتاح لـ${doctor.name}` : "المتاح"} · {picks.date || "—"} · جلسات 45 دقيقة
-      </div>
-
-      <div className="label">المريض</div>
-      <div style={{marginBottom:18,maxWidth:420}}>
-        <PatientCombobox value={picks.patientId || ""} onChange={id=>update({ patientId: id })} patients={patients}/>
       </div>
 
       <div className="label">الصباح</div>
@@ -2381,7 +2481,7 @@ function SlotPick({ picks, update }) {
           <div><div className="muted">الأخصائي</div><div>{picks.therapist||"—"}</div></div>
           <div><div className="muted">الوقت</div><div className="mono">{picks.date||"—"} {picks.slot||""}</div></div>
         </div>
-        <div style={{marginTop:8,fontSize:12.5}}><span className="muted">المريض: </span>{patient?patient.name:"—"}</div>
+        <div style={{marginTop:8,fontSize:12.5}}><span className="muted">المريض: </span>{patientName || "—"}</div>
       </div>
     </div>
   );
