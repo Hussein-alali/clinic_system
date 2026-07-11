@@ -490,7 +490,7 @@ function printHTML(title, bodyHtml) {
 // that would trip PGRST204 on the strict schema.
 const DATA_TABLES = {
   patients:   { key: "patients",   pk: "patient_id",  ls: "kinetic.patients",
-                cols: ["patient_id","name","phone","age","gender","diagnosis","notes","created_at"] },
+                cols: ["patient_id","name","phone","age","gender","diagnosis","notes","therapist_id","created_at"] },
   appts:      { key: "bookings",   pk: "booking_id",  ls: "kinetic.bookings",
                 cols: ["booking_id","patient_id","therapist_id","doctor_id","department_id","date","time","status","notes","created_at"] },
   sessions:   { key: "sessions",   pk: "session_id",  ls: "kinetic.sessions",
@@ -627,7 +627,7 @@ function normalizeDomainData(D) {
     registered: p.registered ?? String(p.created_at || "").slice(0, 10),
     chronic: Array.isArray(p.chronic) ? p.chronic : [],
     surgeries: Array.isArray(p.surgeries) ? p.surgeries : [],
-    dr: p.dr ?? "—", th: p.th ?? "—", job: p.job ?? "—",
+    dr: p.dr ?? "—", th: p.th ?? (nameOfTherapist(p.therapist_id) || "—"), job: p.job ?? "—",
     visited: p.visited ?? "—", payment: p.payment ?? "معلّق",
   }));
   D.appts = (D.appts || []).map(a => ({

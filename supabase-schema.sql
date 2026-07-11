@@ -49,15 +49,18 @@ create table if not exists custom_sections (
 
 -- ── Core domain tables ──────────────────────────────────────
 create table if not exists patients (
-  patient_id  text primary key,
-  name        text not null,
-  phone       text,
-  age         int,
-  gender      text check (gender in ('M','F')),
-  diagnosis   text,
-  notes       text,
-  created_at  timestamptz default now()
+  patient_id   text primary key,
+  name         text not null,
+  phone        text,
+  age          int,
+  gender       text check (gender in ('M','F')),
+  diagnosis    text,
+  notes        text,
+  therapist_id text,                          -- assigned physiotherapist
+  created_at   timestamptz default now()
 );
+-- Backfill for databases created before therapist assignment (safe to re-run).
+alter table patients add column if not exists therapist_id text;
 
 create table if not exists bookings (
   booking_id    text primary key,

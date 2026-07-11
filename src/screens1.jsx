@@ -478,10 +478,13 @@ function Patients({ go }) {
 }
 
 // ── PatientDetail ──────────────────────────────────────────────
-function PatientDetail({ p, onBack, go, onEdit }) {
+function PatientDetail({ p: pIn, onBack, go, onEdit }) {
   const [tab, setTab] = React.useState("نظرة عامة");
+  // Resolve the live record from DATA so edits (therapist, profile, …) reflect
+  // across every section immediately; fall back to the passed snapshot.
+  const pid = pIn.patient_id || pIn.id;
+  const p = (DATA.patients || []).find(x => (x.patient_id || x.id) === pid) || pIn;
   // Real per-patient figures (production rows carry no seed metadata).
-  const pid = p.patient_id || p.id;
   const mySessions = DATA.sessions.filter(s => s.patient_id === pid || s.patient === p.name);
   const pkgTotal = Number(((p.pkg || "").match(/(\d+)/) || [])[1]) || 12;
   const doneSessions = p.remain != null ? Math.max(0, pkgTotal - p.remain) : mySessions.length;
@@ -752,9 +755,23 @@ function PatientTreatmentPlan({ p }) {
     };
   });
   const [editing, setEditing] = React.useState(null);
+  const [thPick, setThPick] = React.useState(false);
 
   function toggleGoal(i) {
     setPlan(p => ({ ...p, goals: p.goals.map((g,idx)=> idx===i ? {...g, done:!g.done} : g) }));
+  }
+
+  // Assign the treating therapist — updates the plan and persists onto the
+  // patient record so the care team / lists reflect it everywhere.
+  async function chooseTherapist(t) {
+    setPlan(pl => ({ ...pl, therapist: { initials: initialsOf(t.name), name: t.name, spec: t.spec || "" } }));
+    setThPick(false);
+    const pid = p && (p.patient_id || p.id);
+    if (pid && window.KineticData) {
+      try { await window.KineticData.upsert("patients", { patient_id: pid, id: pid, therapist_id: t.id, th: t.name }); }
+      catch (e) { console.warn("assign therapist failed", e); }
+    }
+    if (window.showToast) window.showToast("تم تعيين الأخصائي", "success");
   }
   function openEditor() {
     setEditing(JSON.parse(JSON.stringify(plan)));
@@ -808,7 +825,7 @@ function PatientTreatmentPlan({ p }) {
               <div style={{fontSize:13,fontWeight:500}}>{plan.therapist.name}</div>
               <div className="muted" style={{fontSize:11.5}}>{plan.therapist.spec}</div>
             </div>
-            <button className="btn btn-ghost btn-icon" onClick={openEditor} aria-label="تعديل"><I.Edit size={13}/></button>
+            <button className="btn btn-ghost btn-icon" onClick={()=>setThPick(true)} aria-label="تغيير الأخصائي" title="تغيير الأخصائي"><I.Edit size={13}/></button>
           </div>
 
           <div className="label">التشخيص</div>
@@ -832,6 +849,31 @@ function PatientTreatmentPlan({ p }) {
           </button>
         </div>
       </div>
+
+      {thPick && (
+        <Modal title="تغيير الأخصائي المعالج" onClose={()=>setThPick(false)}
+          footer={<button className="btn btn-ghost" onClick={()=>setThPick(false)}>إغلاق</button>}>
+          {(DATA.therapists||[]).length===0
+            ? <EmptyState icon={<I.Users size={22}/>} title="لا أخصائيين بعد" body="أضف الأخصائيين من الإعدادات."/>
+            : <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                {(DATA.therapists||[]).map(t=>{
+                  const on = plan.therapist.name === t.name;
+                  return (
+                    <button key={t.id||t.name} onClick={()=>chooseTherapist(t)}
+                      style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",borderRadius:12,cursor:"pointer",
+                        border:`1px solid ${on?"var(--blue-500)":"var(--ink-200)"}`,background:on?"var(--blue-50)":"#fff",textAlign:"start"}}>
+                      <div className="av md" style={{background:(t.color||"#7BBDE8")+"33",color:t.color||"var(--blue-700)"}}>{initialsOf(t.name)}</div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:13,fontWeight:600}}>{t.name}</div>
+                        <div className="muted" style={{fontSize:11.5}}>{t.spec}{t.max!=null?` · حمل ${t.load}/${t.max}`:""}</div>
+                      </div>
+                      {on && <I.Check size={16} style={{color:"var(--blue-700)"}}/>}
+                    </button>
+                  );
+                })}
+              </div>}
+        </Modal>
+      )}
 
       {editing && (
         <Modal title="تعديل خطة العلاج" onClose={()=>setEditing(null)} width={640}
