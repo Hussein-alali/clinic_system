@@ -7,9 +7,14 @@ can run it with `npm start`.
 ## 1. Prepare Supabase (once)
 
 1. Open your Supabase project → **SQL Editor**.
-2. Run **`supabase-schema.sql`** (safe to re-run — tables and policies are
-   idempotent). This creates all tables, RLS policies, and the
-   `patient-files` storage bucket.
+2. Apply the schema. Either:
+   - **Dashboard:** paste and run **`supabase-schema.sql`** (safe to re-run —
+     every statement is idempotent), or
+   - **CLI:** `supabase link --project-ref <ref>` then `supabase db push`
+     (applies `supabase/migrations/`). See **`supabase/README.md`**.
+
+   This creates all tables, RLS policies, and the `patient-files` storage
+   bucket.
 3. Run **`seed-admin.sql`**. This creates the main admin account:
    - **Email:** `amir@kinetic.eg`
    - **Password:** `Amir@2026!` — **change it after first login**
