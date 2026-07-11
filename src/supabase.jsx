@@ -497,6 +497,14 @@ const DATA_TABLES = {
                 cols: ["session_id","patient_id","therapist_id","date","pain_score","session_notes","session_number","created_at"] },
   payments:   { key: "invoices",   pk: "invoice_id",  ls: "kinetic.invoices",
                 cols: ["invoice_id","patient_id","amount","paid","payment_method","status","created_at"] },
+  paymentHistory: { key: "payments", pk: "payment_id", ls: "kinetic.payment_history",
+                cols: ["payment_id","patient_id","cashier_id","cashier_name","amount","method",
+                       "reference","transaction_id","notes","receipt_no","allocations",
+                       "ip_address","status","created_at"] },
+  subscriptions: { key: "patient_subscriptions", pk: "subscription_id", ls: "kinetic.subscriptions",
+                cols: ["subscription_id","patient_id","package_id","package_name",
+                       "total_sessions","used_sessions","price","paid","status",
+                       "expires_at","created_at","updated_at"] },
   staff:      { key: "staff",      pk: "staff_id",    ls: "kinetic.staff",
                 cols: ["staff_id","name","role","phone","email","auth_uid"] },
   therapists: { key: "therapists", pk: "id",          ls: "kinetic.therapists",
@@ -509,6 +517,9 @@ const DATA_TABLES = {
                 cols: ["id","name","sessions","price","active","popular","color","sold"] },
   campaigns:  { key: "campaigns",  pk: "id",          ls: "kinetic.campaigns",
                 cols: ["id","name","audience","sent","read","replied","status","template","schedule","best"] },
+  treatmentMethods: { key: "treatment_methods", pk: "method_id", ls: "kinetic.tx_methods",
+                cols: ["method_id","name","category","description","duration_minutes","notes",
+                       "status","created_by","created_by_name","created_at","updated_at"] },
 };
 
 // Map a DATA_TABLES key back to its window.DATA.* alias. Two friendly names
@@ -517,6 +528,9 @@ const DATA_TABLES = {
 function friendlyName(key) {
   if (key === "bookings") return "appts";
   if (key === "invoices") return "payments";
+  if (key === "payments") return "paymentHistory";
+  if (key === "patient_subscriptions") return "subscriptions";
+  if (key === "treatment_methods") return "treatmentMethods";
   return key;
 }
 
@@ -665,6 +679,35 @@ function normalizeDomainData(D) {
     paid: Number(v.paid) || 0,
     status: INVOICE_STATUS_AR[v.status] ?? v.status ?? "معلّق",
   }));
+  D.paymentHistory = (D.paymentHistory || []).map(v => ({
+    ...v,
+    id: v.payment_id ?? v.id,
+    patient: v.patient ?? (nameOfPatient(v.patient_id) || "—"),
+    amount: Number(v.amount) || 0,
+    date: v.date ?? String(v.created_at || "").slice(0, 10),
+    allocations: Array.isArray(v.allocations) ? v.allocations
+                : (typeof v.allocations === "string"
+                    ? (function(){ try { return JSON.parse(v.allocations); } catch { return []; } })()
+                    : []),
+  }));
+  D.subscriptions = (D.subscriptions || []).map(s => ({
+    ...s,
+    id: s.subscription_id ?? s.id,
+    patient: s.patient ?? (nameOfPatient(s.patient_id) || "—"),
+    total_sessions: Number(s.total_sessions) || 0,
+    used_sessions: Number(s.used_sessions) || 0,
+    price: Number(s.price) || 0,
+    paid: Number(s.paid) || 0,
+    status: s.status ?? "active",
+  }));
+  D.treatmentMethods = (D.treatmentMethods || []).map(m => ({
+    ...m,
+    id: m.method_id ?? m.id,
+    name: String(m.name || "").trim(),
+    category: m.category ?? "",
+    status: m.status ?? "active",
+    duration_minutes: m.duration_minutes != null ? Number(m.duration_minutes) : null,
+  }));
 }
 window.normalizeDomainData = normalizeDomainData;
 
@@ -695,6 +738,908 @@ const KineticData = {
   remove: removeRow,
   tables: DATA_TABLES,
 };
+
+// ══════════════════════════════════════════════════════════════
+// Quick Payment API (PRD "دفع سريع")
+// ══════════════════════════════════════════════════════════════
+// Digits-only phone comparison so "+20 100…" matches "0100…" etc.
+// (Duplicated from screens1.jsx so the data layer stays self-contained.)
+function __normPhone(p) {
+  return String(p || "").replace(/\D/g, "").replace(/^0+/, "");
+}
+
+// Search patients by name (substring, case-insensitive), phone (digit
+// suffix match), or patient ID (prefix). Live data only — reads from
+// window.DATA.patients which is kept in sync with Supabase.
+async function searchPatientsFor(term) {
+  const q = String(term || "").trim();
+  if (!q) return [];
+  const list = (window.DATA && window.DATA.patients) || await listTable("patients");
+  const qLower = q.toLowerCase();
+  const qDigits = __normPhone(q);
+  const results = list.filter(p => {
+    const name = String(p.name || "").toLowerCase();
+    const pid  = String(p.patient_id || p.id || "").toLowerCase();
+    const ph   = __normPhone(p.phone);
+    if (name.includes(qLower)) return true;
+    if (pid.includes(qLower)) return true;
+    if (qDigits && ph && (ph.endsWith(qDigits) || ph.includes(qDigits))) return true;
+    return false;
+  });
+  return results.slice(0, 25);
+}
+
+// Load every outstanding financial item for one patient.
+// Returns { appointments, invoices, subscriptions } — each row includes
+// a computed `remaining` field (never trust a stale UI cache; always
+// re-read from Supabase when available).
+async function loadPatientFinancials(patientId) {
+  if (!patientId) return { appointments: [], invoices: [], subscriptions: [] };
+
+  let appts = [], invoices = [], subs = [];
+  if (sb) {
+    // Force a fresh read — the modal shows real remaining balances.
+    const [aRes, iRes, sRes] = await Promise.all([
+      sb.from("bookings").select("*").eq("patient_id", patientId),
+      sb.from("invoices").select("*").eq("patient_id", patientId),
+      sb.from("patient_subscriptions").select("*").eq("patient_id", patientId),
+    ]);
+    if (!aRes.error && Array.isArray(aRes.data)) appts = aRes.data;
+    if (!iRes.error && Array.isArray(iRes.data)) invoices = iRes.data;
+    if (!sRes.error && Array.isArray(sRes.data)) subs = sRes.data;
+  } else {
+    appts = (window.DATA?.appts || []).filter(a =>
+      (a.patient_id || a.pid) === patientId);
+    invoices = (window.DATA?.payments || []).filter(v =>
+      (v.patient_id) === patientId || v.pid === patientId);
+    subs = (window.DATA?.subscriptions || []).filter(s =>
+      s.patient_id === patientId);
+  }
+
+  const outstandingAppts = appts.map(a => {
+    const price = Number(a.price) || 0;
+    const paid  = Number(a.paid) || 0;
+    return { ...a, price, paid, remaining: Math.max(0, price - paid) };
+  }).filter(a => a.remaining > 0 && a.status !== "cancelled" && a.status !== "ملغي");
+
+  const outstandingInvoices = invoices.map(v => {
+    const amount = Number(v.amount) || 0;
+    const paid   = Number(v.paid) || 0;
+    return { ...v, amount, paid, remaining: Math.max(0, amount - paid) };
+  }).filter(v => v.remaining > 0);
+
+  const outstandingSubs = subs.map(s => {
+    const price = Number(s.price) || 0;
+    const paid  = Number(s.paid) || 0;
+    return { ...s,
+      price, paid, remaining: Math.max(0, price - paid),
+      total_sessions: Number(s.total_sessions) || 0,
+      used_sessions:  Number(s.used_sessions)  || 0,
+    };
+  }).filter(s => s.status !== "cancelled" && s.status !== "expired");
+
+  return {
+    appointments:  outstandingAppts,
+    invoices:      outstandingInvoices,
+    subscriptions: outstandingSubs,
+  };
+}
+
+// Load a patient's payment history (most recent first). Used by the
+// "سجل الدفع" tab; paginated to keep the payload small.
+async function loadPaymentHistory(patientId, opts) {
+  const limit = (opts && opts.limit) || 20;
+  const offset = (opts && opts.offset) || 0;
+  if (sb) {
+    let q = sb.from("payments").select("*");
+    if (patientId) q = q.eq("patient_id", patientId);
+    const { data, error } = await q
+      .order("created_at", { ascending: false })
+      .range(offset, offset + limit - 1);
+    if (!error && Array.isArray(data)) return data;
+  }
+  const src = (window.DATA?.paymentHistory || [])
+    .filter(p => !patientId || p.patient_id === patientId)
+    .slice()
+    .sort((a,b) => String(b.created_at||"").localeCompare(String(a.created_at||"")));
+  return src.slice(offset, offset + limit);
+}
+
+// Best-effort IP capture. Not sensitive — used only for the audit log.
+async function __clientIP() {
+  try {
+    const r = await fetch("https://api.ipify.org?format=json", { cache: "no-store" });
+    if (r.ok) { const j = await r.json(); return j.ip || null; }
+  } catch {}
+  return null;
+}
+
+function __receiptNo() {
+  const d = new Date();
+  const stamp = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}`;
+  return `RCT-${stamp}-${String(Math.floor(Math.random()*100000)).padStart(5,"0")}`;
+}
+function __paymentId() {
+  return "PMT-" + Date.now().toString() + "-" + Math.random().toString(36).slice(2,6);
+}
+
+// Record a Quick Payment. Prefers the transactional RPC (record_quick_payment);
+// falls back to a best-effort sequential write in demo / offline mode.
+//
+// input: {
+//   patient_id, method, reference, transaction_id, notes,
+//   allocations: [{ type:'appointment'|'invoice'|'subscription', id, amount }]
+// }
+// output: { ok, payment_id, receipt_no, amount, error? }
+async function recordQuickPayment(input) {
+  const patientId = input && input.patient_id;
+  const allocs = Array.isArray(input && input.allocations) ? input.allocations : [];
+  const method = input && input.method;
+
+  // ── Client-side validation (defensive) ───────────────────────
+  if (!patientId) return { ok: false, error: "لم يتم اختيار المريض" };
+  if (allocs.length === 0) return { ok: false, error: "اختر عنصرًا واحدًا على الأقل للدفع" };
+  if (!method) return { ok: false, error: "اختر طريقة الدفع" };
+  const total = allocs.reduce((s, a) => s + (Number(a.amount) || 0), 0);
+  if (total <= 0) return { ok: false, error: "المبلغ يجب أن يكون أكبر من صفر" };
+  for (const a of allocs) {
+    const amt = Number(a.amount);
+    if (!(amt > 0)) return { ok: false, error: "المبلغ لكل عنصر يجب أن يكون موجبًا" };
+    if (!["appointment","invoice","subscription"].includes(a.type))
+      return { ok: false, error: "نوع عنصر غير معروف" };
+    if (!a.id) return { ok: false, error: "معرّف العنصر مفقود" };
+  }
+
+  const me = window.ME || {};
+  const cashierId = me.staff_id || me.id || me.email || null;
+  const cashierName = me.name || me.email || "غير معروف";
+  const ipAddress = await __clientIP();
+
+  // ── Transactional path (Supabase RPC) ────────────────────────
+  if (sb) {
+    const { data, error } = await sb.rpc("record_quick_payment", {
+      p_patient_id: patientId,
+      p_allocations: allocs.map(a => ({
+        type: a.type, id: String(a.id), amount: Number(a.amount),
+      })),
+      p_method: method,
+      p_reference: (input.reference || "").trim() || null,
+      p_transaction_id: (input.transaction_id || "").trim() || null,
+      p_notes: (input.notes || "").trim() || null,
+      p_cashier_id: cashierId,
+      p_cashier_name: cashierName,
+      p_ip_address: ipAddress,
+    });
+    if (error) {
+      console.warn("record_quick_payment failed", error.message || error);
+      return { ok: false, error: error.message || "تعذّر تسجيل الدفع" };
+    }
+    // Refresh mirrors so tiles/tables update without a page reload.
+    await hydrateDomainTables().catch(()=>{});
+    return {
+      ok: true,
+      payment_id: (data && data.payment_id) || null,
+      receipt_no: (data && data.receipt_no) || null,
+      amount: total,
+    };
+  }
+
+  // ── Offline / demo fallback (no true transaction) ────────────
+  // Applies allocations sequentially and rolls back the local mirror on
+  // failure. Not atomic; documented as best-effort.
+  const snapshot = {
+    appts:          JSON.parse(JSON.stringify(window.DATA?.appts || [])),
+    payments:       JSON.parse(JSON.stringify(window.DATA?.payments || [])),
+    subscriptions:  JSON.parse(JSON.stringify(window.DATA?.subscriptions || [])),
+    paymentHistory: JSON.parse(JSON.stringify(window.DATA?.paymentHistory || [])),
+  };
+  try {
+    for (const a of allocs) {
+      const amt = Number(a.amount);
+      if (a.type === "appointment") {
+        const row = (window.DATA.appts || []).find(r => (r.booking_id || r.id) === a.id);
+        if (!row) throw new Error(`الموعد ${a.id} غير موجود`);
+        const price = Number(row.price) || 0;
+        const paidNow = (Number(row.paid) || 0) + amt;
+        if (amt > (price - (Number(row.paid) || 0)) + 0.001) throw new Error("المبلغ يتجاوز المتبقي على الموعد");
+        await upsertRow("appts", { ...row,
+          paid: paidNow,
+          payment_status: paidNow >= price ? "paid" : (paidNow > 0 ? "partial" : "pending"),
+        });
+      } else if (a.type === "invoice") {
+        const row = (window.DATA.payments || []).find(r => (r.invoice_id || r.id) === a.id);
+        if (!row) throw new Error(`الفاتورة ${a.id} غير موجودة`);
+        const amount = Number(row.amount) || 0;
+        const remaining = amount - (Number(row.paid) || 0);
+        if (remaining <= 0) throw new Error("الفاتورة مدفوعة بالكامل");
+        if (amt > remaining + 0.001) throw new Error("المبلغ يتجاوز المتبقي على الفاتورة");
+        const paidNow = (Number(row.paid) || 0) + amt;
+        await upsertRow("payments", { ...row,
+          paid: paidNow,
+          payment_method: method,
+          status: paidNow >= amount ? "paid" : (paidNow > 0 ? "partial" : "pending"),
+        });
+      } else if (a.type === "subscription") {
+        const row = (window.DATA.subscriptions || []).find(r => (r.subscription_id || r.id) === a.id);
+        if (!row) throw new Error(`الاشتراك ${a.id} غير موجود`);
+        const price = Number(row.price) || 0;
+        const remaining = price - (Number(row.paid) || 0);
+        if (remaining <= 0) throw new Error("الاشتراك مدفوع بالكامل");
+        if (amt > remaining + 0.001) throw new Error("المبلغ يتجاوز المتبقي على الاشتراك");
+        const paidNow = (Number(row.paid) || 0) + amt;
+        await upsertRow("subscriptions", { ...row,
+          paid: paidNow,
+          status: paidNow >= price ? "paid" : "active",
+          updated_at: new Date().toISOString(),
+        });
+      }
+    }
+    const payment_id = __paymentId();
+    const receipt_no = __receiptNo();
+    await upsertRow("paymentHistory", {
+      payment_id, patient_id: patientId,
+      cashier_id: cashierId, cashier_name: cashierName,
+      amount: total, method,
+      reference: (input.reference || "").trim() || null,
+      transaction_id: (input.transaction_id || "").trim() || null,
+      notes: (input.notes || "").trim() || null,
+      receipt_no, allocations: allocs,
+      ip_address: ipAddress,
+      status: "completed",
+      created_at: new Date().toISOString(),
+    });
+    return { ok: true, payment_id, receipt_no, amount: total };
+  } catch (e) {
+    // Rollback local mirror.
+    if (window.DATA) {
+      window.DATA.appts = snapshot.appts;
+      window.DATA.payments = snapshot.payments;
+      window.DATA.subscriptions = snapshot.subscriptions;
+      window.DATA.paymentHistory = snapshot.paymentHistory;
+    }
+    writeLS(DATA_TABLES.appts.ls, snapshot.appts);
+    writeLS(DATA_TABLES.payments.ls, snapshot.payments);
+    writeLS(DATA_TABLES.subscriptions.ls, snapshot.subscriptions);
+    writeLS(DATA_TABLES.paymentHistory.ls, snapshot.paymentHistory);
+    window.dispatchEvent(new CustomEvent("kinetic:data-updated", { detail: { table: "*" } }));
+    return { ok: false, error: e.message || String(e) };
+  }
+}
+
+const QuickPay = {
+  searchPatients:      searchPatientsFor,
+  loadFinancials:      loadPatientFinancials,
+  loadHistory:         loadPaymentHistory,
+  recordPayment:       recordQuickPayment,
+};
+
+// ══════════════════════════════════════════════════════════════
+// Treatment Methods API ("طرق علاج أخرى")
+// Shared library of modalities that doctors can extend at run-time.
+// The list is stored in DATA.treatmentMethods; every write also
+// hits the DB (via RPC when Supabase is on) so custom methods are
+// available to every terminal and every future treatment plan.
+// ══════════════════════════════════════════════════════════════
+function __txMethodId() {
+  const d = new Date();
+  const pad = (n, w=2) => String(n).padStart(w, "0");
+  const stamp = `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
+  return `TM-${stamp}-${rand}`;
+}
+
+// Case/whitespace-insensitive dedupe.
+function __normName(s) {
+  return String(s || "").trim().replace(/\s+/g, " ").toLocaleLowerCase("ar");
+}
+
+// Load once, then use DATA.treatmentMethods as the live cache. `force`
+// re-hits the DB (used after a save so RLS-filtered rows show up).
+async function listTxMethods(force) {
+  if (!force && Array.isArray(window.DATA?.treatmentMethods) && window.DATA.treatmentMethods.length) {
+    return window.DATA.treatmentMethods;
+  }
+  const rows = await listTable("treatmentMethods");
+  if (window.DATA) {
+    window.DATA.treatmentMethods = rows || [];
+    if (window.normalizeDomainData) window.normalizeDomainData(window.DATA);
+  }
+  window.dispatchEvent(new CustomEvent("kinetic:data-updated", { detail: { table: "treatmentMethods" } }));
+  return window.DATA?.treatmentMethods || rows || [];
+}
+
+// Client-side search over the cached list. Matches on name, category,
+// description (case-insensitive, Arabic-aware). Returns active rows
+// first, archived last so the picker never accidentally reuses a
+// retired method.
+function searchTxMethods(term) {
+  const list = window.DATA?.treatmentMethods || [];
+  const q = __normName(term);
+  if (!q) return list.slice().sort((a,b)=>(a.status==='archived')-(b.status==='archived'));
+  return list.filter(m =>
+    __normName(m.name).includes(q)
+    || __normName(m.category).includes(q)
+    || __normName(m.description).includes(q)
+  ).sort((a,b)=>(a.status==='archived')-(b.status==='archived'));
+}
+
+// Distinct categories seen in the library — used by the modal's
+// category picker so it stays in sync with whatever doctors have
+// actually added.
+function listTxCategories() {
+  const seen = new Map(); // preserve first-seen order
+  for (const m of (window.DATA?.treatmentMethods || [])) {
+    const c = String(m.category || "").trim();
+    if (c && !seen.has(c)) seen.set(c, true);
+  }
+  return Array.from(seen.keys());
+}
+
+// Client-side duplicate check so the modal can flag it before the
+// user hits حفظ. The RPC also enforces this server-side.
+function findTxMethodByName(name, excludeId) {
+  const n = __normName(name);
+  if (!n) return null;
+  return (window.DATA?.treatmentMethods || []).find(m =>
+    __normName(m.name) === n && (m.method_id !== excludeId)
+  ) || null;
+}
+
+function __txPayload(input) {
+  const trim = (v) => String(v || "").trim();
+  const numOrNull = (v) => (v == null || v === "") ? null : Number(v);
+  return {
+    name:             trim(input?.name),
+    category:         trim(input?.category)         || null,
+    description:      trim(input?.description)      || null,
+    notes:            trim(input?.notes)            || null,
+    icon:             trim(input?.icon)             || null,
+    color:            trim(input?.color)            || null,
+    duration_minutes: numOrNull(input?.duration_minutes),
+    display_order:    numOrNull(input?.display_order),
+    is_active:        (input?.is_active === false ? "false" : "true"),
+  };
+}
+
+async function createTxMethod(input) {
+  const payload = __txPayload(input);
+  if (!payload.name) return { ok: false, error: "الاسم مطلوب" };
+  if (findTxMethodByName(payload.name)) {
+    return { ok: false, error: "اسم طريقة العلاج موجود مسبقًا" };
+  }
+  const method_id = __txMethodId();
+
+  if (sb) {
+    const { data, error } = await sb.rpc("upsert_treatment_method", {
+      p_method_id: method_id,
+      p_payload:   payload,
+    });
+    if (error) return { ok: false, error: error.message || "تعذّر إنشاء طريقة العلاج" };
+    await listTxMethods(true);
+    return { ok: true, method_id: (data && data.method_id) || method_id, name: payload.name };
+  }
+
+  const now = new Date().toISOString();
+  const cashierName = (window.ME && (window.ME.name || window.ME.email)) || "طبيب";
+  await upsertRow("treatmentMethods", {
+    method_id,
+    name:             payload.name,
+    category:         payload.category,
+    description:      payload.description,
+    duration_minutes: payload.duration_minutes,
+    notes:            payload.notes,
+    icon:             payload.icon,
+    color:            payload.color,
+    display_order:    payload.display_order,
+    status:           payload.is_active === "false" ? "archived" : "active",
+    created_by_name:  cashierName,
+    created_at: now, updated_at: now,
+  });
+  return { ok: true, method_id, name: payload.name };
+}
+
+async function updateTxMethod(method_id, patch) {
+  if (!method_id) return { ok: false, error: "معرّف مفقود" };
+  const payload = __txPayload(patch);
+  if (!payload.name) return { ok: false, error: "الاسم مطلوب" };
+  if (findTxMethodByName(payload.name, method_id)) {
+    return { ok: false, error: "اسم طريقة العلاج موجود مسبقًا" };
+  }
+
+  if (sb) {
+    const { data, error } = await sb.rpc("upsert_treatment_method", {
+      p_method_id: method_id,
+      p_payload:   payload,
+    });
+    if (error) return { ok: false, error: error.message || "تعذّر تحديث طريقة العلاج" };
+    await listTxMethods(true);
+    return { ok: true, method_id: (data && data.method_id) || method_id };
+  }
+
+  const list = window.DATA?.treatmentMethods || [];
+  const row  = list.find(m => (m.method_id || m.id) === method_id);
+  if (!row) return { ok: false, error: "طريقة العلاج غير موجودة" };
+  await upsertRow("treatmentMethods", {
+    ...row,
+    name:             payload.name,
+    category:         payload.category,
+    description:      payload.description,
+    duration_minutes: payload.duration_minutes,
+    notes:            payload.notes,
+    icon:             payload.icon,
+    color:            payload.color,
+    display_order:    payload.display_order,
+    status:           payload.is_active === "false" ? "archived" : (row.status || "active"),
+    updated_at:       new Date().toISOString(),
+  });
+  return { ok: true, method_id };
+}
+
+async function removeTxMethod(method_id) {
+  if (!method_id) return { ok: false, error: "معرّف مفقود" };
+  if (sb) {
+    const { error } = await sb.rpc("delete_treatment_method", { p_method_id: method_id });
+    if (error) return { ok: false, error: error.message || "تعذّر الحذف" };
+    await listTxMethods(true);
+    return { ok: true, method_id };
+  }
+  // LS mode: block if any template references this method_id or name.
+  const list = window.DATA?.treatmentMethods || [];
+  const row  = list.find(m => (m.method_id || m.id) === method_id);
+  if (!row) return { ok: false, error: "غير موجود" };
+  const templates = readLS(LS_TEMPLATES, []);
+  const nm = String(row.name || "").toLowerCase();
+  const used = templates.some(t => (t.methods || []).some(m => (m.method_id === method_id) || (String(m.name || m || "").toLowerCase() === nm)));
+  if (used) return { ok: false, error: "لا يمكن حذف طريقة مستخدمة في القوالب — استخدم الأرشفة بدلاً منها" };
+  const next = list.filter(m => (m.method_id || m.id) !== method_id);
+  window.DATA.treatmentMethods = next;
+  writeLS('kinetic.treatment_methods.v1', next);
+  window.dispatchEvent(new CustomEvent("kinetic:data-updated", { detail: { table: "treatmentMethods" } }));
+  return { ok: true, method_id };
+}
+
+async function setTxMethodStatus(method_id, status) {
+  if (!method_id) return { ok: false, error: "معرّف مفقود" };
+  if (status !== "active" && status !== "archived") {
+    return { ok: false, error: "حالة غير صحيحة" };
+  }
+  if (sb) {
+    const { error } = await sb.rpc("set_treatment_method_status", {
+      p_method_id: method_id, p_status: status,
+    });
+    if (error) return { ok: false, error: error.message || "تعذّر التحديث" };
+    await listTxMethods(true);
+    return { ok: true, method_id, status };
+  }
+  const list = window.DATA?.treatmentMethods || [];
+  const row  = list.find(m => (m.method_id || m.id) === method_id);
+  if (!row) return { ok: false, error: "غير موجود" };
+  await upsertRow("treatmentMethods", { ...row, status, updated_at: new Date().toISOString() });
+  return { ok: true, method_id, status };
+}
+
+const TxMethods = {
+  list:       listTxMethods,
+  search:     searchTxMethods,
+  categories: listTxCategories,
+  findByName: findTxMethodByName,
+  create:     createTxMethod,
+  update:     updateTxMethod,
+  archive:    (id) => setTxMethodStatus(id, "archived"),
+  restore:    (id) => setTxMethodStatus(id, "active"),
+  remove:     removeTxMethod,
+};
+window.TxMethods = TxMethods;
+
+// ══════════════════════════════════════════════════════════════
+// Invoices filter API — powers the date filter on Payments page.
+// Tries the DB RPC `list_invoices_filtered` first (server-side range +
+// aggregates in one round-trip), falls back to filtering DATA.payments
+// on the client so demo/LS mode keeps working. Returns a stable shape:
+//   { rows, stats:{ total_invoices, paid_amount, outstanding,
+//                    overdue_amount, avg_amount, revenue,
+//                    count, due_total }, count, limit, offset }
+// ══════════════════════════════════════════════════════════════
+function __asIsoStart(d) {
+  if (!d) return null;
+  if (d instanceof Date) return d.toISOString();
+  const s = String(d);
+  // Accept "YYYY-MM-DD"
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return `${s}T00:00:00.000Z`;
+  return new Date(s).toISOString();
+}
+function __asIsoEnd(d) {
+  if (!d) return null;
+  if (d instanceof Date) return d.toISOString();
+  const s = String(d);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return `${s}T23:59:59.999Z`;
+  return new Date(s).toISOString();
+}
+function __invoiceCreatedAt(row) {
+  return row && (row.created_at || row.date || row.updated_at || "");
+}
+function __rowMatchesSearch(row, term) {
+  if (!term) return true;
+  const t = String(term).trim().toLowerCase();
+  if (!t) return true;
+  const hay = [row.invoice_id, row.id, row.patient, row.patient_name, row.patient_id]
+    .filter(Boolean).join(" ").toLowerCase();
+  return hay.includes(t);
+}
+function __computeClientStats(rows) {
+  const s = {
+    total_invoices: 0, paid_amount: 0, outstanding: 0,
+    overdue_amount: 0, avg_amount: 0, revenue: 0,
+    count: rows.length, due_total: 0,
+  };
+  for (const r of rows) {
+    const amt = Number(r.amount || 0);
+    const paid = Number(r.paid || 0);
+    const due = Math.max(0, amt - paid);
+    s.total_invoices += amt;
+    s.paid_amount    += paid;
+    s.outstanding    += due;
+    s.due_total      += due;
+    if (r.status === "متأخر") s.overdue_amount += due;
+  }
+  s.revenue = s.paid_amount;
+  s.avg_amount = rows.length ? s.total_invoices / rows.length : 0;
+  return s;
+}
+
+async function listInvoicesFiltered({ from, to, search, status, limit, offset } = {}) {
+  const fromIso = __asIsoStart(from);
+  const toIso   = __asIsoEnd(to);
+  const lim = Math.max(1, Math.min(500, Number(limit) || 500));
+  const off = Math.max(0, Number(offset) || 0);
+  const trimSearch = (search || "").trim();
+  const st = status && status !== "الكل" ? status : null;
+
+  if (sb) {
+    try {
+      const { data, error } = await sb.rpc("list_invoices_filtered", {
+        p_from:   fromIso,
+        p_to:     toIso,
+        p_search: trimSearch || null,
+        p_status: st,
+        p_limit:  lim,
+        p_offset: off,
+      });
+      if (!error && data) {
+        const rows = Array.isArray(data.rows) ? data.rows : [];
+        const stats = data.stats || {};
+        const count = Number(data.count || rows.length) || 0;
+        return {
+          rows: rows.map(r => ({
+            invoice_id: r.invoice_id,
+            id:         r.invoice_id,
+            patient_id: r.patient_id,
+            patient:    r.patient_name || "",
+            amount:     Number(r.amount || 0),
+            paid:       Number(r.paid || 0),
+            method:     r.payment_method || "",
+            payment_method: r.payment_method || "",
+            status:     r.status || "معلّق",
+            date:       (r.created_at || "").slice(0, 10),
+            created_at: r.created_at,
+          })),
+          stats: {
+            total_invoices: Number(stats.total_invoices || 0),
+            paid_amount:    Number(stats.paid_amount || 0),
+            outstanding:    Number(stats.outstanding || 0),
+            overdue_amount: Number(stats.overdue_amount || 0),
+            avg_amount:     Number(stats.avg_amount || 0),
+            revenue:        Number(stats.paid_amount || 0),
+            count:          Number(stats.count || count),
+            due_total:      Number(stats.outstanding || 0),
+          },
+          count, limit: lim, offset: off,
+        };
+      }
+      if (error) console.warn("list_invoices_filtered rpc failed", error.message || error);
+    } catch (e) { console.warn("list_invoices_filtered rpc failed", e); }
+  }
+
+  // Fallback: filter the in-memory DATA.payments. Honours scopePayments
+  // when the current user is a therapist, so visibility rules match.
+  const src = (window.scopePayments ? window.scopePayments(window.DATA?.payments || [])
+                                    : (window.DATA?.payments || []));
+  const filtered = src.filter(r => {
+    const created = __invoiceCreatedAt(r);
+    if (fromIso && created && created < fromIso) return false;
+    if (toIso   && created && created > toIso) return false;
+    if (st && r.status !== st) return false;
+    if (!__rowMatchesSearch(r, trimSearch)) return false;
+    return true;
+  }).sort((a, b) => String(__invoiceCreatedAt(b)).localeCompare(String(__invoiceCreatedAt(a))));
+
+  const stats = __computeClientStats(filtered);
+  const page  = filtered.slice(off, off + lim);
+  return { rows: page, stats, count: filtered.length, limit: lim, offset: off };
+}
+
+const InvoicesAPI = { listFiltered: listInvoicesFiltered };
+window.InvoicesAPI = InvoicesAPI;
+
+// ══════════════════════════════════════════════════════════════
+// Receive Payment — patient-profile invoice payments with receipt
+// upload. Every operation is DB-backed:
+//   1. Upload the receipt file to Supabase Storage (patient-files
+//      bucket under the "receipts/" prefix). If no storage backend is
+//      configured we fall back to inlined data URLs so demo mode still
+//      records the receipt row.
+//   2. Call the existing `record_quick_payment` RPC to move money
+//      (invoice update + payment row + audit inside one DB TX).
+//   3. Insert a `payment_receipts` metadata row linking the file to
+//      the payment/invoice/patient.
+//   4. If step 3 fails, remove the uploaded file so no orphans stay
+//      behind. If step 2 fails, we do the same for step 1.
+// ══════════════════════════════════════════════════════════════
+const RECEIPT_ALLOWED_TYPES = ["image/jpeg","image/jpg","image/png","application/pdf"];
+const RECEIPT_ALLOWED_EXT   = /\.(jpe?g|png|pdf)$/i;
+const RECEIPT_MAX_BYTES     = 8 * 1024 * 1024; // 8MB cap — receipts are small
+const LS_RECEIPTS           = "kinetic.payment_receipts";
+
+function __nextReceiptId() {
+  return "rct_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+function __receiptValid(file) {
+  if (!file) return "لم يتم اختيار ملف";
+  if (file.size > RECEIPT_MAX_BYTES) return "حجم الملف يتجاوز 8MB";
+  const okType = RECEIPT_ALLOWED_TYPES.includes(file.type);
+  const okExt  = RECEIPT_ALLOWED_EXT.test(file.name || "");
+  if (!okType && !okExt) return "نوع الملف غير مدعوم — JPG/PNG/PDF فقط";
+  return null;
+}
+
+// Upload one receipt file → Storage. Returns { storage_path, file_url }
+// or falls back to a data-URL row when Storage is unavailable.
+async function __uploadReceiptFile(patientId, receiptId, file) {
+  const safe = sanitizeFileName(file.name);
+  const path = `receipts/${patientId}/${receiptId}-${safe}`;
+  if (sb) {
+    try {
+      const { error: upErr } = await sb.storage.from(PATIENT_FILES_BUCKET)
+        .upload(path, file, { cacheControl: "3600", upsert: false });
+      if (!upErr) {
+        const { data: pub } = sb.storage.from(PATIENT_FILES_BUCKET).getPublicUrl(path);
+        return { storage_path: path, file_url: (pub && pub.publicUrl) || "" };
+      }
+      console.warn("upload receipt storage failed", upErr.message || upErr);
+    } catch (e) { console.warn("upload receipt storage failed", e); }
+  }
+  // Fallback: inline as data URL so demo/offline still keeps the receipt.
+  const dataUrl = await readInlineFile(file);
+  return { storage_path: "", file_url: dataUrl || "" };
+}
+
+async function __removeReceiptFile(storage_path) {
+  if (!sb || !storage_path) return;
+  try { await sb.storage.from(PATIENT_FILES_BUCKET).remove([storage_path]); }
+  catch (e) { console.warn("cleanup receipt file failed", e); }
+}
+
+async function __insertReceiptRow(row) {
+  const localRow = { ...row };
+  const idx = readLS(LS_RECEIPTS, []);
+  idx.unshift(localRow);
+  writeLS(LS_RECEIPTS, idx);
+  if (sb) {
+    const dbRow = {
+      receipt_id:       row.receipt_id,
+      payment_id:       row.payment_id,
+      invoice_id:       row.invoice_id,
+      patient_id:       row.patient_id,
+      file_name:        row.file_name,
+      stored_name:      row.stored_name,
+      storage_path:     row.storage_path,
+      file_url:         row.file_url,
+      file_type:        row.file_type,
+      file_size:        row.file_size,
+      uploaded_by_name: row.uploaded_by_name,
+    };
+    const { error } = await sb.from("payment_receipts").insert(dbRow);
+    if (error) {
+      console.warn("insert payment_receipts failed", error.message || error);
+      // Roll back the LS mirror if the DB rejected.
+      writeLS(LS_RECEIPTS, readLS(LS_RECEIPTS, []).filter(r => r.receipt_id !== row.receipt_id));
+      return { ok: false, error: error.message || "تعذّر حفظ الإيصال" };
+    }
+  }
+  return { ok: true };
+}
+
+// Public: receive one payment against a specific invoice with an
+// optional receipt file. Returns { ok, payment_id, receipt_no,
+// receipt_id, receipt_url, remaining } on success.
+async function receiveInvoicePayment(input) {
+  const invoice = input && input.invoice;
+  const amount  = Number(input && input.amount) || 0;
+  const method  = input && input.method;
+  const file    = input && input.file || null;
+
+  // ── Client-side validation ──
+  if (!invoice || !(invoice.invoice_id || invoice.id))
+    return { ok: false, error: "الفاتورة غير موجودة" };
+  if (!method) return { ok: false, error: "اختر طريقة الدفع" };
+  const total     = Number(invoice.amount || 0);
+  const paidSoFar = Number(invoice.paid   || 0);
+  const remaining = Math.max(0, total - paidSoFar);
+  if (!(amount > 0)) return { ok: false, error: "المبلغ يجب أن يكون أكبر من صفر" };
+  if (amount > remaining + 0.0001) return { ok: false, error: "المبلغ يتجاوز الرصيد المتبقي" };
+  if (file) {
+    const err = __receiptValid(file);
+    if (err) return { ok: false, error: err };
+  }
+
+  const me = window.ME || {};
+  const uploaderName = me.name || me.email || "غير معروف";
+  const patientId    = invoice.patient_id || invoice.pid || (input.patient && input.patient.patient_id);
+
+  // ── 1. Upload the receipt first so the payment TX only fires when
+  //       we have a file locked in. If there's no file, skip.
+  let uploaded = null;
+  const receiptId = __nextReceiptId();
+  if (file) {
+    try {
+      uploaded = await __uploadReceiptFile(patientId, receiptId, file);
+    } catch (e) {
+      console.warn("receipt upload failed", e);
+      return { ok: false, error: "تعذّر رفع الإيصال" };
+    }
+    if (!uploaded || (!uploaded.file_url && !uploaded.storage_path)) {
+      return { ok: false, error: "تعذّر رفع الإيصال" };
+    }
+  }
+
+  // ── 2. Record the payment atomically via the existing RPC.
+  const payRes = await recordQuickPayment({
+    patient_id: patientId,
+    allocations: [{
+      type:   "invoice",
+      id:     invoice.invoice_id || invoice.id,
+      amount: amount,
+    }],
+    method:         method,
+    reference:      input.reference || "",
+    transaction_id: input.transaction_id || "",
+    notes:          input.notes || "",
+  });
+  if (!payRes || !payRes.ok) {
+    // Payment failed → clean up any uploaded file so we don't leave
+    // orphaned receipts in storage.
+    if (uploaded && uploaded.storage_path) await __removeReceiptFile(uploaded.storage_path);
+    return { ok: false, error: (payRes && payRes.error) || "تعذّر تسجيل الدفع" };
+  }
+
+  // ── 3. Persist receipt metadata linked to the new payment_id.
+  let receiptRow = null;
+  if (uploaded) {
+    receiptRow = {
+      receipt_id:       receiptId,
+      payment_id:       payRes.payment_id,
+      invoice_id:       invoice.invoice_id || invoice.id,
+      patient_id:       patientId,
+      file_name:        file.name,
+      stored_name:      sanitizeFileName(file.name),
+      storage_path:     uploaded.storage_path,
+      file_url:         uploaded.file_url,
+      file_type:        file.type || "",
+      file_size:        file.size || 0,
+      uploaded_by_name: uploaderName,
+      uploaded_at:      new Date().toISOString(),
+    };
+    const ins = await __insertReceiptRow(receiptRow);
+    if (!ins.ok) {
+      // The payment succeeded but the metadata insert failed. Do NOT
+      // roll back the payment (it's already committed); best-effort
+      // clean up the file so we don't leak. Warn caller.
+      if (uploaded.storage_path) await __removeReceiptFile(uploaded.storage_path);
+      window.dispatchEvent(new CustomEvent("kinetic:data-updated", { detail: {} }));
+      return { ok: true, warning: "تم تسجيل الدفع لكن تعذّر حفظ ملف الإيصال",
+        payment_id: payRes.payment_id, receipt_no: payRes.receipt_no,
+        remaining: Math.max(0, remaining - amount) };
+    }
+  }
+
+  window.dispatchEvent(new CustomEvent("kinetic:data-updated", { detail: {} }));
+  window.dispatchEvent(new CustomEvent("kinetic:payment-receipt-updated", { detail: { invoice_id: invoice.invoice_id || invoice.id } }));
+  return {
+    ok: true,
+    payment_id:  payRes.payment_id,
+    receipt_no:  payRes.receipt_no,
+    receipt_id:  receiptRow ? receiptRow.receipt_id : null,
+    receipt_url: receiptRow ? receiptRow.file_url   : null,
+    remaining:   Math.max(0, remaining - amount),
+    invoice_id:  invoice.invoice_id || invoice.id,
+  };
+}
+
+// List all payments for a given invoice, newest first. Merges DB rows
+// with the LS mirror so offline/demo mode also renders history.
+async function listInvoicePayments(invoiceId) {
+  if (!invoiceId) return [];
+  const wanted = String(invoiceId);
+  const rows = [];
+  if (sb) {
+    try {
+      const { data, error } = await sb.from("payments")
+        .select("*").order("created_at", { ascending: false });
+      if (!error && Array.isArray(data)) {
+        data.forEach(p => {
+          const allocs = Array.isArray(p.allocations) ? p.allocations
+                       : (typeof p.allocations === "string" ? JSON.parse(p.allocations || "[]") : []);
+          if (allocs.some(a => a.type === "invoice" && String(a.id) === wanted)) rows.push(p);
+        });
+        return rows;
+      }
+      if (error) console.warn("listInvoicePayments failed", error.message || error);
+    } catch (e) { console.warn("listInvoicePayments failed", e); }
+  }
+  const mirror = readLS(DATA_TABLES.paymentHistory.ls, []);
+  mirror.forEach(p => {
+    const allocs = Array.isArray(p.allocations) ? p.allocations
+                 : (typeof p.allocations === "string" ? JSON.parse(p.allocations || "[]") : []);
+    if (allocs.some(a => a.type === "invoice" && String(a.id) === wanted)) rows.push(p);
+  });
+  return rows;
+}
+
+async function listInvoiceReceipts(invoiceId, paymentId) {
+  const rows = [];
+  const wantedInv = invoiceId ? String(invoiceId) : null;
+  const wantedPay = paymentId ? String(paymentId) : null;
+  if (sb) {
+    try {
+      let q = sb.from("payment_receipts").select("*").is("deleted_at", null);
+      if (wantedInv) q = q.eq("invoice_id", wantedInv);
+      if (wantedPay) q = q.eq("payment_id", wantedPay);
+      const { data, error } = await q.order("uploaded_at", { ascending: false });
+      if (!error && Array.isArray(data)) return data;
+      if (error) console.warn("listInvoiceReceipts failed", error.message || error);
+    } catch (e) { console.warn("listInvoiceReceipts failed", e); }
+  }
+  const mirror = readLS(LS_RECEIPTS, []);
+  mirror.forEach(r => {
+    if (r.deleted_at) return;
+    if (wantedInv && String(r.invoice_id) !== wantedInv) return;
+    if (wantedPay && String(r.payment_id) !== wantedPay) return;
+    rows.push(r);
+  });
+  return rows;
+}
+
+async function deletePaymentReceipt(receiptId) {
+  if (!receiptId) return { ok: false, error: "معرّف الإيصال مفقود" };
+  const me = window.ME || {};
+  if (me.role && me.role !== "مدير" && me.role !== "admin")
+    return { ok: false, error: "الحذف مقتصر على المدير" };
+  if (sb) {
+    const { data, error } = await sb.rpc("delete_payment_receipt", { p_receipt_id: receiptId });
+    if (error) {
+      console.warn("delete_payment_receipt rpc failed", error.message || error);
+      return { ok: false, error: error.message || "تعذّر الحذف" };
+    }
+    // Update LS mirror to match.
+    const idx = readLS(LS_RECEIPTS, []);
+    writeLS(LS_RECEIPTS, idx.map(r => r.receipt_id === receiptId ? { ...r, deleted_at: new Date().toISOString() } : r));
+    window.dispatchEvent(new CustomEvent("kinetic:payment-receipt-updated", { detail: {} }));
+    return { ok: true, receipt_id: receiptId, deleted: !!(data && data.deleted) };
+  }
+  const idx = readLS(LS_RECEIPTS, []);
+  writeLS(LS_RECEIPTS, idx.map(r => r.receipt_id === receiptId ? { ...r, deleted_at: new Date().toISOString() } : r));
+  window.dispatchEvent(new CustomEvent("kinetic:payment-receipt-updated", { detail: {} }));
+  return { ok: true, receipt_id: receiptId, deleted: true };
+}
+
+const PaymentReceipts = {
+  receive:  receiveInvoicePayment,
+  history:  listInvoicePayments,
+  list:     listInvoiceReceipts,
+  remove:   deletePaymentReceipt,
+  validate: __receiptValid,
+};
+window.PaymentReceipts = PaymentReceipts;
 
 // ══════════════════════════════════════════════════════════════
 // Patient files (normalized) — `patient_files` table + Supabase
@@ -806,6 +1751,352 @@ async function removePatientFile(fileId) {
   window.dispatchEvent(new CustomEvent("kinetic:patient-files-updated", { detail: {} }));
 }
 
+// ══════════════════════════════════════════════════════════════
+// Treatment Plan Templates API
+// Reads / writes public.treatment_templates via RPCs. In demo/LS
+// mode, mirrors state under `kinetic.treatment_templates.v1` so
+// the UI works identically without a Supabase connection.
+// ══════════════════════════════════════════════════════════════
+const LS_TEMPLATES         = 'kinetic.treatment_templates.v1';
+const LS_TEMPLATE_VERSIONS = 'kinetic.template_versions.v1';
+const LS_TEMPLATE_USAGE    = 'kinetic.template_usage.v1';
+
+function __tplId() {
+  const d = new Date();
+  const pad = (n, w = 2) => String(n).padStart(w, '0');
+  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
+  return `TPL-${stamp}-${rand}`;
+}
+function __currentEditorName() {
+  return (window.ME && (window.ME.name || window.ME.email)) || '—';
+}
+function __normalizeTemplate(input) {
+  const errors = [];
+  const name = String(input?.name || '').trim();
+  if (!name) errors.push('اسم القالب مطلوب');
+  const arr = (v) => Array.isArray(v) ? v : [];
+  const num = (v) => (v == null || v === '') ? null : Number(v);
+  return {
+    errors,
+    payload: {
+      name,
+      category:              input?.category || '',
+      diagnosis:             input?.diagnosis || '',
+      body_part:             input?.body_part || '',
+      goals:                 arr(input?.goals).map(g => String(g||'').trim()).filter(Boolean),
+      exercises:             arr(input?.exercises).map(e => ({
+        name:        String(e?.name || '').trim(),
+        description: String(e?.description || '').trim(),
+        sets:        e?.sets || '',
+        reps:        e?.reps || '',
+        duration:    e?.duration || '',
+        hold_time:   e?.hold_time || '',
+        rest_time:   e?.rest_time || '',
+        equipment:   e?.equipment || '',
+        notes:       e?.notes || '',
+      })).filter(e => e.name),
+      methods:               arr(input?.methods).map(m => (typeof m === 'string') ? { name: m } : m).filter(m => m && m.name),
+      modalities:            arr(input?.modalities).map(m => String(m||'').trim()).filter(Boolean),
+      home_instructions:     input?.home_instructions || '',
+      notes:                 input?.notes || '',
+      warnings:              input?.warnings || '',
+      followup_instructions: input?.followup_instructions || '',
+      estimated_sessions:    num(input?.estimated_sessions),
+      weekly_frequency:      num(input?.weekly_frequency),
+      expected_recovery_days: num(input?.expected_recovery_days),
+    },
+  };
+}
+function __tplDispatch(action, template_id) {
+  window.dispatchEvent(new CustomEvent('kinetic:templates-updated', { detail: { action, template_id } }));
+  window.dispatchEvent(new CustomEvent('kinetic:data-updated', { detail: { table: 'treatment_templates' } }));
+}
+
+async function listTreatmentTemplates(opts = {}) {
+  const { status = '', category = '', creator = null, search = '', sort = 'recent', limit = 100, offset = 0 } = opts;
+  if (sb) {
+    try {
+      const { data, error } = await sb.rpc('list_treatment_templates', {
+        p_status:   status || null,
+        p_category: category || null,
+        p_creator:  creator || null,
+        p_search:   search || null,
+        p_sort:     sort || 'recent',
+        p_limit:    limit,
+        p_offset:   offset,
+      });
+      if (!error && data) return { rows: data.rows || [], count: data.count || 0 };
+      if (error) console.warn('list_treatment_templates failed', error.message || error);
+    } catch (e) { console.warn('list_treatment_templates failed', e); }
+  }
+  const all = readLS(LS_TEMPLATES, []);
+  const q = String(search || '').toLowerCase();
+  let rows = all.filter(t =>
+       (!status   || t.status === status)
+    && (!category || t.category === category)
+    && (!q || [t.name, t.diagnosis, t.category, t.body_part, JSON.stringify(t.exercises||[]), JSON.stringify(t.methods||[])].join(' ').toLowerCase().includes(q))
+  );
+  if (sort === 'usage')  rows.sort((a, b) => (b.usage_count || 0) - (a.usage_count || 0));
+  else if (sort === 'name') rows.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ar'));
+  else if (sort === 'oldest') rows.sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
+  else rows.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+  return { rows: rows.slice(offset, offset + limit), count: rows.length };
+}
+
+async function getTreatmentTemplate(templateId) {
+  if (sb) {
+    try {
+      const { data, error } = await sb.rpc('get_treatment_template', { p_template_id: templateId });
+      if (!error && data) return data;
+      if (error) console.warn('get_treatment_template failed', error.message || error);
+    } catch (e) { console.warn('get_treatment_template failed', e); }
+  }
+  const all = readLS(LS_TEMPLATES, []);
+  const template = all.find(t => t.template_id === templateId);
+  if (!template) return null;
+  const versions = readLS(LS_TEMPLATE_VERSIONS, []).filter(v => v.template_id === templateId)
+                     .sort((a, b) => (b.version_num || 0) - (a.version_num || 0));
+  const uses = readLS(LS_TEMPLATE_USAGE, []).filter(u => u.template_id === templateId);
+  const completed = uses.filter(u => u.completed_at).length;
+  return {
+    template, versions,
+    stats: {
+      usage_count:     uses.length,
+      completion_rate: uses.length ? Math.round(completed / uses.length * 1000) / 10 : 0,
+      avg_recovery:    uses.length ? Math.round(uses.reduce((s, u) => s + (u.recovery_days || 0), 0) / uses.length * 10) / 10 : 0,
+      last_used_at:    uses.reduce((a, u) => (u.applied_at > a ? u.applied_at : a), ''),
+    },
+  };
+}
+
+async function createTreatmentTemplate(input) {
+  const { errors, payload } = __normalizeTemplate(input);
+  if (errors.length) return { ok: false, error: errors[0] };
+  payload.created_by_name = __currentEditorName();
+  const template_id = __tplId();
+
+  if (sb) {
+    try {
+      const { data, error } = await sb.rpc('create_treatment_template', {
+        p_template_id: template_id, p_payload: payload,
+      });
+      if (error) return { ok: false, error: error.message || 'تعذّر إنشاء القالب' };
+      const outId = (data && data.template_id) || template_id;
+      __tplDispatch('create', outId);
+      return { ok: true, template_id: outId };
+    } catch (e) { return { ok: false, error: e.message || 'تعذّر إنشاء القالب' }; }
+  }
+
+  const now = new Date().toISOString();
+  const row = {
+    template_id, ...payload,
+    status: 'active', version: 1, usage_count: 0, last_used_at: null,
+    created_by_name: payload.created_by_name,
+    updated_by_name: payload.created_by_name,
+    created_at: now, updated_at: now,
+  };
+  writeLS(LS_TEMPLATES, [...readLS(LS_TEMPLATES, []), row]);
+  writeLS(LS_TEMPLATE_VERSIONS, [...readLS(LS_TEMPLATE_VERSIONS, []), {
+    version_id: `TV-${template_id}-1`, template_id, version_num: 1,
+    editor_name: payload.created_by_name, change_summary: 'إنشاء',
+    snapshot: row, created_at: now,
+  }]);
+  __tplDispatch('create', template_id);
+  return { ok: true, template_id };
+}
+
+async function updateTreatmentTemplate(templateId, input, changeSummary) {
+  if (!templateId) return { ok: false, error: 'معرّف مفقود' };
+  const { errors, payload } = __normalizeTemplate(input);
+  if (errors.length) return { ok: false, error: errors[0] };
+  payload.updated_by_name = __currentEditorName();
+
+  if (sb) {
+    try {
+      const { data, error } = await sb.rpc('update_treatment_template', {
+        p_template_id: templateId, p_payload: payload, p_change_summary: changeSummary || null,
+      });
+      if (error) return { ok: false, error: error.message || 'تعذّر التحديث' };
+      __tplDispatch('update', templateId);
+      return { ok: true, template_id: (data && data.template_id) || templateId };
+    } catch (e) { return { ok: false, error: e.message || 'تعذّر التحديث' }; }
+  }
+
+  const all = readLS(LS_TEMPLATES, []);
+  const idx = all.findIndex(t => t.template_id === templateId);
+  if (idx < 0) return { ok: false, error: 'القالب غير موجود' };
+  const now = new Date().toISOString();
+  const nextVersion = (all[idx].version || 1) + 1;
+  const updated = { ...all[idx], ...payload, version: nextVersion, updated_at: now, updated_by_name: payload.updated_by_name };
+  all[idx] = updated;
+  writeLS(LS_TEMPLATES, all);
+  writeLS(LS_TEMPLATE_VERSIONS, [...readLS(LS_TEMPLATE_VERSIONS, []), {
+    version_id: `TV-${templateId}-${nextVersion}`, template_id: templateId, version_num: nextVersion,
+    editor_name: payload.updated_by_name, change_summary: changeSummary || 'تعديل',
+    snapshot: updated, created_at: now,
+  }]);
+  __tplDispatch('update', templateId);
+  return { ok: true, template_id: templateId };
+}
+
+async function duplicateTreatmentTemplate(templateId, newName) {
+  if (!templateId) return { ok: false, error: 'معرّف مفقود' };
+  if (sb) {
+    try {
+      const { data, error } = await sb.rpc('duplicate_treatment_template', {
+        p_template_id: templateId, p_new_name: (newName || '').trim() || null,
+      });
+      if (error) return { ok: false, error: error.message || 'تعذّر النسخ' };
+      const newId = data && data.template_id;
+      __tplDispatch('duplicate', newId);
+      return { ok: true, template_id: newId };
+    } catch (e) { return { ok: false, error: e.message || 'تعذّر النسخ' }; }
+  }
+  const all = readLS(LS_TEMPLATES, []);
+  const src = all.find(t => t.template_id === templateId);
+  if (!src) return { ok: false, error: 'القالب غير موجود' };
+  const now = new Date().toISOString();
+  const new_id = __tplId();
+  const copy = {
+    ...src, template_id: new_id,
+    name: (newName || '').trim() || `${src.name} — نسخة`,
+    status: 'active', version: 1, usage_count: 0, last_used_at: null,
+    created_by_name: __currentEditorName(), updated_by_name: __currentEditorName(),
+    created_at: now, updated_at: now,
+  };
+  writeLS(LS_TEMPLATES, [...all, copy]);
+  writeLS(LS_TEMPLATE_VERSIONS, [...readLS(LS_TEMPLATE_VERSIONS, []), {
+    version_id: `TV-${new_id}-1`, template_id: new_id, version_num: 1,
+    editor_name: copy.created_by_name, change_summary: `نسخة من ${templateId}`,
+    snapshot: copy, created_at: now,
+  }]);
+  __tplDispatch('duplicate', new_id);
+  return { ok: true, template_id: new_id };
+}
+
+async function setTreatmentTemplateStatus(templateId, status) {
+  if (!templateId) return { ok: false, error: 'معرّف مفقود' };
+  if (!['active', 'archived'].includes(status)) return { ok: false, error: 'حالة غير صحيحة' };
+  if (sb) {
+    try {
+      const { data, error } = await sb.rpc('set_treatment_template_status', {
+        p_template_id: templateId, p_status: status,
+      });
+      if (error) return { ok: false, error: error.message || 'تعذّر التحديث' };
+      __tplDispatch('status', templateId);
+      return { ok: true, template_id: (data && data.template_id) || templateId, status };
+    } catch (e) { return { ok: false, error: e.message || 'تعذّر التحديث' }; }
+  }
+  const all = readLS(LS_TEMPLATES, []);
+  const idx = all.findIndex(t => t.template_id === templateId);
+  if (idx < 0) return { ok: false, error: 'القالب غير موجود' };
+  all[idx] = { ...all[idx], status, updated_at: new Date().toISOString() };
+  writeLS(LS_TEMPLATES, all);
+  __tplDispatch('status', templateId);
+  return { ok: true, template_id: templateId, status };
+}
+
+async function deleteTreatmentTemplate(templateId) {
+  if (!templateId) return { ok: false, error: 'معرّف مفقود' };
+  if (sb) {
+    try {
+      const { data, error } = await sb.rpc('delete_treatment_template', { p_template_id: templateId });
+      if (error) return { ok: false, error: error.message || 'تعذّر الحذف' };
+      __tplDispatch('delete', templateId);
+      return { ok: true, template_id: templateId };
+    } catch (e) { return { ok: false, error: e.message || 'تعذّر الحذف' }; }
+  }
+  const all = readLS(LS_TEMPLATES, []);
+  const src = all.find(t => t.template_id === templateId);
+  if (!src) return { ok: false, error: 'القالب غير موجود' };
+  const uses = readLS(LS_TEMPLATE_USAGE, []).filter(u => u.template_id === templateId);
+  if (uses.length > 0 || (src.usage_count || 0) > 0) {
+    return { ok: false, error: 'لا يمكن حذف قالب مستخدم — استخدم الأرشفة بدلاً منه' };
+  }
+  writeLS(LS_TEMPLATES, all.filter(t => t.template_id !== templateId));
+  writeLS(LS_TEMPLATE_VERSIONS, readLS(LS_TEMPLATE_VERSIONS, []).filter(v => v.template_id !== templateId));
+  __tplDispatch('delete', templateId);
+  return { ok: true, template_id: templateId };
+}
+
+async function applyTreatmentTemplate(templateId, patientId, planId) {
+  if (!templateId) return { ok: false, error: 'معرّف القالب مفقود' };
+  if (sb) {
+    try {
+      const { data, error } = await sb.rpc('apply_template_to_patient', {
+        p_template_id: templateId,
+        p_patient_id:  patientId || null,
+        p_plan_id:     planId || null,
+      });
+      if (error) return { ok: false, error: error.message || 'تعذّر التطبيق' };
+      __tplDispatch('apply', templateId);
+      return { ok: true, use_id: data && data.use_id };
+    } catch (e) { return { ok: false, error: e.message || 'تعذّر التطبيق' }; }
+  }
+  const now = new Date().toISOString();
+  const use_id = `TU-${now.replace(/[^0-9]/g, '').slice(0, 14)}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+  writeLS(LS_TEMPLATE_USAGE, [...readLS(LS_TEMPLATE_USAGE, []), {
+    use_id, template_id: templateId, patient_id: patientId || null, plan_id: planId || null,
+    applied_by_name: __currentEditorName(), applied_at: now,
+  }]);
+  const all = readLS(LS_TEMPLATES, []);
+  const idx = all.findIndex(t => t.template_id === templateId);
+  if (idx >= 0) {
+    all[idx] = { ...all[idx], usage_count: (all[idx].usage_count || 0) + 1, last_used_at: now };
+    writeLS(LS_TEMPLATES, all);
+  }
+  __tplDispatch('apply', templateId);
+  return { ok: true, use_id };
+}
+
+async function restoreTreatmentTemplateVersion(versionId) {
+  if (!versionId) return { ok: false, error: 'معرّف الإصدار مفقود' };
+  if (sb) {
+    try {
+      const { data, error } = await sb.rpc('restore_template_version', { p_version_id: versionId });
+      if (error) return { ok: false, error: error.message || 'تعذّرت الاستعادة' };
+      const tId = data && data.template_id;
+      __tplDispatch('restore_version', tId);
+      return { ok: true, template_id: tId };
+    } catch (e) { return { ok: false, error: e.message || 'تعذّرت الاستعادة' }; }
+  }
+  const versions = readLS(LS_TEMPLATE_VERSIONS, []);
+  const v = versions.find(x => x.version_id === versionId);
+  if (!v) return { ok: false, error: 'الإصدار غير موجود' };
+  const all = readLS(LS_TEMPLATES, []);
+  const idx = all.findIndex(t => t.template_id === v.template_id);
+  if (idx < 0) return { ok: false, error: 'القالب غير موجود' };
+  const now = new Date().toISOString();
+  const nextVersion = (all[idx].version || 1) + 1;
+  const restored = { ...v.snapshot, version: nextVersion, updated_at: now };
+  all[idx] = restored;
+  writeLS(LS_TEMPLATES, all);
+  writeLS(LS_TEMPLATE_VERSIONS, [...versions, {
+    version_id: `TV-${v.template_id}-${nextVersion}`,
+    template_id: v.template_id, version_num: nextVersion,
+    editor_name: __currentEditorName(),
+    change_summary: `استعادة الإصدار ${v.version_num}`,
+    snapshot: restored, created_at: now,
+  }]);
+  __tplDispatch('restore_version', v.template_id);
+  return { ok: true, template_id: v.template_id };
+}
+
+const Templates = {
+  list:            listTreatmentTemplates,
+  get:             getTreatmentTemplate,
+  create:          createTreatmentTemplate,
+  update:          updateTreatmentTemplate,
+  duplicate:       duplicateTreatmentTemplate,
+  archive:         (id) => setTreatmentTemplateStatus(id, 'archived'),
+  restore:         (id) => setTreatmentTemplateStatus(id, 'active'),
+  remove:          deleteTreatmentTemplate,
+  apply:           applyTreatmentTemplate,
+  restoreVersion:  restoreTreatmentTemplateVersion,
+};
+window.Templates = Templates;
+
 // ── Public API ────────────────────────────────────────────────
 Object.assign(window, {
   loadClinic, saveClinic,
@@ -814,6 +2105,6 @@ Object.assign(window, {
   signInEmail, signOut, getSession, onAuthChange,
   adminCreateUser, sendPasswordReset, updateOwnPassword, updateOwnProfile, updateStaffMember,
   startDictation, printHTML, escHtml,
-  KineticData,
+  KineticData, QuickPay, TxMethods, InvoicesAPI, PaymentReceipts, Templates,
   uploadPatientFile, listPatientFiles, removePatientFile,
 });

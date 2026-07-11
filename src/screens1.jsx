@@ -34,54 +34,224 @@ function activeBranchName() {
   return (b && b.name) || "عيادتك";
 }
 const invoiceDateOf = (p) => String(p.date || p.created_at || "").slice(0, 10);
+
+// ── Dashboard time filter ─────────────────────────────────────
+// Given a range preset (اليوم / هذا الأسبوع / الشهر / الربع), returns
+// the [from, to] window (YYYY-MM-DD, inclusive) plus a `bucket` telling
+// widgets whether to group by hour, day, or month. The clinic week
+// starts on Saturday to match the Calendar module.
+function __dashPad(n){ return String(n).padStart(2,"0"); }
+function __dashIso(d){ return `${d.getFullYear()}-${__dashPad(d.getMonth()+1)}-${__dashPad(d.getDate())}`; }
+function __dashStartOfWeek(d){
+  const day = d.getDay();
+  const diff = (day + 1) % 7; // days since Saturday
+  const out = new Date(d); out.setDate(d.getDate() - diff); out.setHours(0,0,0,0);
+  return out;
+}
+function dashboardPeriod(range) {
+  const now = new Date(); now.setHours(0,0,0,0);
+  const y = now.getFullYear(), m = now.getMonth();
+  switch (range) {
+    case "اليوم":
+      return { from: __dashIso(now), to: __dashIso(now), bucket: "hour", label: "اليوم" };
+    case "هذا الأسبوع": {
+      const s = __dashStartOfWeek(now);
+      const e = new Date(s); e.setDate(s.getDate()+6);
+      return { from: __dashIso(s), to: __dashIso(e), bucket: "day", label: "هذا الأسبوع" };
+    }
+    case "الشهر": {
+      const s = new Date(y, m, 1), e = new Date(y, m+1, 0);
+      return { from: __dashIso(s), to: __dashIso(e), bucket: "day", label: "الشهر" };
+    }
+    case "الربع": {
+      const q = Math.floor(m/3);            // 0-3
+      const s = new Date(y, q*3, 1), e = new Date(y, q*3+3, 0);
+      return { from: __dashIso(s), to: __dashIso(e), bucket: "month", label: "الربع" };
+    }
+    default:
+      return { from: __dashIso(now), to: __dashIso(now), bucket: "hour", label: range };
+  }
+}
+function inPeriod(dateStr, from, to) {
+  if (!dateStr) return false;
+  const d = String(dateStr).slice(0, 10);
+  return d >= from && d <= to;
+}
+// Read the appointment's canonical date, treating a missing date as today
+// (bookings without a scheduled date usually get filed as "today").
+function apptDayOf(a){
+  const d = a && (a.date || a.created_at);
+  return d ? String(d).slice(0,10) : new Date().toISOString().slice(0,10);
+}
+function apptHourOf(a){
+  const t = String(a && a.time || "").match(/^(\d{1,2}):/);
+  return t ? Math.max(0, Math.min(23, parseInt(t[1], 10))) : null;
+}
+// Enumerate day/month labels covering [from, to] so charts stay stable
+// even for periods with no data.
+function enumerateDays(from, to){
+  const out = [];
+  const s = new Date(from), e = new Date(to);
+  s.setHours(0,0,0,0); e.setHours(0,0,0,0);
+  const cur = new Date(s);
+  while (cur <= e) { out.push(__dashIso(cur)); cur.setDate(cur.getDate()+1); }
+  return out;
+}
+function enumerateMonths(from, to){
+  const out = [];
+  const s = new Date(from), e = new Date(to);
+  s.setDate(1); e.setDate(1);
+  const cur = new Date(s);
+  while (cur <= e) { out.push(`${cur.getFullYear()}-${__dashPad(cur.getMonth()+1)}`); cur.setMonth(cur.getMonth()+1); }
+  return out;
+}
 const fmtEGP = (v) => v >= 1000 ? `EGP ${(v/1000).toFixed(1)}K` : `EGP ${(v||0).toLocaleString()}`;
 
 function Dashboard({ go }) {
-  const [range, setRange] = React.useState("هذا الأسبوع");
+  window.useDataVersion && window.useDataVersion();
+  const LS_RANGE = "kinetic.dashRange";
+  // Preserve the selected range across navigations. Falls back to a sane
+  // default the first time the dashboard is opened.
+  const [range, setRangeState] = React.useState(() => {
+    try { return localStorage.getItem(LS_RANGE) || "هذا الأسبوع"; }
+    catch { return "هذا الأسبوع"; }
+  });
+  const setRange = React.useCallback((r) => {
+    setRangeState(r);
+    try { localStorage.setItem(LS_RANGE, r); } catch {}
+  }, []);
+  const [quickPayOpen, setQuickPayOpen] = React.useState(false);
+
   const patients = DATA.patients, appts = DATA.appts, payments = DATA.payments;
   const today = new Date().toISOString().slice(0,10);
-  const month = today.slice(0,7);
 
-  // Revenue per day — the latest 7 dates that actually have invoices.
-  const revByDate = {};
-  payments.forEach(p => { const d = invoiceDateOf(p); if (d) revByDate[d] = (revByDate[d]||0) + (p.paid||0); });
-  const revenueData = Object.keys(revByDate).sort().slice(-7).map(d => ({ label:d.slice(5), v:revByDate[d] }));
+  const period = React.useMemo(() => dashboardPeriod(range), [range]);
+  const periodAppts    = React.useMemo(
+    () => appts.filter(a => inPeriod(apptDayOf(a), period.from, period.to)),
+    [appts, period.from, period.to]
+  );
+  const periodPayments = React.useMemo(
+    () => payments.filter(p => inPeriod(invoiceDateOf(p), period.from, period.to)),
+    [payments, period.from, period.to]
+  );
+  const periodPatients = React.useMemo(
+    () => patients.filter(p => inPeriod(String(p.registered||"").slice(0,10), period.from, period.to)),
+    [patients, period.from, period.to]
+  );
 
-  // Appointment volume per day (bookings without a date count as today).
-  const apptByDate = {};
-  appts.forEach(a => { const d = String(a.date || today).slice(0,10); apptByDate[d] = (apptByDate[d]||0)+1; });
-  const apptData = Object.keys(apptByDate).sort().slice(-7).map(d => ({ label:d.slice(5), v:apptByDate[d] }));
+  // Revenue chart — labels/values match the period bucket.
+  // hour: 24 buckets 0-23; day: one bucket per calendar day; month: one per month.
+  const revenueData = React.useMemo(() => {
+    if (period.bucket === "hour") {
+      const buckets = Array(24).fill(0);
+      periodPayments.forEach(p => {
+        const t = String(p.created_at || "");
+        const h = t ? (new Date(t)).getHours() : 0;
+        if (Number.isFinite(h)) buckets[h] += (p.paid || 0);
+      });
+      return buckets.map((v,i) => ({ label: `${i}:00`, v }));
+    }
+    if (period.bucket === "day") {
+      const days = enumerateDays(period.from, period.to);
+      const map = {};
+      periodPayments.forEach(p => { const d = invoiceDateOf(p); if (d) map[d] = (map[d]||0)+(p.paid||0); });
+      return days.map(d => ({ label: d.slice(5), v: map[d] || 0 }));
+    }
+    const months = enumerateMonths(period.from, period.to);
+    const map = {};
+    periodPayments.forEach(p => { const d = invoiceDateOf(p).slice(0,7); if (d) map[d] = (map[d]||0)+(p.paid||0); });
+    return months.map(m => ({ label: m.slice(5), v: map[m] || 0 }));
+  }, [periodPayments, period.bucket, period.from, period.to]);
 
-  // Session-type mix from actual bookings.
-  const typeCounts = {};
-  appts.forEach(a => { if (a.type) typeCounts[a.type] = (typeCounts[a.type]||0)+1; });
-  const methodsData = Object.entries(typeCounts).sort((a,b)=>b[1]-a[1]).slice(0,4)
-    .map(([label, v], i) => ({ label, v, color: CHART_COLORS[i] }));
+  // Appointment volume — same bucketing as revenue.
+  const apptData = React.useMemo(() => {
+    if (period.bucket === "hour") {
+      const buckets = Array(24).fill(0);
+      periodAppts.forEach(a => {
+        const h = apptHourOf(a);
+        if (h != null) buckets[h] += 1;
+      });
+      return buckets.map((v,i) => ({ label: `${i}:00`, v }));
+    }
+    if (period.bucket === "day") {
+      const days = enumerateDays(period.from, period.to);
+      const map = {};
+      periodAppts.forEach(a => { const d = apptDayOf(a); map[d] = (map[d]||0)+1; });
+      return days.map(d => ({ label: d.slice(5), v: map[d] || 0 }));
+    }
+    const months = enumerateMonths(period.from, period.to);
+    const map = {};
+    periodAppts.forEach(a => { const m = apptDayOf(a).slice(0,7); map[m] = (map[m]||0)+1; });
+    return months.map(m => ({ label: m.slice(5), v: map[m] || 0 }));
+  }, [periodAppts, period.bucket, period.from, period.to]);
 
-  // Package uptake from the packages table.
+  // Session-type mix — recomputed from period appointments only.
+  const methodsData = React.useMemo(() => {
+    const typeCounts = {};
+    periodAppts.forEach(a => { if (a.type) typeCounts[a.type] = (typeCounts[a.type]||0)+1; });
+    return Object.entries(typeCounts).sort((a,b)=>b[1]-a[1]).slice(0,4)
+      .map(([label, v], i) => ({ label, v, color: CHART_COLORS[i] }));
+  }, [periodAppts]);
+  const methodsTotal = methodsData.reduce((s,d)=>s+d.v, 0);
+
+  // Package uptake from the packages table (stays global — not date-scoped).
   const packageData = DATA.packages.filter(p => p.active !== false).slice(0,5)
     .map((p, i) => ({ label:p.name, v:p.sold||0, color: CHART_COLORS[i % CHART_COLORS.length] }));
 
-  const booked = appts.filter(a => a.status !== "متاح");
-  const confirmed = booked.filter(a => a.status !== "معلّق" && a.status !== "ملغي");
-  const todaysPatients = new Set(booked.map(a => a.patient).filter(Boolean)).size;
-  const todaysRevenue = payments.filter(p => invoiceDateOf(p) === today).reduce((s,p)=>s+(p.paid||0),0);
-  const monthRevenue = payments.filter(p => invoiceDateOf(p).startsWith(month)).reduce((s,p)=>s+(p.paid||0),0);
-  const outstanding = payments.reduce((s,p)=>s+Math.max(0,(p.amount||0)-(p.paid||0)),0);
-  const remainTotal = patients.reduce((s,p)=>s+(p.remain||0),0);
-  const weekAgo = new Date(Date.now()-7*864e5).toISOString().slice(0,10);
-  const newThisWeek = patients.filter(p => (p.registered||"") >= weekAgo).length;
-  const pendingPayments = payments.filter(p => p.status !== "مدفوع");
+  // Period-scoped stats — every card refreshes when `range` changes.
+  const booked          = periodAppts.filter(a => a.status !== "متاح");
+  const confirmed       = booked.filter(a => a.status !== "معلّق" && a.status !== "ملغي");
+  const uniquePatients  = new Set(booked.map(a => a.patient).filter(Boolean)).size;
+  const periodRevenue   = periodPayments.reduce((s,p)=>s+(p.paid||0),0);
+  const monthRevenue    = payments.filter(p => invoiceDateOf(p).startsWith(today.slice(0,7)))
+                                  .reduce((s,p)=>s+(p.paid||0),0);
+  const outstanding     = periodPayments.reduce((s,p)=>s+Math.max(0,(p.amount||0)-(p.paid||0)),0);
+  const remainTotal     = patients.reduce((s,p)=>s+(p.remain||0),0);
+  const newPatients     = periodPatients.length;
+  const pendingPayments = periodPayments.filter(p => p.status !== "مدفوع");
+
+  // Card labels adapt to the selected period so nothing reads "اليوم" when
+  // the user picked "الشهر". We keep the visual layout untouched.
+  const labels = React.useMemo(() => {
+    switch (range) {
+      case "اليوم":       return { patients:"مرضى اليوم",   appts:"مواعيد اليوم",   rev:"إيرادات اليوم",   patRange:"اليوم" };
+      case "هذا الأسبوع": return { patients:"مرضى الأسبوع", appts:"مواعيد الأسبوع", rev:"إيرادات الأسبوع", patRange:"هذا الأسبوع" };
+      case "الشهر":       return { patients:"مرضى الشهر",   appts:"مواعيد الشهر",   rev:"إيرادات الشهر",   patRange:"هذا الشهر" };
+      case "الربع":       return { patients:"مرضى الربع",   appts:"مواعيد الربع",   rev:"إيرادات الربع",   patRange:"هذا الربع" };
+      default:            return { patients:"المرضى",       appts:"المواعيد",       rev:"الإيرادات",       patRange:range };
+    }
+  }, [range]);
+
+  // Therapist workload — count of period appts assigned to each therapist.
+  const workloadByTh = React.useMemo(() => {
+    const map = {};
+    periodAppts.forEach(a => {
+      const key = a.therapist_id || a.th || "";
+      if (!key) return;
+      map[key] = (map[key] || 0) + 1;
+    });
+    return map;
+  }, [periodAppts]);
+
+  // Schedule list — sorted chronologically inside the period.
+  const scheduleList = React.useMemo(() => {
+    return periodAppts.slice().sort((a,b) => {
+      const da = `${apptDayOf(a)} ${a.time || ""}`;
+      const db = `${apptDayOf(b)} ${b.time || ""}`;
+      return da.localeCompare(db);
+    }).slice(0, 6);
+  }, [periodAppts]);
 
   // ── Handlers ──
   function handleExportCsv() {
     const rows = [
-      "البيان,القيمة",
-      `مرضى اليوم,${todaysPatients}`,
-      `مواعيد اليوم,${booked.length}/${appts.length}`,
-      `إيرادات اليوم,${todaysRevenue}`,
+      `البيان,القيمة (الفترة: ${period.label})`,
+      `${labels.patients},${uniquePatients}`,
+      `${labels.appts},${booked.length}/${periodAppts.length}`,
+      `${labels.rev},${periodRevenue}`,
       `الإيرادات الشهرية,${monthRevenue}`,
       `مستحقات معلقة,${outstanding}`,
+      `مرضى جدد,${newPatients}`,
     ];
     downloadCsv(rows, "dashboard.csv");
     if (window.showToast) window.showToast("تم تصدير البيانات", "success");
@@ -102,15 +272,16 @@ function Dashboard({ go }) {
             ))}
           </div>
           <button className="btn btn-secondary" onClick={handleExportCsv}><I.Download size={14}/> تصدير</button>
+          <button className="btn btn-secondary" onClick={()=>setQuickPayOpen(true)}><I.CreditCard size={14}/> دفع سريع</button>
           <button className="btn btn-blue" onClick={()=>go("appointments")}><I.Plus size={14}/> موعد جديد</button>
         </div>
       </div>
 
       {/* stat row */}
       <div className="grid-stats" style={{marginBottom:18}}>
-        <StatCard label="مرضى اليوم"    value={String(todaysPatients)} accent="#7BBDE8" icon={<I.Users size={15}/>}/>
-        <StatCard label="مواعيد اليوم" value={`${booked.length}/${appts.length}`} accent="#3A7FB5" icon={<I.Calendar size={15}/>}/>
-        <StatCard label="إيرادات اليوم"   value={fmtEGP(todaysRevenue)} accent="#3FA984" icon={<I.Dollar size={15}/>}/>
+        <StatCard label={labels.patients}    value={String(uniquePatients)} accent="#7BBDE8" icon={<I.Users size={15}/>}/>
+        <StatCard label={labels.appts} value={`${booked.length}/${periodAppts.length}`} accent="#3A7FB5" icon={<I.Calendar size={15}/>}/>
+        <StatCard label={labels.rev}   value={fmtEGP(periodRevenue)} accent="#3FA984" icon={<I.Dollar size={15}/>}/>
         <StatCard label="الإيرادات الشهرية"   value={fmtEGP(monthRevenue)} accent="#7E6BD3" icon={<I.Chart size={15}/>}/>
         <StatCard label="الأخصائيون النشطون" value={`${DATA.therapists.length}/${DATA.therapists.length}`} accent="#D49044" icon={<I.Stethoscope size={15}/>}/>
         <StatCard label="الجلسات المتبقية" value={remainTotal.toLocaleString()} accent="#D8665A" icon={<I.Activity size={15}/>}/>
@@ -123,11 +294,13 @@ function Dashboard({ go }) {
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18}}>
             <div>
               <div className="h2">اتجاه الإيرادات</div>
-              <div className="muted" style={{fontSize:12.5,marginTop:2}}>آخر 7 أيام · ج.م</div>
+              <div className="muted" style={{fontSize:12.5,marginTop:2}}>
+                {period.bucket==="hour" ? "الساعات · ج.م" : period.bucket==="month" ? "الأشهر · ج.م" : "الأيام · ج.م"} — {period.label}
+              </div>
             </div>
             <div style={{display:"flex",gap:14,fontSize:12}}>
-              <span style={{display:"flex",alignItems:"center",gap:6}}><span style={{width:9,height:9,borderRadius:3,background:"#7BBDE8"}}></span>نقدي + بطاقة</span>
-              <span style={{display:"flex",alignItems:"center",gap:6,color:"var(--ink-500)"}}><span style={{width:9,height:9,borderRadius:3,background:"#BDD8E9"}}></span>الأسبوع الماضي</span>
+              <span style={{display:"flex",alignItems:"center",gap:6}}><span style={{width:9,height:9,borderRadius:3,background:"#7BBDE8"}}></span>مقبوض</span>
+              <span style={{display:"flex",alignItems:"center",gap:6,color:"var(--ink-500)"}} className="mono">{fmtEGP(periodRevenue)}</span>
             </div>
           </div>
           <AreaChart data={revenueData} height={220} formatY={(v)=>v>=1000?`${Math.round(v/1000)}K`:v}/>
@@ -143,8 +316,8 @@ function Dashboard({ go }) {
             <button className="btn btn-ghost" style={{fontSize:12}} onClick={()=>go("appointments")}>عرض التقويم <I.ArrowRight size={12}/></button>
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:268,overflowY:"auto"}}>
-            {DATA.appts.length===0 && <div className="muted" style={{fontSize:13,padding:"24px 0",textAlign:"center"}}>لا مواعيد بعد.</div>}
-            {DATA.appts.slice(0,6).map(a=>(
+            {scheduleList.length===0 && <div className="muted" style={{fontSize:13,padding:"24px 0",textAlign:"center"}}>لا مواعيد ضمن الفترة المحددة.</div>}
+            {scheduleList.map(a=>(
               <div key={a.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",border:"1px solid var(--ink-200)",borderRadius:12,background:a.status==="قيد التنفيذ"?"var(--blue-50)":"#fff"}}>
                 <div style={{textAlign:"center",minWidth:48}}>
                   <div className="mono" style={{fontSize:13,fontWeight:600}}>{a.time}</div>
@@ -153,7 +326,7 @@ function Dashboard({ go }) {
                 <div style={{width:1,height:30,background:"var(--ink-200)"}}/>
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{fontSize:13,fontWeight:500,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{a.patient}</div>
-                  <div style={{fontSize:11.5,color:"var(--ink-500)"}}>{a.th} · {a.type || "—"}</div>
+                  <div style={{fontSize:11.5,color:"var(--ink-500)"}}>{a.th} · {a.type || "—"} · {apptDayOf(a).slice(5)}</div>
                 </div>
                 <ApptBadge s={a.status}/>
               </div>
@@ -167,24 +340,30 @@ function Dashboard({ go }) {
         {/* Appointment trend */}
         <div className="card card-pad">
           <div className="h2" style={{marginBottom:4}}>حجم المواعيد</div>
-          <div className="muted" style={{fontSize:12.5,marginBottom:14}}>جلسات/يوم · آخر 7 أيام</div>
+          <div className="muted" style={{fontSize:12.5,marginBottom:14}}>
+            {period.bucket==="hour" ? "جلسات/ساعة" : period.bucket==="month" ? "جلسات/شهر" : "جلسات/يوم"} · {period.label}
+          </div>
           <BarChart data={apptData} height={170}/>
         </div>
 
         {/* طرق العلاج */}
         <div className="card card-pad">
           <div className="h2" style={{marginBottom:4}}>طرق العلاج</div>
-          <div className="muted" style={{fontSize:12.5,marginBottom:14}}>نسبة الجلسات هذا الشهر</div>
-          <DonutChart data={methodsData} size={150} centerLabel="الجلسات" centerValue="100%"/>
+          <div className="muted" style={{fontSize:12.5,marginBottom:14}}>نسبة الجلسات · {period.label}</div>
+          <DonutChart data={methodsData} size={150} centerLabel="الجلسات" centerValue={String(methodsTotal)}/>
         </div>
 
         {/* حمل الأخصائيين */}
         <div className="card card-pad">
           <div className="h2" style={{marginBottom:4}}>حمل الأخصائيين</div>
-          <div className="muted" style={{fontSize:12.5,marginBottom:14}}>حجوزات اليوم</div>
+          <div className="muted" style={{fontSize:12.5,marginBottom:14}}>حجوزات {period.label}</div>
           <div style={{display:"flex",flexDirection:"column",gap:14}}>
             {DATA.therapists.length===0 && <div className="muted" style={{fontSize:13,padding:"18px 0",textAlign:"center"}}>لا أخصائيين مسجّلين بعد.</div>}
-            {DATA.therapists.map(t=>(
+            {DATA.therapists.map(t=>{
+              const load = (workloadByTh[t.id] || 0) + (workloadByTh[t.name] || 0);
+              const cap = Math.max(t.max || 8, 1);
+              const pct = Math.min(100, (load / cap) * 100);
+              return (
               <div key={t.name}>
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>
@@ -194,13 +373,14 @@ function Dashboard({ go }) {
                       <div style={{fontSize:11,color:"var(--ink-500)"}}>{t.spec}</div>
                     </div>
                   </div>
-                  <span className="mono" style={{fontSize:11.5,color:"var(--ink-700)"}}>{t.load}/{t.max}</span>
+                  <span className="mono" style={{fontSize:11.5,color:"var(--ink-700)"}}>{load}/{cap}</span>
                 </div>
                 <div style={{height:5,background:"var(--ink-100)",borderRadius:999,overflow:"hidden"}}>
-                  <div style={{height:"100%",width:`${t.load/t.max*100}%`,background:t.color,borderRadius:999,transition:"width .3s"}}/>
+                  <div style={{height:"100%",width:`${pct}%`,background:t.color,borderRadius:999,transition:"width .3s"}}/>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 
@@ -209,13 +389,13 @@ function Dashboard({ go }) {
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
             <div>
               <div className="h2">مرضى جدد</div>
-              <div className="muted" style={{fontSize:12.5,marginTop:2}}>مسجّلون هذا الأسبوع</div>
+              <div className="muted" style={{fontSize:12.5,marginTop:2}}>مسجّلون · {labels.patRange}</div>
             </div>
-            <span className="badge b-blue">{newThisWeek} جديد</span>
+            <span className="badge b-blue">{newPatients} جديد</span>
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:10}}>
-            {DATA.patients.length===0 && <div className="muted" style={{fontSize:13,padding:"18px 0",textAlign:"center"}}>لا مرضى مسجّلين بعد.</div>}
-            {DATA.patients.slice(0,4).map(p=>(
+            {periodPatients.length===0 && <div className="muted" style={{fontSize:13,padding:"18px 0",textAlign:"center"}}>لا مرضى مسجّلين ضمن الفترة.</div>}
+            {periodPatients.slice(0,4).map(p=>(
               <div key={p.id} style={{display:"flex",alignItems:"center",gap:10,padding:"6px 0"}}>
                 <div className="av md">{p.name.split(" ").map(x=>x[0]).join("").slice(0,2)}</div>
                 <div style={{flex:1,minWidth:0}}>
@@ -240,7 +420,7 @@ function Dashboard({ go }) {
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
             <div>
               <div className="h2">مدفوعات معلقة</div>
-              <div className="muted" style={{fontSize:12.5,marginTop:2}}>يحتاج متابعة</div>
+              <div className="muted" style={{fontSize:12.5,marginTop:2}}>يحتاج متابعة · {period.label}</div>
             </div>
             <span className="badge b-amber"><span className="dot"></span>{fmtEGP(outstanding)}</span>
           </div>
@@ -261,6 +441,13 @@ function Dashboard({ go }) {
           </div>
         </div>
       </div>
+
+      {quickPayOpen && window.QuickPaymentModal && (
+        <window.QuickPaymentModal
+          onClose={()=>setQuickPayOpen(false)}
+          onDone={()=>setQuickPayOpen(false)}
+        />
+      )}
     </Page>
   );
 }
@@ -346,7 +533,6 @@ function Patients({ go }) {
             <button key={s} className={statusFilter===s?"on":""} onClick={()=>setStatusFilter(s)}>{s===INCOMPLETE_STATUS?"غير مكتمل":s}</button>
           ))}
         </div>
-        <button className="btn btn-secondary"><I.Filter size={13}/> 4 مرشحات</button>
         <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:10}}>
           <span className="muted" style={{fontSize:12}}>{filtered.length} نتيجة</span>
           <div className="seg">
@@ -1105,9 +1291,18 @@ function PatientFiles({ p }) {
 }
 
 function PatientInvoices({ p }) {
+  window.useDataVersion && window.useDataVersion();
   const [newInvoiceOpen, setNewInvoiceOpen] = React.useState(false);
+  const [payTarget, setPayTarget]           = React.useState(null); // invoice
+  const [historyTarget, setHistoryTarget]   = React.useState(null); // invoice
   const pid = p.patient_id || p.id;
   const invoices = DATA.payments.filter(x => x.patient === p.name || x.patient_id === pid);
+  // Role gating — matches PRD table:
+  //   Admin / Receptionist → can receive payments.
+  //   Doctor / Therapist   → view only.
+  const meRole = (window.ME && (window.ME.role || "")) || "";
+  const canReceive = meRole === "مدير" || meRole === "admin"
+                  || meRole === "استقبال" || meRole === "receptionist";
   return (
     <div>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
@@ -1116,28 +1311,382 @@ function PatientInvoices({ p }) {
       </div>
       <div className="tbl-scroll">
       <table className="tbl">
-        <thead><tr><th>فاتورة</th><th>التاريخ</th><th>المبلغ</th><th>مدفوع</th><th>الطريقة</th><th>الحالة</th><th></th></tr></thead>
+        <thead><tr><th>فاتورة</th><th>التاريخ</th><th>المبلغ</th><th>مدفوع</th><th>المتبقي</th><th>الطريقة</th><th>الحالة</th><th></th></tr></thead>
         <tbody>
-          {invoices.length ? invoices.map(inv=>(
+          {invoices.length ? invoices.map(inv=>{
+            const total    = Number(inv.amount || 0);
+            const paid     = Number(inv.paid   || 0);
+            const remain   = Math.max(0, total - paid);
+            const paidFull = remain <= 0.0001 || inv.status === "مدفوع";
+            return (
             <tr key={inv.id}>
               <td className="mono">{inv.id}</td>
               <td>{inv.date}</td>
-              <td className="mono">EGP {inv.amount.toLocaleString()}</td>
-              <td className="mono">EGP {inv.paid.toLocaleString()}</td>
+              <td className="mono">EGP {total.toLocaleString()}</td>
+              <td className="mono">EGP {paid.toLocaleString()}</td>
+              <td className="mono" style={{color: remain>0 ? "var(--amber)" : "var(--ink-500)"}}>EGP {remain.toLocaleString()}</td>
               <td>{inv.method}</td>
               <td><PayBadge s={inv.status}/></td>
-              <td><button className="btn btn-ghost btn-icon" onClick={()=>{
-                const rows = ["فاتورة,التاريخ,المبلغ,مدفوع,الطريقة,الحالة", `${inv.id},${inv.date},${inv.amount},${inv.paid},${inv.method},${inv.status}`];
-                downloadCsv(rows, `${inv.id}.csv`);
-                if (window.showToast) window.showToast("تم تحميل الفاتورة", "success");
-              }}><I.Download size={13}/></button></td>
+              <td style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                {!paidFull && canReceive && (
+                  <button className="btn btn-blue" style={{fontSize:11.5,padding:"5px 10px"}} onClick={()=>setPayTarget(inv)}>
+                    <I.CreditCard size={12}/> دفع
+                  </button>
+                )}
+                <button className="btn btn-ghost btn-icon" title="سجل الدفعات" onClick={()=>setHistoryTarget(inv)}><I.Clock size={13}/></button>
+                <button className="btn btn-ghost btn-icon" title="تحميل" onClick={()=>{
+                  const rows = ["فاتورة,التاريخ,المبلغ,مدفوع,المتبقي,الطريقة,الحالة",
+                    `${inv.id},${inv.date},${total},${paid},${remain},${inv.method},${inv.status}`];
+                  downloadCsv(rows, `${inv.id}.csv`);
+                  if (window.showToast) window.showToast("تم تحميل الفاتورة", "success");
+                }}><I.Download size={13}/></button>
+              </td>
             </tr>
-          )) : <tr><td colSpan={7}><EmptyState icon={<I.FileText size={22}/>} title="لا توجد فواتير بعد" body="invoices appear here once you create them or a جلسة is checked out."/></td></tr>}
+            );
+          }) : <tr><td colSpan={8}><EmptyState icon={<I.FileText size={22}/>} title="لا توجد فواتير بعد" body="ستظهر الفواتير هنا بعد إنشائها أو إغلاق جلسة."/></td></tr>}
         </tbody>
       </table>
       </div>
       {newInvoiceOpen && <NewInvoiceModal onClose={()=>setNewInvoiceOpen(false)}/>}
+      {payTarget && (
+        <ReceivePaymentModal
+          invoice={payTarget}
+          patient={p}
+          onClose={()=>setPayTarget(null)}
+          onDone={()=>setPayTarget(null)}
+        />
+      )}
+      {historyTarget && (
+        <InvoicePaymentHistoryModal
+          invoice={historyTarget}
+          onClose={()=>setHistoryTarget(null)}
+        />
+      )}
     </div>
+  );
+}
+
+// ── ReceivePaymentModal ───────────────────────────────────────
+// Full-flow payment capture with receipt upload. All persistence is
+// funnelled through window.PaymentReceipts.receive which chains the
+// storage upload + record_quick_payment RPC + payment_receipts insert.
+function ReceivePaymentModal({ invoice, patient, onClose, onDone }) {
+  const total     = Number(invoice.amount || 0);
+  const paidSoFar = Number(invoice.paid   || 0);
+  const remaining = Math.max(0, total - paidSoFar);
+
+  const [amount, setAmount]         = React.useState(String(remaining));
+  const [method, setMethod]         = React.useState("نقدي");
+  const [reference, setReference]   = React.useState("");
+  const [txId, setTxId]             = React.useState("");
+  const [notes, setNotes]           = React.useState("");
+  const [file, setFile]             = React.useState(null);
+  const [previewUrl, setPreviewUrl] = React.useState("");
+  const [uploading, setUploading]   = React.useState(false);
+  const [submitting, setSubmitting] = React.useState(false);
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
+  const [error, setError]           = React.useState("");
+  const fileRef = React.useRef(null);
+
+  React.useEffect(() => {
+    if (!file) { setPreviewUrl(""); return; }
+    if (file.type && file.type.startsWith("image/")) {
+      const url = URL.createObjectURL(file);
+      setPreviewUrl(url);
+      return () => URL.revokeObjectURL(url);
+    }
+    setPreviewUrl("");
+  }, [file]);
+
+  const amt = Number(amount);
+  const remainingAfter = Math.max(0, remaining - (amt > 0 ? amt : 0));
+  const nextStatus = remainingAfter <= 0.0001 ? "مدفوع" : "جزئي";
+
+  function validate() {
+    if (!(amt > 0)) return "المبلغ يجب أن يكون أكبر من صفر";
+    if (amt > remaining + 0.0001) return "المبلغ يتجاوز الرصيد المتبقي";
+    if (!method) return "اختر طريقة الدفع";
+    if (file) {
+      const v = window.PaymentReceipts && window.PaymentReceipts.validate(file);
+      if (v) return v;
+    }
+    return null;
+  }
+
+  async function submit() {
+    const v = validate();
+    if (v) { setError(v); return; }
+    setError("");
+    setSubmitting(true);
+    try {
+      const res = await window.PaymentReceipts.receive({
+        invoice, patient,
+        amount: amt,
+        method,
+        reference: reference.trim(),
+        transaction_id: txId.trim(),
+        notes: notes.trim(),
+        file,
+      });
+      if (!res.ok) {
+        setError(res.error || "تعذّر تسجيل الدفع");
+        setSubmitting(false);
+        return;
+      }
+      if (window.showToast) {
+        if (res.warning) window.showToast(res.warning, "info");
+        else window.showToast("تم تسجيل عملية الدفع بنجاح", "success");
+      }
+      setSubmitting(false);
+      setConfirmOpen(false);
+      onDone && onDone(res);
+    } catch (e) {
+      console.warn("payment submit failed", e);
+      setError("حدث خطأ أثناء تسجيل الدفع");
+      setSubmitting(false);
+    }
+  }
+
+  function onPickFile(e) {
+    const f = (e.target.files || [])[0];
+    e.target.value = "";
+    if (!f) return;
+    const v = window.PaymentReceipts && window.PaymentReceipts.validate(f);
+    if (v) { setError(v); return; }
+    setError("");
+    setFile(f);
+  }
+
+  return (
+    <>
+    <Modal open onClose={submitting?()=>{}:onClose} width={620} title={`دفع الفاتورة ${invoice.id}`}>
+      <div style={{display:"grid",gap:12,fontSize:13}}>
+        {/* Invoice summary */}
+        <div className="card card-pad" style={{background:"var(--ink-50)",padding:12}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+            <Row k="رقم الفاتورة" v={<span className="mono">{invoice.id}</span>}/>
+            <Row k="المريض"        v={patient.name || invoice.patient || "—"}/>
+            <Row k="تاريخ الفاتورة" v={invoice.date || "—"}/>
+            <Row k="الحالة"        v={<PayBadge s={invoice.status}/>}/>
+            <Row k="إجمالي الفاتورة" v={<span className="mono">EGP {total.toLocaleString()}</span>}/>
+            <Row k="المدفوع"        v={<span className="mono">EGP {paidSoFar.toLocaleString()}</span>}/>
+            <Row k="المتبقي"        v={<span className="mono" style={{color:"var(--amber)",fontWeight:600}}>EGP {remaining.toLocaleString()}</span>}/>
+          </div>
+        </div>
+
+        {/* Amount */}
+        <Field label="مبلغ الدفع (EGP)">
+          <div style={{display:"flex",gap:6,alignItems:"center"}}>
+            <input className="input" type="number" min="0.01" step="0.01"
+              value={amount} onChange={e=>setAmount(e.target.value)}/>
+            <button className="btn btn-secondary" style={{fontSize:12,whiteSpace:"nowrap"}}
+              onClick={()=>setAmount(String(remaining))}>الرصيد الكامل</button>
+          </div>
+          <div className="muted" style={{fontSize:11.5,marginTop:4}}>
+            المتبقي بعد الدفع: <span className="mono">EGP {remainingAfter.toLocaleString()}</span> · الحالة الجديدة: {nextStatus}
+          </div>
+        </Field>
+
+        {/* Method */}
+        <Field label="طريقة الدفع">
+          <select className="input" value={method} onChange={e=>setMethod(e.target.value)}>
+            <option>نقدي</option>
+            <option>فيزا</option>
+            <option>إنستاباي</option>
+            <option>فودافون كاش</option>
+            <option>تحويل بنكي</option>
+            <option>أخرى</option>
+          </select>
+        </Field>
+
+        {/* Receipt */}
+        <Field label="إيصال الدفع (JPG/PNG/PDF · بحد أقصى 8MB)">
+          <input ref={fileRef} type="file" style={{display:"none"}}
+            accept="image/jpeg,image/png,application/pdf,.jpg,.jpeg,.png,.pdf"
+            onChange={onPickFile}/>
+          {!file ? (
+            <button className="btn btn-secondary" onClick={()=>fileRef.current && fileRef.current.click()}>
+              <I.Upload size={13}/> رفع إيصال
+            </button>
+          ) : (
+            <div style={{display:"flex",alignItems:"center",gap:10,padding:10,border:"1px solid var(--ink-200)",borderRadius:10}}>
+              {previewUrl ? (
+                <img src={previewUrl} alt="preview" style={{width:56,height:56,objectFit:"cover",borderRadius:8,border:"1px solid var(--ink-200)"}}/>
+              ) : (
+                <div style={{width:56,height:56,display:"flex",alignItems:"center",justifyContent:"center",background:"var(--ink-50)",borderRadius:8,border:"1px solid var(--ink-200)"}}>
+                  <I.FileText size={22}/>
+                </div>
+              )}
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:12.5,fontWeight:500,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{file.name}</div>
+                <div className="muted mono" style={{fontSize:11}}>{Math.round((file.size||0)/1024)} KB · {file.type || "unknown"}</div>
+              </div>
+              <button className="btn btn-ghost btn-icon" title="حذف" onClick={()=>setFile(null)} disabled={uploading||submitting}><I.X size={13}/></button>
+            </div>
+          )}
+        </Field>
+
+        {/* Optional fields */}
+        <div className="rgrid c-lg" style={{"--gtc":"1fr 1fr",gap:10}}>
+          <Field label="رقم المعاملة (اختياري)">
+            <input className="input" value={txId} onChange={e=>setTxId(e.target.value)}/>
+          </Field>
+          <Field label="رقم المرجع (اختياري)">
+            <input className="input" value={reference} onChange={e=>setReference(e.target.value)}/>
+          </Field>
+        </div>
+        <Field label="ملاحظات (اختياري)">
+          <textarea className="input" rows={2} value={notes} onChange={e=>setNotes(e.target.value)} style={{padding:8,resize:"vertical"}}/>
+        </Field>
+
+        {error && (
+          <div style={{background:"#FEE2E2",border:"1px solid #FCA5A5",color:"#991B1B",padding:"8px 12px",borderRadius:8,fontSize:12.5}}>
+            {error}
+          </div>
+        )}
+      </div>
+
+      <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:16}}>
+        <button className="btn btn-secondary" onClick={onClose} disabled={submitting}>إلغاء</button>
+        <button className="btn btn-blue" onClick={()=>{ const v = validate(); if (v) { setError(v); return; } setError(""); setConfirmOpen(true); }}
+          disabled={submitting}>
+          <I.Check size={13}/> متابعة
+        </button>
+      </div>
+    </Modal>
+
+    {confirmOpen && (
+      <Modal open onClose={submitting?()=>{}:()=>setConfirmOpen(false)} width={480} title="تأكيد الدفع">
+        <div style={{display:"grid",gap:10,fontSize:13}}>
+          <Row k="رقم الفاتورة"  v={<span className="mono">{invoice.id}</span>}/>
+          <Row k="المريض"         v={patient.name || invoice.patient}/>
+          <Row k="مبلغ الدفع"     v={<span className="mono" style={{fontWeight:600}}>EGP {amt.toLocaleString()}</span>}/>
+          <Row k="المتبقي بعد الدفع" v={<span className="mono">EGP {remainingAfter.toLocaleString()}</span>}/>
+          <Row k="طريقة الدفع"    v={method}/>
+          <Row k="إيصال مرفق"     v={file ? file.name : "لا يوجد"}/>
+        </div>
+        <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:16}}>
+          <button className="btn btn-secondary" onClick={()=>setConfirmOpen(false)} disabled={submitting}>إلغاء</button>
+          <button className="btn btn-blue" onClick={submit} disabled={submitting}>
+            {submitting ? <span className="spin" style={{width:12,height:12,border:"2px solid #fff",borderTopColor:"transparent",borderRadius:"50%"}}/> : <I.Check size={13}/>}
+            {submitting ? "جارٍ الحفظ…" : "تأكيد الدفع"}
+          </button>
+        </div>
+      </Modal>
+    )}
+    </>
+  );
+}
+
+// ── InvoicePaymentHistoryModal ───────────────────────────────
+// Reads payments + receipts from PaymentReceipts.history / .list.
+// Admin can delete a receipt (soft-delete via delete_payment_receipt).
+function InvoicePaymentHistoryModal({ invoice, onClose }) {
+  const [payments, setPayments] = React.useState([]);
+  const [receipts, setReceipts] = React.useState([]);
+  const [loading, setLoading]   = React.useState(true);
+  const meRole = (window.ME && (window.ME.role || "")) || "";
+  const isAdmin = meRole === "مدير" || meRole === "admin";
+  const invoiceId = invoice.invoice_id || invoice.id;
+
+  const reload = React.useCallback(async () => {
+    setLoading(true);
+    try {
+      const [ps, rs] = await Promise.all([
+        window.PaymentReceipts.history(invoiceId),
+        window.PaymentReceipts.list(invoiceId),
+      ]);
+      setPayments(Array.isArray(ps) ? ps : []);
+      setReceipts(Array.isArray(rs) ? rs : []);
+    } catch (e) { console.warn("history load failed", e); }
+    finally { setLoading(false); }
+  }, [invoiceId]);
+
+  React.useEffect(() => { reload(); }, [reload]);
+  React.useEffect(() => {
+    const h = () => reload();
+    window.addEventListener("kinetic:payment-receipt-updated", h);
+    window.addEventListener("kinetic:data-updated", h);
+    return () => {
+      window.removeEventListener("kinetic:payment-receipt-updated", h);
+      window.removeEventListener("kinetic:data-updated", h);
+    };
+  }, [reload]);
+
+  const receiptFor = (paymentId) => receipts.find(r => r.payment_id === paymentId && !r.deleted_at);
+  const invAllocOf = (p) => {
+    const allocs = Array.isArray(p.allocations) ? p.allocations
+                 : (typeof p.allocations === "string" ? JSON.parse(p.allocations || "[]") : []);
+    return allocs.find(a => a.type === "invoice" && String(a.id) === String(invoiceId));
+  };
+
+  async function removeReceipt(rct) {
+    if (!isAdmin) return;
+    if (!window.confirm("حذف الإيصال؟ العملية المالية لن تُحذف.")) return;
+    const res = await window.PaymentReceipts.remove(rct.receipt_id);
+    if (res.ok) { if (window.showToast) window.showToast("تم حذف الإيصال", "success"); reload(); }
+    else if (window.showToast) window.showToast(res.error || "تعذّر الحذف", "error");
+  }
+
+  return (
+    <Modal open onClose={onClose} width={720} title={`سجل الدفعات — ${invoice.id}`}>
+      {loading && <div className="muted" style={{padding:20,textAlign:"center"}}>جارٍ التحميل…</div>}
+      {!loading && payments.length === 0 && (
+        <EmptyState icon={<I.CreditCard size={22}/>} title="لا دفعات بعد" body="ستظهر الدفعات هنا بعد استلامها."/>
+      )}
+      {!loading && payments.length > 0 && (
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {payments.map(p => {
+            const alloc = invAllocOf(p);
+            const amt   = Number(alloc && alloc.amount || 0);
+            const rct   = receiptFor(p.payment_id);
+            return (
+              <div key={p.payment_id} style={{border:"1px solid var(--ink-200)",borderRadius:10,padding:12}}>
+                <div style={{display:"flex",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
+                  <div>
+                    <div style={{fontWeight:600,fontSize:13}} className="mono">{p.payment_id}</div>
+                    <div className="muted" style={{fontSize:11.5,marginTop:2}}>
+                      {String(p.created_at || "").slice(0,16).replace("T"," ")} · {p.cashier_name || "—"}
+                    </div>
+                  </div>
+                  <div style={{textAlign:"left"}}>
+                    <div className="mono" style={{fontSize:14,fontWeight:600}}>EGP {amt.toLocaleString()}</div>
+                    <div className="muted" style={{fontSize:11.5,marginTop:2}}>{p.method}</div>
+                  </div>
+                </div>
+                {(p.transaction_id || p.reference || p.notes) && (
+                  <div className="muted" style={{fontSize:11.5,marginTop:6,display:"grid",gap:2}}>
+                    {p.transaction_id && <div>معاملة: <span className="mono">{p.transaction_id}</span></div>}
+                    {p.reference && <div>مرجع: <span className="mono">{p.reference}</span></div>}
+                    {p.notes && <div>ملاحظات: {p.notes}</div>}
+                  </div>
+                )}
+                {rct && (
+                  <div style={{marginTop:8,display:"flex",alignItems:"center",gap:8,padding:8,background:"var(--ink-50)",borderRadius:8}}>
+                    <I.FileText size={14}/>
+                    <div style={{flex:1,minWidth:0,fontSize:12,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                      {rct.file_name || "إيصال"}
+                    </div>
+                    {rct.file_url && (
+                      <>
+                        <a className="btn btn-ghost btn-icon" href={rct.file_url} target="_blank" rel="noreferrer" title="عرض"><I.Eye size={12}/></a>
+                        <a className="btn btn-ghost btn-icon" href={rct.file_url} download={rct.file_name||"receipt"} title="تحميل"><I.Download size={12}/></a>
+                      </>
+                    )}
+                    {isAdmin && (
+                      <button className="btn btn-ghost btn-icon" title="حذف" onClick={()=>removeReceipt(rct)}><I.X size={12}/></button>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div style={{display:"flex",justifyContent:"flex-end",marginTop:14}}>
+        <button className="btn btn-secondary" onClick={onClose}>إغلاق</button>
+      </div>
+    </Modal>
   );
 }
 
@@ -1600,200 +2149,525 @@ function QuickBookingModal({ onClose, onDone }) {
   );
 }
 
+// ── Calendar helpers ──────────────────────────────────────────
+// Absolute-date helpers so navigation, filtering, and persistence
+// all agree on what "the selected day" means.
+function isoDate(d) {
+  const t = new Date(d);
+  const y = t.getFullYear();
+  const m = String(t.getMonth()+1).padStart(2,"0");
+  const dd = String(t.getDate()).padStart(2,"0");
+  return `${y}-${m}-${dd}`;
+}
+function todayIso() { return isoDate(new Date()); }
+function offsetIso(iso, days) {
+  const t = new Date(iso + "T00:00:00");
+  t.setDate(t.getDate() + days);
+  return isoDate(t);
+}
+// Match a booking row to a calendar day. Rows without an explicit
+// date field (some legacy/demo rows) are treated as today so they
+// still show up somewhere instead of vanishing.
+function apptDateIso(a) {
+  const raw = a && (a.date || a.appointment_date || a.start_date);
+  if (!raw) return todayIso();
+  const s = String(raw).slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : todayIso();
+}
+
 function CalendarView({ dateOffset, setDateOffset }) {
-  const therapists = window.scopeTherapists ? window.scopeTherapists(DATA.therapists) : DATA.therapists;
+  // Subscribe to data-updated events so external mutations (new
+  // booking, quick payment, quick reschedule from another tab) flow
+  // in without a page reload.
+  window.useDataVersion && window.useDataVersion();
+
   const hours = ["08:00","09:00","10:00","11:00","12:00","13:00","14:00","15:00","16:00","17:00","18:00"];
+  // Four tabs: "day" (all appts, chronological list), "therapist"
+  // (therapists-only grid), "doctor" (doctors-only grid), "week"
+  // (7-day summary). Role-restricted users get pinned to their tab.
+  const meScope = (window.ME && window.ME.scope) || "all";
+  const LS_MODE = "kinetic.calMode";
+  const initialMode = React.useMemo(() => {
+    if (meScope === "doctor")    return "doctor";
+    if (meScope === "therapist") return "therapist";
+    try {
+      const v = localStorage.getItem(LS_MODE);
+      if (["day","therapist","doctor","week"].includes(v)) return v;
+    } catch {}
+    return "therapist";
+  }, [meScope]);
+  const [viewMode, setViewModeState] = React.useState(initialMode);
+  const setViewMode = React.useCallback((m) => {
+    if (meScope === "doctor"    && m !== "doctor")    return;
+    if (meScope === "therapist" && m !== "therapist") return;
+    setViewModeState(m);
+    try { localStorage.setItem(LS_MODE, m); } catch {}
+  }, [meScope]);
   const [draggedId, setDraggedId] = React.useState(null);
   const [rescheduleModal, setRescheduleModal] = React.useState(null);
-  const [appts, setAppts] = React.useState(()=> {
-    const src = window.scopeAppts ? window.scopeAppts(DATA.appts) : DATA.appts;
-    return src.map(a => ({
-      ...a,
-      colIndex: therapists.findIndex(t => t.name === a.th)
-    })).filter(a => a.colIndex >= 0);
-  });
+  const [actionsModal, setActionsModal]       = React.useState(null);
+
+  // ── Selected date ──
+  const parentIso   = todayIso();
+  const viewIso     = offsetIso(parentIso, dateOffset || 0);
+  const viewDate    = new Date(viewIso + "T00:00:00");
+  const dm          = viewDate.toLocaleDateString("ar-EG", { day: "numeric", month: "long" });
+  const dateLabel   = dateOffset === 0 ? `اليوم، ${dm}`
+                    : dateOffset === 1 ? `غدًا، ${dm}`
+                    : dateOffset === -1 ? `أمس، ${dm}`
+                    : viewDate.toLocaleDateString("ar-EG", { weekday: "long", day: "numeric", month: "long" });
+
+  // Direct absolute-date picker: convert user's chosen date back into
+  // an offset from today so the parent state stays valid.
+  function onPickDate(iso) {
+    if (!iso) return;
+    const a = new Date(iso + "T00:00:00");
+    const b = new Date(todayIso() + "T00:00:00");
+    const diff = Math.round((a.getTime() - b.getTime()) / 864e5);
+    setDateOffset(diff);
+  }
+
+  // ── Staff columns (therapists + doctors) ──
+  const therapists = window.scopeTherapists ? window.scopeTherapists(DATA.therapists || []) : (DATA.therapists || []);
+  const doctors    = (DATA.doctors || []).filter(d => d.active !== false);
+  const therapistCols = React.useMemo(() => therapists.map(t => ({
+    key:       t.staff_id || t.id || t.name,
+    name:      t.name,
+    role:      "الأخصائي",
+    subtitle:  t.spec || "",
+    hours:     t.schedule || t.hours || "08:00 - 18:00",
+    load:      (t.load != null && t.max != null) ? `${t.load}/${t.max}` : "",
+    color:     t.color || "#7BBDE8",
+    _row:      t,
+    _kind:     "therapist",
+  })), [therapists]);
+  const doctorCols = React.useMemo(() => doctors.map(d => ({
+    key:       "dr:" + (d.id || d.name),
+    name:      d.name,
+    role:      "طبيب",
+    subtitle:  d.specialization || "",
+    hours:     d.schedule || d.hours || "08:00 - 18:00",
+    load:      "",
+    color:     d.color || "#7E6BD3",
+    _row:      d,
+    _kind:     "doctor",
+  })), [doctors]);
+  // Combined map — used by day/week views to look up which column an
+  // appointment belongs to for color + display.
+  const staffCols = React.useMemo(() => [...therapistCols, ...doctorCols],
+    [therapistCols, doctorCols]);
+  // Visible columns for grid views — filtered to the active role.
+  const visibleStaffCols = viewMode === "therapist" ? therapistCols
+                        : viewMode === "doctor"     ? doctorCols
+                        : staffCols;
+
+  // Route an appointment to the correct column of `cols` (either the
+  // visible grid list or the full staff list). Matches by staff id
+  // first (most reliable), falls back to display name.
+  function columnIndexIn(cols, a) {
+    for (let i = 0; i < cols.length; i++) {
+      const s = cols[i];
+      const r = s._row;
+      if (s._kind === "therapist") {
+        const ids = [r.staff_id, r.id].filter(Boolean);
+        if (a.therapist_id && ids.includes(a.therapist_id)) return i;
+        if (a.th && r.name === a.th) return i;
+      } else {
+        if (a.doctor_id && a.doctor_id === r.id) return i;
+        if (a.dr && r.name === a.dr) return i;
+      }
+    }
+    return -1;
+  }
+  const columnIndexOf = (a) => columnIndexIn(visibleStaffCols, a);
+  // Identify whether an appointment is assigned to a therapist vs doctor.
+  const isTherapistAppt = (a) => Boolean(a.therapist_id || a.th);
+  const isDoctorAppt    = (a) => Boolean(a.doctor_id || a.dr);
+
+  // ── Filter appts to the selected day ──
+  const scoped = window.scopeAppts ? window.scopeAppts(DATA.appts || []) : (DATA.appts || []);
+  // For therapist/doctor grids, drop appts that don't belong to that role.
+  const dayAppts = React.useMemo(() => {
+    return scoped
+      .filter(a => apptDateIso(a) === viewIso)
+      .filter(a => {
+        if (viewMode === "therapist") return isTherapistAppt(a) && !isDoctorAppt(a);
+        if (viewMode === "doctor")    return isDoctorAppt(a);
+        return true;
+      })
+      .map(a => ({ ...a, colIndex: columnIndexOf(a) }));
+  }, [scoped, viewIso, visibleStaffCols, viewMode]);
+
+  // ── Week scaffolding (Saturday-start clinic week) ──
+  const weekStart = React.useMemo(() => {
+    const d = new Date(viewIso + "T00:00:00");
+    const day = d.getDay();
+    const diff = (day + 1) % 7; // days since Saturday
+    d.setDate(d.getDate() - diff);
+    return d;
+  }, [viewIso]);
+  const weekDays = React.useMemo(() => {
+    const out = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(weekStart); d.setDate(weekStart.getDate() + i);
+      out.push({
+        iso:   d.toISOString().slice(0,10),
+        label: d.toLocaleDateString("ar-EG", { weekday: "short", day: "numeric" }),
+      });
+    }
+    return out;
+  }, [weekStart]);
+  const weekAppts = React.useMemo(() => {
+    const isoSet = new Set(weekDays.map(d => d.iso));
+    return scoped.filter(a => isoSet.has(apptDateIso(a)))
+                 .map(a => ({ ...a, colIndex: columnIndexIn(staffCols, a) }));
+  }, [scoped, weekDays, staffCols]);
+
+  // Daily statistics reflect just the selected day.
+  const dayBooked  = dayAppts.filter(a => a.status !== "متاح").length;
+  const dayFree    = dayAppts.filter(a => a.status === "متاح").length;
+  const dayPending = dayAppts.filter(a => a.status === "معلّق").length;
+
   const minutesFromHour = (t) => {
-    // Guard against missing/malformed times so a bad row can't NaN-out the layout.
     const parts = (t || "").split(":").map(Number);
     const h = Number.isFinite(parts[0]) ? parts[0] : 8;
     const m = Number.isFinite(parts[1]) ? parts[1] : 0;
     return (h-8)*60 + m;
   };
-  // Real calendar label driven by the offset (was a hardcoded date list).
-  const viewDate = new Date(Date.now() + dateOffset * 864e5);
-  const dm = viewDate.toLocaleDateString("ar-EG", { day: "numeric", month: "long" });
-  const today = dateOffset === 0 ? `اليوم، ${dm}`
-    : dateOffset === 1 ? `غدًا، ${dm}`
-    : viewDate.toLocaleDateString("ar-EG", { weekday: "long", day: "numeric", month: "long" });
 
-  if (therapists.length === 0) {
-    return <EmptyState icon={<I.Calendar size={22}/>} title="لا أخصائيين بعد"
-      body="أضف الأخصائيين من الإعدادات ليظهر تقويم الحجوزات هنا."/>;
+  // ── Persist a move (drag-drop or reschedule modal) ──
+  async function persistMove(orig, patch) {
+    if (!window.KineticData) return;
+    try {
+      await window.KineticData.upsert("appts", {
+        booking_id: orig.booking_id || orig.id,
+        id:         orig.id,
+        patient_id: orig.patient_id || orig.pid,
+        patient:    orig.patient,
+        therapist_id: patch.therapist_id ?? orig.therapist_id,
+        doctor_id:    patch.doctor_id ?? orig.doctor_id,
+        th:         patch.th ?? orig.th,
+        dr:         patch.dr ?? orig.dr,
+        date:       patch.date || apptDateIso(orig),
+        time:       patch.time ?? orig.time,
+        status:     patch.status ?? orig.status ?? "مؤكد",
+        type:       orig.type,
+        dur:        orig.dur || 30,
+      });
+    } catch (e) {
+      console.warn("appointment persist failed", e);
+      if (window.showToast) window.showToast("تعذّر حفظ التعديل", "error");
+    }
   }
+
+  // Overlap guard: another appointment in the same column at the
+  // same time (ignoring the row we're moving).
+  function hasConflict(colIndex, time, excludeId) {
+    return dayAppts.some(a =>
+      a.colIndex === colIndex
+      && a.id !== excludeId
+      && a.time === time
+      && a.status !== "متاح"
+      && a.status !== "ملغي"
+    );
+  }
+
+  if (staffCols.length === 0) {
+    return <EmptyState icon={<I.Calendar size={22}/>} title="لا أخصائيين بعد"
+      body="أضف الأخصائيين والأطباء من الإعدادات ليظهر تقويم الحجوزات هنا."/>;
+  }
+
+  // Tab visibility follows the current user's role. Reception/admin see
+  // all four tabs; doctor sees only "الدكتور"; therapist sees only "الأخصائي".
+  const canSeeTab = (m) => {
+    if (meScope === "doctor")    return m === "doctor";
+    if (meScope === "therapist") return m === "therapist";
+    return true;
+  };
+
+  // ── Toolbar (shared by all views) ──
+  const toolbar = (
+    <div style={{padding:"14px 18px",display:"flex",alignItems:"center",gap:12,borderBottom:"1px solid var(--ink-200)",flexWrap:"wrap"}}>
+      <button className="btn btn-secondary btn-icon" onClick={()=>setDateOffset(dateOffset-1)} aria-label="السابق"><I.ArrowLeft size={14}/></button>
+      <div className="h3" style={{minWidth:"min(220px, 45vw)"}}>{dateLabel}</div>
+      <button className="btn btn-secondary btn-icon" onClick={()=>setDateOffset(dateOffset+1)} aria-label="التالي"><I.ArrowRight size={14}/></button>
+      <button className="btn btn-ghost" style={{fontSize:12}} onClick={()=>setDateOffset(0)}>اليوم</button>
+      <input
+        type="date"
+        className="input"
+        value={viewIso}
+        onChange={e=>onPickDate(e.target.value)}
+        style={{width:150,padding:"6px 10px",fontSize:12}}
+      />
+      <div className="seg" style={{marginLeft:12}}>
+        {canSeeTab("day")       && <button className={viewMode==="day"       ? "on" : ""} onClick={()=>setViewMode("day")}>اليوم</button>}
+        {canSeeTab("therapist") && <button className={viewMode==="therapist" ? "on" : ""} onClick={()=>setViewMode("therapist")}>الأخصائي</button>}
+        {canSeeTab("doctor")    && <button className={viewMode==="doctor"    ? "on" : ""} onClick={()=>setViewMode("doctor")}>الدكتور</button>}
+        {canSeeTab("week")      && <button className={viewMode==="week"      ? "on" : ""} onClick={()=>setViewMode("week")}>الأسبوع</button>}
+      </div>
+      <div style={{flex:1}}/>
+      <span className="muted" style={{fontSize:12}}>{dayBooked} محجوز · {dayFree} متاح · {dayPending} بانتظار</span>
+    </div>
+  );
 
   return (
     <>
     <div className="card" style={{padding:0,overflow:"hidden"}}>
-      {/* toolbar */}
-      <div style={{padding:"14px 18px",display:"flex",alignItems:"center",gap:12,borderBottom:"1px solid var(--ink-200)",flexWrap:"wrap"}}>
-        <button className="btn btn-secondary btn-icon" onClick={()=>setDateOffset(Math.max(0,dateOffset-1))}><I.ArrowLeft size={14}/></button>
-        <div className="h3" style={{minWidth:"min(220px, 45vw)"}}>{today}</div>
-        <button className="btn btn-secondary btn-icon" onClick={()=>setDateOffset(dateOffset+1)}><I.ArrowRight size={14}/></button>
-        <button className="btn btn-ghost" style={{fontSize:12}} onClick={()=>setDateOffset(0)}>اليوم</button>
-        <div className="seg" style={{marginLeft:12}}>
-          <button>يوم</button>
-          <button className="on">الأخصائي</button>
-          <button>أسبوع</button>
-        </div>
-        <div style={{flex:1}}/>
-        <span className="muted" style={{fontSize:12}}>اسحب المواعيد لإعادة جدولتها</span>
-      </div>
+      {toolbar}
 
-      <div className="tbl-scroll">
-      <div style={{display:"grid",gridTemplateColumns:`80px repeat(${therapists.length},1fr)`,minHeight:660,minWidth:Math.max(320, 80 + therapists.length*160)}}>
-        {/* header */}
-        <div style={{borderRight:"1px solid var(--ink-200)",background:"var(--ink-50)"}}></div>
-        {therapists.map((t,i)=>(
-          <div key={t.name} style={{padding:"12px 14px",borderRight:i<therapists.length-1?"1px solid var(--ink-200)":"none",borderBottom:"1px solid var(--ink-200)",background:"var(--ink-50)"}}>
-            <div style={{display:"flex",alignItems:"center",gap:8}}>
-              <span className="av sm" style={{background:t.color+"33",color:t.color}}>{t.name.split(" ").map(x=>x[0]).join("")}</span>
-              <div>
-                <div style={{fontWeight:600,fontSize:13}}>{t.name}</div>
-                <div className="muted" style={{fontSize:11}}>{t.spec} · {t.load}/{t.max}</div>
+      {(viewMode === "therapist" || viewMode === "doctor") ? (
+        <div className="tbl-scroll">
+        <div style={{display:"grid",gridTemplateColumns:`80px repeat(${visibleStaffCols.length},1fr)`,minHeight:660,minWidth:Math.max(320, 80 + visibleStaffCols.length*160)}}>
+          {/* header */}
+          <div style={{borderRight:"1px solid var(--ink-200)",background:"var(--ink-50)"}}></div>
+          {visibleStaffCols.map((s,i)=>{
+            const cnt = dayAppts.filter(a => a.colIndex === i && a.status !== "متاح").length;
+            return (
+            <div key={s.key} style={{padding:"12px 14px",borderRight:i<visibleStaffCols.length-1?"1px solid var(--ink-200)":"none",borderBottom:"1px solid var(--ink-200)",background:"var(--ink-50)"}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span className="av sm" style={{background:s.color+"33",color:s.color}}>{(s.name||"").split(" ").map(x=>x[0]).join("").slice(0,2)}</span>
+                <div style={{minWidth:0}}>
+                  <div style={{fontWeight:600,fontSize:13,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.name}</div>
+                  <div className="muted" style={{fontSize:11}}>{s.subtitle || s.role}</div>
+                  <div className="muted mono" style={{fontSize:10.5,marginTop:2}}>{s.hours} · {cnt} موعد</div>
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+            );
+          })}
 
-        {/* hours column */}
-        <div style={{borderRight:"1px solid var(--ink-200)",background:"var(--ink-50)",position:"relative"}}>
-          {hours.map((h,i)=>(
-            <div key={h} style={{height:54,padding:"4px 10px",borderTop:i?"1px solid var(--ink-100)":"none",fontSize:11,color:"var(--ink-500)"}} className="mono">{h}</div>
+          {/* hours column */}
+          <div style={{borderRight:"1px solid var(--ink-200)",background:"var(--ink-50)",position:"relative"}}>
+            {hours.map((h,i)=>(
+              <div key={h} style={{height:54,padding:"4px 10px",borderTop:i?"1px solid var(--ink-100)":"none",fontSize:11,color:"var(--ink-500)"}} className="mono">{h}</div>
+            ))}
+          </div>
+
+          {/* staff columns */}
+          {visibleStaffCols.map((s,col)=>(
+            <div key={s.key}
+              onDragOver={e=>e.preventDefault()}
+              onDrop={e=>{
+                e.preventDefault();
+                const rect = e.currentTarget.getBoundingClientRect();
+                const offsetY = e.clientY - rect.top;
+                const totalMin = Math.round(offsetY / 54) * 15;
+                const hh = Math.floor(8 + totalMin/60);
+                const mm = totalMin % 60;
+                const newTime = `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+                const orig = dayAppts.find(x => x.id === draggedId);
+                setDraggedId(null);
+                if (!orig) return;
+                // Cross-role guard: therapist view only moves within therapists;
+                // doctor view only within doctors.
+                if (viewMode === "therapist" && s._kind !== "therapist") return;
+                if (viewMode === "doctor"    && s._kind !== "doctor")    return;
+                if (hasConflict(col, newTime, orig.id)) {
+                  if (window.showToast) window.showToast("يوجد موعد آخر في نفس التوقيت", "error");
+                  return;
+                }
+                const patch = { time: newTime, date: viewIso };
+                if (s._kind === "therapist") {
+                  patch.th = s.name;
+                  patch.therapist_id = s._row.staff_id || s._row.id;
+                  patch.doctor_id = null; patch.dr = null;
+                } else {
+                  patch.dr = s.name;
+                  patch.doctor_id = s._row.id;
+                  patch.therapist_id = null; patch.th = null;
+                }
+                persistMove(orig, patch);
+              }}
+              style={{
+                position:"relative",
+                borderRight:col<visibleStaffCols.length-1?"1px solid var(--ink-200)":"none",
+                background: col%2===0?"#fff":"#FCFDFE",
+                minHeight: hours.length * 54
+              }}>
+              {hours.map((_,i)=>(
+                <div key={i} style={{position:"absolute",top:i*54,left:0,right:0,height:54,borderTop:i?"1px solid var(--ink-100)":"none"}}/>
+              ))}
+              {/* now indicator — only on today's column */}
+              {col===0 && dateOffset===0 && (() => {
+                const now = new Date();
+                const nowMin = (now.getHours()-8)*60 + now.getMinutes();
+                if (nowMin < 0 || nowMin > hours.length*60) return null;
+                return (
+                  <div style={{position:"absolute",top:(nowMin/60)*54-2,left:0,right:0,height:2,background:"var(--red)",zIndex:5}}>
+                    <div style={{position:"absolute",left:-4,top:-4,width:10,height:10,borderRadius:999,background:"var(--red)"}}/>
+                  </div>
+                );
+              })()}
+
+              {dayAppts.filter(a=>a.colIndex===col).map(a=>{
+                const top = (minutesFromHour(a.time)/60)*54;
+                const dur = Number(a.dur) || 30;
+                const h = (dur/60)*54;
+                const isAvail = a.status==="متاح";
+                const c = s.color;
+                const bg = isAvail ? "transparent" : `${c}1A`;
+                const border = isAvail ? `2px dashed ${c}66` : `1px solid ${c}66`;
+                return (
+                  <div key={a.id}
+                    draggable={!isAvail}
+                    onDragStart={(e)=>{e.stopPropagation();setDraggedId(a.id);}}
+                    onClick={()=>{ if(!isAvail) setActionsModal(a); }}
+                    style={{
+                      position:"absolute", left:6, right:6, top, height:h-3,
+                      background:bg, border, borderLeft: isAvail?border:`3px solid ${c}`,
+                      borderRadius:9, padding:"6px 8px",fontSize:11.5,
+                      cursor: isAvail?"pointer":"grab", overflow:"hidden",
+                      transition:"transform .12s",
+                      opacity: draggedId===a.id ? 0.5 : 1
+                    }}
+                    onMouseEnter={e=>e.currentTarget.style.transform="scale(1.01)"}
+                    onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}>
+                    {isAvail ? (
+                      <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100%",color:c,fontWeight:500}}>
+                        <I.Plus size={12} style={{marginRight:4}}/> موعد متاح
+                      </div>
+                    ) : (
+                      <>
+                        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:2}}>
+                          <span style={{fontWeight:600,fontSize:12,color:"var(--ink-900)"}}>{a.patient}</span>
+                          <span className="mono" style={{fontSize:10,color:"var(--ink-500)"}}>{a.time}</span>
+                        </div>
+                        <div style={{fontSize:10.5,color:"var(--ink-500)",whiteSpace:"normal",wordBreak:"break-word"}}>{a.type}</div>
+                        <div style={{display:"flex",alignItems:"center",gap:6,marginTop:4}}>
+                          <ApptBadge s={a.status}/>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           ))}
         </div>
-
-        {/* therapist columns */}
-        {therapists.map((t,col)=>(
-          <div key={t.name}
-            onDragOver={e=>e.preventDefault()}
-            onDrop={e=>{
-              e.preventDefault();
-              const rect = e.currentTarget.getBoundingClientRect();
-              const offsetY = e.clientY - rect.top;
-              const newMin = Math.round(offsetY / 54) * 15;
-              const totalMin = newMin;
-              const hh = Math.floor(8 + totalMin/60);
-              const mm = totalMin % 60;
-              const newTime = `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
-              setAppts(prev => {
-                const next = prev.map(a => a.id===draggedId ? { ...a, time:newTime, th:t.name, colIndex: col } : a);
-                const moved = next.find(a => a.id===draggedId);
-                // Persist reschedule so a refresh keeps the new slot.
-                if (moved && window.KineticData) {
-                  const therapistRow = (DATA.therapists || []).find(x=>x.name===t.name);
-                  window.KineticData.upsert("appts", {
-                    booking_id: moved.booking_id || moved.id,
-                    id: moved.id,
-                    patient_id: moved.patient_id || moved.pid,
-                    therapist_id: (therapistRow && (therapistRow.staff_id || therapistRow.id)) || moved.therapist_id,
-                    date: moved.date || new Date().toISOString().slice(0,10),
-                    time: newTime,
-                    status: moved.status || "مؤكد",
-                  }).catch(e => console.warn("reschedule persist failed", e));
-                }
-                return next;
-              });
-              setDraggedId(null);
-            }}
-            style={{
-              position:"relative",
-              borderRight:col<therapists.length-1?"1px solid var(--ink-200)":"none",
-              background: col%2===0?"#fff":"#FCFDFE",
-              minHeight: hours.length * 54
-            }}>
-            {/* hour grid lines */}
-            {hours.map((_,i)=>(
-              <div key={i} style={{position:"absolute",top:i*54,left:0,right:0,height:54,borderTop:i?"1px solid var(--ink-100)":"none"}}/>
-            ))}
-            {/* now indicator (3rd hour for demo) */}
-            {col===0 && (
-              <div style={{position:"absolute",top:54*3-2,left:0,right:0,height:2,background:"var(--red)",zIndex:5}}>
-                <div style={{position:"absolute",left:-4,top:-4,width:10,height:10,borderRadius:999,background:"var(--red)"}}/>
+        </div>
+      ) : viewMode === "week" ? (
+        // ── Week view: 7-day chronological summary (Saturday-start) ──
+        <div className="tbl-scroll">
+        <div style={{display:"grid",gridTemplateColumns:`repeat(7,1fr)`,minHeight:520,minWidth:Math.max(560, 7*140)}}>
+          {weekDays.map((d, i) => {
+            const dayList = weekAppts
+              .filter(a => apptDateIso(a) === d.iso)
+              .sort((a,b)=>String(a.time).localeCompare(String(b.time)));
+            const isToday = d.iso === todayIso();
+            const isSelected = d.iso === viewIso;
+            return (
+              <div key={d.iso}
+                onClick={()=>onPickDate(d.iso)}
+                style={{
+                  borderRight: i<6 ? "1px solid var(--ink-200)" : "none",
+                  background: isSelected ? "var(--blue-50)" : (i%2===0 ? "#fff" : "#FCFDFE"),
+                  cursor:"pointer",
+                }}>
+                <div style={{padding:"10px 12px",borderBottom:"1px solid var(--ink-200)",background:isToday?"var(--blue-50)":"var(--ink-50)"}}>
+                  <div style={{fontSize:12,fontWeight:600}}>{d.label}</div>
+                  <div className="muted mono" style={{fontSize:10.5}}>{d.iso}</div>
+                  <div className="muted" style={{fontSize:10.5,marginTop:2}}>{dayList.filter(a=>a.status!=="متاح").length} موعد</div>
+                </div>
+                <div style={{padding:"8px",display:"flex",flexDirection:"column",gap:6}}>
+                  {dayList.length === 0 && <div className="muted" style={{fontSize:11,textAlign:"center",padding:"12px 0"}}>—</div>}
+                  {dayList.slice(0, 8).map(a => {
+                    const col   = a.colIndex >= 0 ? staffCols[a.colIndex] : null;
+                    const color = (col && col.color) || "#7BBDE8";
+                    const staffLabel = col ? col.name : (a.th || a.dr || "—");
+                    const isAvail = a.status === "متاح";
+                    return (
+                      <div key={a.id}
+                        onClick={(e)=>{ e.stopPropagation(); if(!isAvail) setActionsModal(a); }}
+                        style={{
+                          borderRight:`3px solid ${color}`,
+                          border:"1px solid var(--ink-200)",
+                          borderRadius:8, padding:"5px 7px",
+                          background: isAvail ? "transparent" : "#fff",
+                          fontSize:11, cursor:isAvail?"default":"pointer",
+                        }}>
+                        <div style={{display:"flex",justifyContent:"space-between",gap:4}}>
+                          <span className="mono" style={{fontWeight:600}}>{a.time || "—"}</span>
+                          <span className="muted" style={{fontSize:10}}>{a.dur||30}m</span>
+                        </div>
+                        <div style={{fontWeight:500,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{a.patient || "—"}</div>
+                        <div className="muted" style={{fontSize:10,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{staffLabel}</div>
+                      </div>
+                    );
+                  })}
+                  {dayList.length > 8 && (
+                    <div className="muted" style={{fontSize:10.5,textAlign:"center"}}>+{dayList.length-8} إضافية</div>
+                  )}
+                </div>
               </div>
-            )}
-
-            {/* appointments */}
-            {appts.filter(a=>a.colIndex===col && a.status!=="متاح").map(a=>{
-              const top = (minutesFromHour(a.time)/60)*54;
-              const h = (a.dur/60)*54;
-              const isAvail = a.status==="متاح";
-              const c = t.color;
-              const bg = isAvail ? "transparent" : `${c}1A`;
-              const border = isAvail ? `2px dashed ${c}66` : `1px solid ${c}66`;
+            );
+          })}
+        </div>
+        </div>
+      ) : (
+        // ── Day view: chronological list for the selected date ──
+        <div style={{padding:"14px 18px"}}>
+          {dayAppts.length === 0 && (
+            <div className="muted" style={{fontSize:13,padding:"32px 0",textAlign:"center"}}>لا مواعيد في هذا اليوم.</div>
+          )}
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {dayAppts.slice().sort((a,b)=>String(a.time).localeCompare(String(b.time))).map(a=>{
+              const col   = a.colIndex >= 0 ? visibleStaffCols[a.colIndex] : null;
+              const color = (col && col.color) || "#7BBDE8";
+              const with_ = col ? `${col.role}: ${col.name}` : (a.th || a.dr || "—");
+              const isAvail = a.status === "متاح";
               return (
                 <div key={a.id}
-                  draggable={!isAvail}
-                  onDragStart={(e)=>{e.stopPropagation();setDraggedId(a.id);}}
-                  onClick={()=>{ if(!isAvail) setRescheduleModal(a); }}
+                  onClick={()=>{ if(!isAvail) setActionsModal(a); }}
                   style={{
-                    position:"absolute", left:6, right:6, top, height:h-3,
-                    background:bg, border, borderLeft: isAvail?border:`3px solid ${c}`,
-                    borderRadius:9, padding:"6px 8px",fontSize:11.5,
-                    cursor: isAvail?"pointer":"grab", overflow:"hidden",
-                    transition:"transform .12s",
-                    opacity: draggedId===a.id ? 0.5 : 1
-                  }}
-                  onMouseEnter={e=>e.currentTarget.style.transform="scale(1.01)"}
-                  onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}>
-                  {isAvail ? (
-                    <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100%",color:c,fontWeight:500}}>
-                      <I.Plus size={12} style={{marginRight:4}}/> موعد متاح
-                    </div>
-                  ) : (
-                    <>
-                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:2}}>
-                        <span style={{fontWeight:600,fontSize:12,color:"var(--ink-900)"}}>{a.patient}</span>
-                        <span className="mono" style={{fontSize:10,color:"var(--ink-500)"}}>{a.time}</span>
-                      </div>
-                      <div style={{fontSize:10.5,color:"var(--ink-500)",whiteSpace:"normal",wordBreak:"break-word"}}>{a.type}</div>
-                      <div style={{display:"flex",alignItems:"center",gap:6,marginTop:4}}>
-                        <ApptBadge s={a.status}/>
-                      </div>
-                    </>
-                  )}
+                    display:"flex",alignItems:"center",gap:12,
+                    padding:"10px 12px",border:"1px solid var(--ink-200)",
+                    borderRight:`3px solid ${color}`,borderRadius:12,
+                    background: a.status==="قيد التنفيذ" ? "var(--blue-50)" : "#fff",
+                    cursor: isAvail ? "default" : "pointer",
+                  }}>
+                  <div style={{textAlign:"center",minWidth:56}}>
+                    <div className="mono" style={{fontSize:13,fontWeight:600}}>{a.time || "—"}</div>
+                    <div className="mono" style={{fontSize:10,color:"var(--ink-400)"}}>{a.dur || 30}m</div>
+                  </div>
+                  <div style={{width:1,height:34,background:"var(--ink-200)"}}/>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:500,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{a.patient || "—"}</div>
+                    <div style={{fontSize:11.5,color:"var(--ink-500)"}}>{with_}{a.type ? ` · ${a.type}` : ""}</div>
+                  </div>
+                  <ApptBadge s={a.status}/>
                 </div>
               );
             })}
           </div>
-        ))}
-      </div>
-      </div>
+        </div>
+      )}
     </div>
+
+    {actionsModal && (
+      <AppointmentActionsModal
+        appt={actionsModal}
+        onClose={()=>setActionsModal(null)}
+        onEdit={()=>{ setRescheduleModal(actionsModal); setActionsModal(null); }}
+        onStatus={async (newStatus) => {
+          await persistMove(actionsModal, { status: newStatus });
+          setActionsModal(null);
+          if (window.showToast) window.showToast("تم تحديث الحالة", "success");
+        }}
+      />
+    )}
+
     {rescheduleModal && (
       <RescheduleModal
         appt={rescheduleModal}
         onClose={()=>setRescheduleModal(null)}
         onSave={(newTime, newTherapist)=>{
-          setAppts(prev=>{
-            const next = prev.map(a=>a.id===rescheduleModal.id
-              ? {...a, time:newTime, th:newTherapist, colIndex:therapists.findIndex(t=>t.name===newTherapist)}
-              : a
-            );
-            const moved = next.find(a=>a.id===rescheduleModal.id);
-            if (moved && window.KineticData) {
-              const therapistRow = (DATA.therapists || []).find(x=>x.name===newTherapist);
-              window.KineticData.upsert("appts", {
-                booking_id: moved.booking_id || moved.id,
-                id: moved.id,
-                patient_id: moved.patient_id || moved.pid,
-                therapist_id: (therapistRow && (therapistRow.staff_id || therapistRow.id)) || moved.therapist_id,
-                date: moved.date || new Date().toISOString().slice(0,10),
-                time: newTime,
-                status: moved.status || "مؤكد",
-              }).catch(e => console.warn("reschedule persist failed", e));
-            }
-            return next;
-          });
+          const therapistRow = (DATA.therapists || []).find(x=>x.name===newTherapist);
+          const patch = {
+            time: newTime, th: newTherapist,
+            therapist_id: therapistRow ? (therapistRow.staff_id || therapistRow.id) : rescheduleModal.therapist_id,
+            date: apptDateIso(rescheduleModal),
+          };
+          persistMove(rescheduleModal, patch);
           setRescheduleModal(null);
           if(window.showToast) window.showToast(`تم إعادة جدولة موعد ${rescheduleModal.patient} إلى ${newTime}`, "success");
         }}
@@ -1801,6 +2675,50 @@ function CalendarView({ dateOffset, setDateOffset }) {
       />
     )}
     </>
+  );
+}
+
+// ── Appointment actions (view details + status change + open patient) ──
+// Small focused modal so click-to-details doesn't drop the user
+// straight into the reschedule form.
+function AppointmentActionsModal({ appt, onClose, onEdit, onStatus }) {
+  const patient = (DATA.patients || []).find(p =>
+    (p.patient_id || p.id) === (appt.patient_id || appt.pid)
+    || p.name === appt.patient);
+  return (
+    <Modal open onClose={onClose} width={520} title="تفاصيل الموعد">
+      <div style={{display:"grid",gap:10,fontSize:13}}>
+        <Row k="المريض"  v={appt.patient || "—"}/>
+        {patient && patient.phone && <Row k="الهاتف" v={patient.phone}/>}
+        <Row k="المسؤول" v={appt.th || appt.dr || "—"}/>
+        <Row k="التاريخ" v={apptDateIso(appt)}/>
+        <Row k="الوقت"   v={`${appt.time || "—"} · ${appt.dur || 30} دقيقة`}/>
+        <Row k="النوع"   v={appt.type || "—"}/>
+        <Row k="الحالة"  v={<ApptBadge s={appt.status}/>}/>
+        {appt.payment && <Row k="الدفع" v={<PayBadge s={appt.payment}/>}/>}
+        {appt.notes && <Row k="ملاحظات" v={appt.notes}/>}
+      </div>
+      <div style={{display:"flex",flexWrap:"wrap",gap:8,marginTop:16,justifyContent:"flex-end"}}>
+        {patient && (
+          <button className="btn btn-ghost" onClick={()=>{
+            if (window.__goToPatient) window.__goToPatient(patient);
+            else if (window.showToast) window.showToast("افتح صفحة المرضى لعرض الملف", "info");
+            onClose();
+          }}><I.User size={13}/> ملف المريض</button>
+        )}
+        <button className="btn btn-secondary" onClick={()=>onStatus("ملغي")}><I.X size={13}/> إلغاء</button>
+        <button className="btn btn-secondary" onClick={()=>onStatus("مكتمل")}><I.Check size={13}/> إنهاء</button>
+        <button className="btn btn-blue" onClick={onEdit}><I.Edit size={13}/> نقل / تعديل</button>
+      </div>
+    </Modal>
+  );
+}
+function Row({ k, v }) {
+  return (
+    <div style={{display:"flex",gap:12,alignItems:"center"}}>
+      <span className="muted" style={{fontSize:12,minWidth:64}}>{k}</span>
+      <span style={{flex:1}}>{v}</span>
+    </div>
   );
 }
 

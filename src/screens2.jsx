@@ -104,14 +104,15 @@ function Treatments({ go }) {
         </div>
       </div>
       {templatesOpen && (
-        <Modal title="قوالب خطط العلاج" onClose={()=>setTemplatesOpen(false)}>
-          {["انزلاق غضروفي قياسي","تأهيل ما بعد العملية","إعادة تأهيل الركبة","علاج الكتف المتجمدة","ألم أسفل الظهر المزمن"].map((t,i)=>(
-            <div key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid var(--ink-100)"}}>
-              <span style={{fontSize:13}}>{t}</span>
-              <button className="btn btn-secondary" style={{fontSize:12}} onClick={()=>{setTemplate(t);setTemplatesOpen(false);setView("create");if(window.showToast)window.showToast(`تم تحميل القالب: ${t}`,"success");}}>استخدام</button>
-            </div>
-          ))}
-        </Modal>
+        <TemplatesLibraryModal
+          onClose={()=>setTemplatesOpen(false)}
+          onUse={(t)=>{
+            setTemplate(t);
+            setTemplatesOpen(false);
+            setView("create");
+            if(window.showToast) window.showToast(`تم تحميل القالب: ${t.name}`, "success");
+          }}
+        />
       )}
     </Page>
   );
@@ -138,18 +139,59 @@ function TreatmentPlanDetail({ plan, onBack, onEdit }) {
 }
 
 function TreatmentPlanCreate({ onCancel, onSave, template }) {
-  const [diag, setDiag] = React.useState(template || "متلازمة ألم الرضفة الفخذية");
-  const [modalities, setModalities] = React.useState([]);
+  window.useDataVersion && window.useDataVersion();
+  // `template` may be a plain diagnosis string (legacy) or a full DB
+  // template object (from the new library). Hydrate diag + preselected
+  // methods/modalities from either shape.
+  const tplObj = (template && typeof template === "object") ? template : null;
+  const tplName = tplObj ? tplObj.name : (typeof template === "string" ? template : "");
+  const [diag, setDiag] = React.useState(
+    (tplObj && tplObj.diagnosis) || (typeof template === "string" ? template : "متلازمة ألم الرضفة الفخذية")
+  );
+  const [modalities, setModalities] = React.useState(() => {
+    if (!tplObj) return [];
+    const fromMethods    = Array.isArray(tplObj.methods)    ? tplObj.methods.map(m => m.name || m) : [];
+    const fromModalities = Array.isArray(tplObj.modalities) ? tplObj.modalities : [];
+    return Array.from(new Set([...fromMethods, ...fromModalities]));
+  });
+  const [txModalOpen, setTxModalOpen] = React.useState(false);
   const toggleModality = (m) => setModalities(list => list.includes(m) ? list.filter(x=>x!==m) : [...list, m]);
   const patients = (window.scopePatients ? window.scopePatients(DATA.patients) : DATA.patients) || [];
   const [patientId, setPatientId] = React.useState(patients[0] ? (patients[0].patient_id || patients[0].id) : "");
   const therapists = (DATA.therapists || []);
   const [therapistId, setTherapistId] = React.useState(therapists[0] ? (therapists[0].staff_id || therapists[0].id || therapists[0].name) : "");
+
+  // Load the shared library on first mount. Idempotent — the API skips
+  // the network round-trip if DATA.treatmentMethods is already warm.
+  React.useEffect(() => {
+    if (window.TxMethods) window.TxMethods.list().catch(()=>{});
+  }, []);
+
+  // Library from DB (fallback to seed labels if hydration hasn't happened
+  // yet — those seed labels match the DB seed so selection stays stable).
+  const dbMethods = (DATA.treatmentMethods || []).filter(m => m.status !== "archived");
+  const FALLBACK = ["علاج يدوي","تدريبات قوة","تمارين إطالة","علاج حراري",
+                    "تحفيز كهربي","موجات فوق صوتية","علاج مائي","حجامة","وخز جاف"];
+  // Sort by display_order (nulls last) then name so the doctor gets a
+  // stable, curated chip order that matches the admin's library setup.
+  const sortedDbMethods = [...dbMethods].sort((a, b) => {
+    const ao = a.display_order, bo = b.display_order;
+    const av = (ao == null) ? Number.POSITIVE_INFINITY : Number(ao);
+    const bv = (bo == null) ? Number.POSITIVE_INFINITY : Number(bo);
+    if (av !== bv) return av - bv;
+    return String(a.name || "").localeCompare(String(b.name || ""), "ar");
+  });
+  const activeMethods = sortedDbMethods.length
+    ? sortedDbMethods.map(m => ({ id: m.method_id || m.id, name: m.name, category: m.category, icon: m.icon || null, color: m.color || null }))
+    : FALLBACK.map(n => ({ id: n, name: n }));
+
+  const canManageTx = ((window.ME && window.ME.role) === "مدير")
+                   || ((window.ME && window.ME.role) === "طبيب");
   return (
     <Page>
       <div className="crumb" style={{cursor:"pointer"}} onClick={onCancel}><span>خطط العلاج</span><I.Chevron size={11}/><span style={{color:"var(--ink-700)"}}>خطة جديدة</span></div>
       <div className="page-head">
-        <div className="h1">إنشاء خطة علاج{template ? ` — ${template}` : ""}</div>
+        <div className="h1">إنشاء خطة علاج{tplName ? ` — ${tplName}` : ""}</div>
         <div className="page-actions">
           <button className="btn btn-ghost" onClick={onCancel}>إلغاء</button>
           <button className="btn btn-secondary" onClick={()=>{if(window.showToast)window.showToast("تم الحفظ كمسودة","success");onCancel();}}>حفظ كمسودة</button>
@@ -171,14 +213,40 @@ function TreatmentPlanCreate({ onCancel, onSave, template }) {
             <Field label="الأهداف (هدف بكل سطر)" span={2}><textarea className="input" style={{height:100,padding:10}} defaultValue={"Restore pain-free stair descent\nReturn to running بواسطة July\nQuad strength symmetry ≥ 90%"}/></Field>
             <Field label="طرق العلاج" span={2}>
               <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-                {["علاج يدوي","تدريبات قوة","تمارين إطالة","علاج حراري","تحفيز كهربي","موجات فوق صوتية","علاج مائي","حجامة","وخز جاف"].map(m=>{
-                  const on = modalities.includes(m);
+                {activeMethods.map(m=>{
+                  const on = modalities.includes(m.name);
+                  const IconCmp = m.icon && I[m.icon];
+                  // When the method has a color, use it for selected background
+                  // and border. Otherwise fall back to the default blue accent.
+                  const bg = on
+                    ? (m.color ? `${m.color}22` : "var(--blue-50)")
+                    : "#fff";
+                  const bd = on
+                    ? (m.color || "var(--blue-500)")
+                    : "var(--ink-200)";
+                  const fg = on
+                    ? (m.color || "var(--blue-900)")
+                    : "var(--ink-700)";
                   return (
-                    <button key={m} onClick={()=>toggleModality(m)} className="btn btn-secondary" style={{fontSize:12,padding:"6px 10px",background:on?"var(--blue-50)":"#fff",borderColor:on?"var(--blue-500)":"var(--ink-200)",color:on?"var(--blue-900)":"var(--ink-700)"}}>
-                      {on ? "✓" : "+"} {m}
+                    <button key={m.id} type="button" onClick={()=>toggleModality(m.name)} className="btn btn-secondary"
+                      style={{fontSize:12,padding:"6px 10px",background:bg,borderColor:bd,color:fg,display:"inline-flex",alignItems:"center",gap:6}}>
+                      {on
+                        ? <span style={{fontWeight:600}}>✓</span>
+                        : (IconCmp ? <IconCmp size={12}/> : <span>+</span>)}
+                      {m.name}
                     </button>
                   );
                 })}
+                {canManageTx && (
+                  <button
+                    type="button"
+                    onClick={()=>setTxModalOpen(true)}
+                    className="btn btn-secondary"
+                    style={{fontSize:12,padding:"6px 10px",borderStyle:"dashed",color:"var(--blue-700)"}}
+                  >
+                    <I.Plus size={12}/> طرق علاج أخرى
+                  </button>
+                )}
               </div>
             </Field>
             <Field label="ملاحظات" span={2}><textarea className="input" style={{height:80,padding:10}} placeholder="ملاحظات داخلية لفريق الرعاية"/></Field>
@@ -203,7 +271,334 @@ function TreatmentPlanCreate({ onCancel, onSave, template }) {
           </div>
         </div>
       </div>
+
+      {txModalOpen && (
+        <TxMethodModal
+          onClose={()=>setTxModalOpen(false)}
+          onSaved={(m) => {
+            // Auto-select the newly created method so it's already part of
+            // the plan when the doctor closes the modal.
+            if (m && m.name && !modalities.includes(m.name)) {
+              setModalities(list => [...list, m.name]);
+            }
+          }}
+        />
+      )}
     </Page>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// TxMethodModal — "طرق علاج أخرى"
+// Doctors/admins add custom modalities to the shared library. Search
+// existing rows first to avoid duplicates; the RPC also enforces the
+// name uniqueness server-side. Edit + archive are inline actions on
+// each result so managing the library never leaves the modal.
+// ═══════════════════════════════════════════════════════════════════
+// Whitelist of icons safe to use as method glyphs.
+const TX_METHOD_ICONS = [
+  "Activity","Heart","Wave","Sparkle","Sun","Moon",
+  "Stethoscope","Clock","Package","Layers","Pin",
+  "Users","Send","Mic","Megaphone","Image","Dollar",
+];
+// Palette of soft chip colors (hex → bg is used at ~15% alpha via inline style).
+const TX_METHOD_COLORS = [
+  "#3B82F6","#0EA5E9","#14B8A6","#22C55E","#84CC16",
+  "#EAB308","#F59E0B","#F97316","#EF4444","#EC4899",
+  "#A855F7","#6366F1","#64748B",
+];
+
+function TxMethodModal({ onClose, onSaved }) {
+  window.useDataVersion && window.useDataVersion();
+  const [query, setQuery] = React.useState("");
+  const [editingId, setEditingId] = React.useState(null);
+  const [name, setName]           = React.useState("");
+  const [category, setCategory]   = React.useState("");
+  const [description, setDescription] = React.useState("");
+  const [duration, setDuration]   = React.useState("");
+  const [notes, setNotes]         = React.useState("");
+  const [icon, setIcon]           = React.useState("");
+  const [color, setColor]         = React.useState("");
+  const [displayOrder, setDisplayOrder] = React.useState("");
+  const [saving, setSaving]       = React.useState(false);
+  const [error, setError]         = React.useState("");
+  const [showArchived, setShowArchived] = React.useState(false);
+  const [deletingId, setDeletingId] = React.useState(null);
+  const nameRef = React.useRef(null);
+
+  // Pull the library on open. Non-blocking; the modal renders whatever
+  // is already cached first.
+  React.useEffect(() => {
+    if (window.TxMethods) window.TxMethods.list().catch(()=>{});
+    setTimeout(() => { try { nameRef.current && nameRef.current.focus(); } catch(_){} }, 40);
+  }, []);
+
+  const results = React.useMemo(() => {
+    const rows = (window.TxMethods && window.TxMethods.search(query)) || [];
+    return showArchived ? rows : rows.filter(r => r.status !== "archived");
+  }, [query, showArchived, (DATA.treatmentMethods || []).length,
+      (DATA.treatmentMethods || []).map(r=>r.status).join(",")]);
+
+  const categories = (window.TxMethods && window.TxMethods.categories()) || [];
+  // Live duplicate hint (server-side check is authoritative).
+  const dupHint = React.useMemo(() => {
+    if (!name.trim() || !window.TxMethods) return null;
+    return window.TxMethods.findByName(name, editingId || undefined);
+  }, [name, editingId, (DATA.treatmentMethods || []).length]);
+
+  function resetForm() {
+    setEditingId(null); setName(""); setCategory("");
+    setDescription(""); setDuration(""); setNotes("");
+    setIcon(""); setColor(""); setDisplayOrder(""); setError("");
+  }
+  function loadIntoForm(m) {
+    setEditingId(m.method_id || m.id);
+    setName(m.name || "");
+    setCategory(m.category || "");
+    setDescription(m.description || "");
+    setDuration(m.duration_minutes != null ? String(m.duration_minutes) : "");
+    setNotes(m.notes || "");
+    setIcon(m.icon || "");
+    setColor(m.color || "");
+    setDisplayOrder(m.display_order != null ? String(m.display_order) : "");
+    setError("");
+    setTimeout(() => { try { nameRef.current && nameRef.current.focus(); } catch(_){} }, 40);
+  }
+
+  async function doSave(addAnother) {
+    setError("");
+    const trimmed = name.trim();
+    if (!trimmed) { setError("الاسم مطلوب"); return; }
+    if (!/\S/.test(trimmed)) { setError("الاسم لا يمكن أن يحتوي على مسافات فقط"); return; }
+    setSaving(true);
+    const payload = {
+      name: trimmed, category, description, notes,
+      duration_minutes: duration === "" ? null : Number(duration),
+      icon: icon || null,
+      color: color || null,
+      display_order: displayOrder === "" ? null : Number(displayOrder),
+    };
+    let res;
+    if (editingId) res = await window.TxMethods.update(editingId, payload);
+    else           res = await window.TxMethods.create(payload);
+    setSaving(false);
+    if (!res.ok) { setError(res.error || "تعذّر الحفظ"); return; }
+    if (window.showToast) window.showToast(editingId ? "تم تحديث طريقة العلاج" : "تمت إضافة طريقة العلاج", "success");
+    if (onSaved && !editingId) onSaved({ method_id: res.method_id, name: trimmed });
+    if (addAnother) {
+      resetForm();
+      setTimeout(() => { try { nameRef.current && nameRef.current.focus(); } catch(_){} }, 40);
+    } else {
+      onClose && onClose();
+    }
+  }
+
+  async function doArchiveToggle(m) {
+    const id = m.method_id || m.id;
+    const next = m.status === "archived" ? "active" : "archived";
+    const fn = next === "archived" ? window.TxMethods.archive : window.TxMethods.restore;
+    const res = await fn(id);
+    if (!res.ok) {
+      if (window.showToast) window.showToast(res.error || "تعذّر التنفيذ", "error");
+      return;
+    }
+    if (window.showToast) window.showToast(next === "archived" ? "تم أرشفة الطريقة" : "تمت الاستعادة", "success");
+  }
+
+  // Two-click confirm: first click sets deletingId; second click actually
+  // deletes. The RPC blocks the delete if any template references the
+  // method (both by method_id and by case-insensitive name).
+  async function doDelete(m) {
+    const id = m.method_id || m.id;
+    if (deletingId !== id) { setDeletingId(id); return; }
+    if (!window.TxMethods || !window.TxMethods.remove) {
+      if (window.showToast) window.showToast("خدمة الحذف غير متاحة", "error");
+      return;
+    }
+    const res = await window.TxMethods.remove(id);
+    setDeletingId(null);
+    if (!res.ok) {
+      if (window.showToast) window.showToast(res.error || "تعذّر الحذف", "error");
+      return;
+    }
+    if (editingId === id) resetForm();
+    if (window.showToast) window.showToast("تم حذف طريقة العلاج", "success");
+  }
+
+  return (
+    <Modal
+      open onClose={onClose}
+      title={editingId ? "تعديل طريقة العلاج" : "إضافة طريقة علاج جديدة"}
+      width={720}
+      footer={<>
+        <button className="btn btn-ghost" onClick={onClose} disabled={saving}>إلغاء</button>
+        {!editingId && (
+          <button className="btn btn-secondary" onClick={()=>doSave(true)} disabled={saving}>
+            {saving ? "جارٍ الحفظ…" : "حفظ وإضافة أخرى"}
+          </button>
+        )}
+        <button className="btn btn-blue" onClick={()=>doSave(false)} disabled={saving}>
+          <I.Check size={13}/> {saving ? "جارٍ الحفظ…" : "حفظ"}
+        </button>
+      </>}
+    >
+      <div style={{display:"grid",gap:14}}>
+        {/* Search existing */}
+        <div>
+          <div style={{position:"relative"}}>
+            <I.Search size={14} style={{position:"absolute",left:11,top:"50%",transform:"translateY(-50%)",color:"var(--ink-400)"}}/>
+            <input
+              className="input"
+              placeholder="ابحث في طرق العلاج الموجودة قبل إنشاء طريقة جديدة…"
+              value={query}
+              onChange={e=>setQuery(e.target.value)}
+              style={{paddingLeft:32}}
+            />
+          </div>
+          {results.length > 0 && (
+            <div style={{marginTop:8,maxHeight:170,overflowY:"auto",border:"1px solid var(--ink-100)",borderRadius:10,background:"var(--ink-50)"}}>
+              {results.slice(0,25).map(m => {
+                const id = m.method_id || m.id;
+                const archived = m.status === "archived";
+                const isConfirmingDelete = deletingId === id;
+                const IconCmp = m.icon && I[m.icon];
+                return (
+                  <div key={id}
+                       style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",borderBottom:"1px solid var(--ink-100)",opacity: archived ? .6 : 1}}>
+                    {(IconCmp || m.color) && (
+                      <span style={{
+                        width:26,height:26,borderRadius:8,display:"inline-flex",alignItems:"center",justifyContent:"center",
+                        background: m.color ? `${m.color}22` : "var(--ink-100)",
+                        color: m.color || "var(--ink-600)",
+                        flexShrink:0,
+                      }}>
+                        {IconCmp ? <IconCmp size={13}/> : <span style={{fontSize:11,fontWeight:600}}>{(m.name||"?").slice(0,1)}</span>}
+                      </span>
+                    )}
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:13,fontWeight:500}}>{m.name}{archived && <span className="badge b-grey" style={{marginRight:8,fontSize:10.5}}>مؤرشف</span>}</div>
+                      <div className="muted" style={{fontSize:11.5}}>
+                        {m.category || "بدون فئة"}
+                        {m.duration_minutes ? ` · ${m.duration_minutes} دقيقة` : ""}
+                        {m.display_order != null ? ` · ترتيب ${m.display_order}` : ""}
+                      </div>
+                    </div>
+                    <button className="btn btn-ghost" style={{fontSize:11.5,padding:"4px 8px"}} onClick={()=>loadIntoForm(m)}>تعديل</button>
+                    <button className="btn btn-ghost" style={{fontSize:11.5,padding:"4px 8px",color:archived ? "var(--green)" : "var(--amber-700, #b45309)"}} onClick={()=>doArchiveToggle(m)}>
+                      {archived ? "استعادة" : "أرشفة"}
+                    </button>
+                    <button
+                      className="btn btn-ghost"
+                      style={{fontSize:11.5,padding:"4px 8px",color:"var(--red)",fontWeight:isConfirmingDelete?600:400}}
+                      onClick={()=>doDelete(m)}
+                      onBlur={()=>{ if (deletingId === id) setDeletingId(null); }}
+                    >
+                      {isConfirmingDelete ? "تأكيد الحذف؟" : "حذف"}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <div style={{marginTop:6,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:"var(--ink-600)"}}>
+              <input type="checkbox" checked={showArchived} onChange={e=>setShowArchived(e.target.checked)}/>
+              عرض المؤرشفة
+            </label>
+            {editingId && (
+              <button className="btn btn-ghost" style={{fontSize:12}} onClick={resetForm}>
+                <I.Plus size={12}/> إضافة طريقة جديدة بدل التعديل
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Form */}
+        <div className="rgrid c-sm" style={{"--gtc":"repeat(2,1fr)",gap:12}}>
+          <Field label="اسم طريقة العلاج" required span={2}>
+            <input ref={nameRef} className="input" value={name} onChange={e=>setName(e.target.value)} placeholder="مثال: علاج إبر جافة"/>
+            {dupHint && (
+              <div style={{marginTop:6,fontSize:12,color:"var(--amber-700, #b45309)"}}>
+                يوجد طريقة بنفس الاسم مسبقًا:
+                <button className="btn btn-ghost" style={{fontSize:12,padding:"2px 6px",marginRight:6}} onClick={()=>loadIntoForm(dupHint)}>
+                  فتح "{dupHint.name}"
+                </button>
+              </div>
+            )}
+          </Field>
+          <Field label="الفئة">
+            <input
+              className="input"
+              value={category}
+              onChange={e=>setCategory(e.target.value)}
+              list="tx-method-categories"
+              placeholder="اختر أو اكتب فئة جديدة"
+            />
+            <datalist id="tx-method-categories">
+              {["علاج يدوي","تمارين علاجية","أجهزة علاجية","علاج مائي","تأهيل رياضي","علاج عصبي","علاج أطفال","أخرى", ...categories]
+                .filter((v,i,arr)=>arr.indexOf(v)===i)
+                .map(c => <option key={c} value={c}/>) }
+            </datalist>
+          </Field>
+          <Field label="مدة الجلسة (دقيقة)">
+            <input className="input" type="number" min="0" value={duration} onChange={e=>setDuration(e.target.value)} placeholder="مثال: 30"/>
+          </Field>
+          <Field label="ترتيب العرض">
+            <input className="input" type="number" value={displayOrder} onChange={e=>setDisplayOrder(e.target.value)} placeholder="اترك فارغًا للترتيب الأبجدي"/>
+          </Field>
+          <Field label="الأيقونة" span={2}>
+            <div style={{display:"flex",flexWrap:"wrap",gap:6,alignItems:"center"}}>
+              <button type="button" onClick={()=>setIcon("")} className="btn btn-secondary" style={{fontSize:11.5,padding:"5px 9px",background:!icon?"var(--blue-50)":"#fff",borderColor:!icon?"var(--blue-500)":"var(--ink-200)"}}>
+                بدون
+              </button>
+              {TX_METHOD_ICONS.map(nm => {
+                const IconCmp = I[nm]; if (!IconCmp) return null;
+                const on = icon === nm;
+                return (
+                  <button key={nm} type="button" onClick={()=>setIcon(nm)} title={nm}
+                    className="btn btn-secondary"
+                    style={{padding:"5px 8px",background:on?"var(--blue-50)":"#fff",borderColor:on?"var(--blue-500)":"var(--ink-200)",color:on?"var(--blue-700)":"var(--ink-600)"}}>
+                    <IconCmp size={14}/>
+                  </button>
+                );
+              })}
+            </div>
+          </Field>
+          <Field label="اللون" span={2}>
+            <div style={{display:"flex",flexWrap:"wrap",gap:6,alignItems:"center"}}>
+              <button type="button" onClick={()=>setColor("")} className="btn btn-secondary" style={{fontSize:11.5,padding:"5px 9px",background:!color?"var(--blue-50)":"#fff",borderColor:!color?"var(--blue-500)":"var(--ink-200)"}}>
+                بدون
+              </button>
+              {TX_METHOD_COLORS.map(c => {
+                const on = color === c;
+                return (
+                  <button key={c} type="button" onClick={()=>setColor(c)} title={c}
+                    style={{width:26,height:26,borderRadius:8,padding:0,cursor:"pointer",
+                      background:`${c}33`,
+                      border: on ? `2px solid ${c}` : "1px solid var(--ink-200)"}}>
+                    <span style={{display:"block",width:12,height:12,borderRadius:4,background:c,margin:"auto"}}/>
+                  </button>
+                );
+              })}
+              <input type="color" value={color || "#3B82F6"} onChange={e=>setColor(e.target.value)}
+                style={{width:34,height:32,padding:0,border:"1px solid var(--ink-200)",borderRadius:8,background:"transparent",cursor:"pointer"}}/>
+            </div>
+          </Field>
+          <Field label="الوصف" span={2}>
+            <textarea className="input" style={{height:70,padding:10}} value={description} onChange={e=>setDescription(e.target.value)} placeholder="وصف موجز يظهر للفريق"/>
+          </Field>
+          <Field label="ملاحظات" span={2}>
+            <textarea className="input" style={{height:60,padding:10}} value={notes} onChange={e=>setNotes(e.target.value)} placeholder="ملاحظات إضافية (اختياري)"/>
+          </Field>
+        </div>
+
+        {error && (
+          <div style={{padding:"10px 12px",background:"var(--red-50, #fef2f2)",border:"1px solid var(--red-100, #fecaca)",borderRadius:10,color:"var(--red, #b91c1c)",fontSize:12.5}}>
+            {error}
+          </div>
+        )}
+      </div>
+    </Modal>
   );
 }
 
@@ -510,30 +905,186 @@ function SessionTimeline({ mini, p }) {
   );
 }
 
-Object.assign(window, { Treatments, Sessions, SessionTimeline });
+Object.assign(window, { Treatments, Sessions, SessionTimeline, TxMethodModal });
 
 
 // ===== src/payments.jsx =====
 // Payments + invoices + Packages
 
+// ── Date filter presets for the Payments page ───────────────
+// Each preset returns { from, to } as YYYY-MM-DD strings (inclusive).
+// "custom" and "range" are picker modes; their range is computed from
+// user input in the DateFilterBar rather than here.
+function __invPad(n){ return String(n).padStart(2,"0"); }
+function __invIso(d){ return `${d.getFullYear()}-${__invPad(d.getMonth()+1)}-${__invPad(d.getDate())}`; }
+function __invStartOfWeek(d){
+  // Week starts Saturday (Arabic clinic convention). getDay(): Sat=6.
+  const day = d.getDay();
+  const diff = (day + 1) % 7; // days since Saturday
+  const out = new Date(d); out.setDate(d.getDate() - diff); return out;
+}
+function invoiceDateRange(preset, custom, rangeStart, rangeEnd) {
+  const now = new Date(); now.setHours(0,0,0,0);
+  const y = now.getFullYear(), m = now.getMonth();
+  switch (preset) {
+    case "today":       return { from: __invIso(now), to: __invIso(now) };
+    case "yesterday": {
+      const y1 = new Date(now); y1.setDate(now.getDate()-1);
+      return { from: __invIso(y1), to: __invIso(y1) };
+    }
+    case "thisWeek": {
+      const s = __invStartOfWeek(now);
+      return { from: __invIso(s), to: __invIso(now) };
+    }
+    case "lastWeek": {
+      const s = __invStartOfWeek(now); s.setDate(s.getDate()-7);
+      const e = new Date(s); e.setDate(s.getDate()+6);
+      return { from: __invIso(s), to: __invIso(e) };
+    }
+    case "thisMonth": {
+      const s = new Date(y, m, 1), e = new Date(y, m+1, 0);
+      return { from: __invIso(s), to: __invIso(e) };
+    }
+    case "lastMonth": {
+      const s = new Date(y, m-1, 1), e = new Date(y, m, 0);
+      return { from: __invIso(s), to: __invIso(e) };
+    }
+    case "thisYear": {
+      const s = new Date(y, 0, 1), e = new Date(y, 11, 31);
+      return { from: __invIso(s), to: __invIso(e) };
+    }
+    case "lastYear": {
+      const s = new Date(y-1, 0, 1), e = new Date(y-1, 11, 31);
+      return { from: __invIso(s), to: __invIso(e) };
+    }
+    case "custom":
+      return custom ? { from: custom, to: custom } : { from: null, to: null };
+    case "range":
+      return { from: rangeStart || null, to: rangeEnd || null };
+    case "all":
+    default:
+      return { from: null, to: null };
+  }
+}
+
+function InvoiceDateFilterBar({ preset, setPreset, custom, setCustom, rangeStart, setRangeStart, rangeEnd, setRangeEnd }) {
+  const items = [
+    { k:"today",     l:"اليوم" },
+    { k:"yesterday", l:"أمس" },
+    { k:"thisWeek",  l:"هذا الأسبوع" },
+    { k:"lastWeek",  l:"الأسبوع الماضي" },
+    { k:"thisMonth", l:"هذا الشهر" },
+    { k:"lastMonth", l:"الشهر الماضي" },
+    { k:"thisYear",  l:"هذه السنة" },
+    { k:"lastYear",  l:"السنة الماضية" },
+    { k:"custom",    l:"تاريخ مخصص" },
+    { k:"range",     l:"نطاق تاريخ" },
+    { k:"all",       l:"الكل" },
+  ];
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:8,flex:"1 1 100%"}}>
+      <div className="seg" style={{flexWrap:"wrap",gap:4}}>
+        {items.map(it => (
+          <button key={it.k}
+            className={preset===it.k?"on":""}
+            onClick={()=>setPreset(it.k)}
+            style={{padding:"6px 10px",fontSize:12}}>{it.l}</button>
+        ))}
+      </div>
+      {preset==="custom" && (
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <I.Calendar size={13} style={{color:"var(--ink-400)"}}/>
+          <span className="muted" style={{fontSize:12}}>اليوم</span>
+          <input className="input" type="date" value={custom||""}
+            onChange={e=>setCustom(e.target.value)}
+            style={{width:180}}/>
+        </div>
+      )}
+      {preset==="range" && (
+        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+          <I.Calendar size={13} style={{color:"var(--ink-400)"}}/>
+          <span className="muted" style={{fontSize:12}}>من</span>
+          <input className="input" type="date" value={rangeStart||""}
+            onChange={e=>setRangeStart(e.target.value)}
+            style={{width:170}}/>
+          <span className="muted" style={{fontSize:12}}>إلى</span>
+          <input className="input" type="date" value={rangeEnd||""}
+            onChange={e=>setRangeEnd(e.target.value)}
+            style={{width:170}}/>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Payments({ go }) {
+  window.useDataVersion && window.useDataVersion();
   const [tab, setTab] = React.useState("payments");
   const [statusFilter, setStatusFilter] = React.useState("الكل");
   const [methodFilter, setMethodFilter] = React.useState("الكل");
   const [selected, setSelected] = React.useState(null);
-  // Payments were unscoped: a therapist saw everyone's invoices. Scope to
-  // the current user's visible patient set first, then apply UI filters.
-  const scoped = window.scopePayments ? window.scopePayments(DATA.payments) : DATA.payments;
-  const filtered = scoped.filter(p => statusFilter==="الكل" || p.status===statusFilter)
-                          .filter(p => methodFilter==="الكل" || p.method===methodFilter);
+  const [search, setSearch] = React.useState("");
+  const [preset, setPreset] = React.useState("thisMonth");
+  const [customDate, setCustomDate] = React.useState("");
+  const [rangeStart, setRangeStart] = React.useState("");
+  const [rangeEnd, setRangeEnd] = React.useState("");
+  const [page, setPage] = React.useState(0);
+  const PAGE_SIZE = 20;
 
-  const thisMonth = new Date().toISOString().slice(0,7);
-  const totals = {
-    paid: scoped.filter(p=>p.status==="مدفوع").reduce((s,p)=>s+p.paid,0),
-    outstanding: scoped.reduce((s,p)=>s+Math.max(0,(p.amount||0)-(p.paid||0)),0),
-    overdue: scoped.filter(p=>p.status==="متأخر").reduce((s,p)=>s+Math.max(0,(p.amount||0)-(p.paid||0)),0),
-    monthly: scoped.filter(p=>String(p.date||p.created_at||"").slice(0,7)===thisMonth).reduce((s,p)=>s+(p.paid||0),0),
-    avg: scoped.length ? scoped.reduce((s,p)=>s+(p.amount||0),0) / scoped.length : 0,
+  // Debounce the search so we don't hammer the RPC on every keystroke.
+  const [debouncedSearch, setDebouncedSearch] = React.useState("");
+  React.useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 250);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  React.useEffect(() => { setPage(0); }, [preset, customDate, rangeStart, rangeEnd, statusFilter, debouncedSearch]);
+
+  const { from, to } = React.useMemo(
+    () => invoiceDateRange(preset, customDate, rangeStart, rangeEnd),
+    [preset, customDate, rangeStart, rangeEnd]
+  );
+
+  const [payload, setPayload] = React.useState({
+    rows: [], stats: { total_invoices:0, paid_amount:0, outstanding:0, overdue_amount:0, avg_amount:0, revenue:0, count:0, due_total:0 },
+    count: 0, limit: PAGE_SIZE, offset: 0,
+  });
+  const [loading, setLoading] = React.useState(false);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    async function run() {
+      if (!window.InvoicesAPI) return;
+      setLoading(true);
+      try {
+        const res = await window.InvoicesAPI.listFiltered({
+          from, to,
+          search: debouncedSearch,
+          status: statusFilter === "الكل" ? null : statusFilter,
+          limit: PAGE_SIZE,
+          offset: page * PAGE_SIZE,
+        });
+        if (!cancelled) setPayload(res);
+      } catch (e) {
+        console.warn("listInvoicesFiltered failed", e);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    run();
+    return () => { cancelled = true; };
+  }, [from, to, debouncedSearch, statusFilter, page]);
+
+  // Client-side layer for method (kept off the server — small, local filter).
+  const filtered = payload.rows.filter(p => methodFilter==="الكل" || p.method===methodFilter);
+  const stats = payload.stats;
+  const totalPages = Math.max(1, Math.ceil((payload.count||0) / PAGE_SIZE));
+
+  const exportCsv = () => {
+    const rows=["الفاتورة,المريض,التاريخ,المبلغ,مدفوع,الطريقة,الحالة",
+      ...filtered.map(p=>`${p.id||p.invoice_id},${p.patient||""},${p.date||""},${p.amount||0},${p.paid||0},${p.method||""},${p.status||""}`)];
+    downloadCsv(rows, "payments.csv");
+    if(window.showToast)window.showToast("تم تصدير الفواتير","success");
   };
 
   return (
@@ -545,25 +1096,27 @@ function Payments({ go }) {
           <div className="muted" style={{fontSize:13.5,marginTop:4}}>نقدي، بطاقة، إنستاباي، فودافون كاش، تحويل بنكي</div>
         </div>
         <div className="page-actions">
-          <button className="btn btn-secondary" onClick={()=>{
-            const rows=["الفاتورة,المريض,التاريخ,المبلغ,مدفوع,الطريقة,الحالة",...scoped.map(p=>`${p.id},${p.patient},${p.date},${p.amount},${p.paid},${p.method},${p.status}`)];
-            downloadCsv(rows, "payments.csv");
-            if(window.showToast)window.showToast("تم تصدير الفواتير","success");
-          }}><I.Download size={14}/> تصدير</button>
+          <button className="btn btn-secondary" onClick={exportCsv}><I.Download size={14}/> تصدير</button>
           <button className="btn btn-blue" onClick={()=>setSelected({mode:"new"})}><I.Plus size={14}/> فاتورة جديدة</button>
         </div>
       </div>
 
       <div className="grid-4" style={{marginBottom:18}}>
-        <StatCard label="محصّل هذا الشهر" value={`EGP ${(totals.monthly/1000).toFixed(1)}K`} accent="#3FA984" icon={<I.Dollar size={15}/>}/>
-        <StatCard label="معلّق"          value={`EGP ${(totals.outstanding/1000).toFixed(1)}K`} accent="#D49044" icon={<I.Clock size={15}/>}/>
-        <StatCard label="متأخر (>14ي)"        value={`EGP ${(totals.overdue/1000).toFixed(1)}K`} accent="#D8665A" icon={<I.X size={15}/>}/>
-        <StatCard label="متوسط الفاتورة"           value={`EGP ${(totals.avg/1000).toFixed(1)}K`} accent="#7BBDE8" icon={<I.FileText size={15}/>}/>
+        <StatCard label="إجمالي الإيرادات" value={`EGP ${(Number(stats.revenue||0)/1000).toFixed(1)}K`} accent="#3FA984" icon={<I.Dollar size={15}/>}/>
+        <StatCard label="المعلّق"          value={`EGP ${(Number(stats.outstanding||0)/1000).toFixed(1)}K`} accent="#D49044" icon={<I.Clock size={15}/>}/>
+        <StatCard label="المتأخر"          value={`EGP ${(Number(stats.overdue_amount||0)/1000).toFixed(1)}K`} accent="#D8665A" icon={<I.X size={15}/>}/>
+        <StatCard label="متوسط الفاتورة"   value={`EGP ${(Number(stats.avg_amount||0)/1000).toFixed(1)}K`} accent="#7BBDE8" icon={<I.FileText size={15}/>}/>
+      </div>
+      <div className="grid-4" style={{marginBottom:18}}>
+        <StatCard label="إجمالي الفواتير"    value={`EGP ${(Number(stats.total_invoices||0)/1000).toFixed(1)}K`} accent="#7E6BD3" icon={<I.FileText size={15}/>}/>
+        <StatCard label="المدفوع"            value={`EGP ${(Number(stats.paid_amount||0)/1000).toFixed(1)}K`} accent="#3FA984" icon={<I.Check size={15}/>}/>
+        <StatCard label="عدد الفواتير"       value={`${Number(stats.count||0)}`} accent="#3A7FB5" icon={<I.Layers size={15}/>}/>
+        <StatCard label="إجمالي المستحقات"   value={`EGP ${(Number(stats.due_total||0)/1000).toFixed(1)}K`} accent="#D49044" icon={<I.Clock size={15}/>}/>
       </div>
 
       <div className="seg" style={{marginBottom:14}}>
         <button className={tab==="payments"?"on":""} onClick={()=>setTab("payments")}>الفواتير</button>
-        <button className={tab==="methods"?"on":""}  onClick={()=>setTab("methods")}>الدفع methods</button>
+        <button className={tab==="methods"?"on":""}  onClick={()=>setTab("methods")}>طرق الدفع</button>
         <button className={tab==="receipts"?"on":""} onClick={()=>setTab("receipts")}>الإيصالات</button>
       </div>
 
@@ -572,7 +1125,8 @@ function Payments({ go }) {
           <div className="card" style={{padding:14,marginBottom:14,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
             <div style={{position:"relative",flex:"1 1 280px",maxWidth:340}}>
               <I.Search size={14} style={{position:"absolute",left:11,top:"50%",transform:"translateY(-50%)",color:"var(--ink-400)"}}/>
-              <input className="input" placeholder="ابحث في الفواتير…" style={{paddingLeft:32}}/>
+              <input className="input" placeholder="ابحث في الفواتير…" style={{paddingLeft:32}}
+                value={search} onChange={e=>setSearch(e.target.value)}/>
             </div>
             <div className="seg">
               {["الكل","مدفوع","جزئي","معلّق","متأخر"].map(s=>(
@@ -582,6 +1136,11 @@ function Payments({ go }) {
             <select className="input" style={{width:160}} value={methodFilter} onChange={e=>setMethodFilter(e.target.value)}>
               <option>الكل</option><option>نقدي</option><option>فيزا</option><option>إنستاباي</option><option>فودافون كاش</option><option>تحويل بنكي</option>
             </select>
+            <InvoiceDateFilterBar
+              preset={preset} setPreset={setPreset}
+              custom={customDate} setCustom={setCustomDate}
+              rangeStart={rangeStart} setRangeStart={setRangeStart}
+              rangeEnd={rangeEnd} setRangeEnd={setRangeEnd}/>
           </div>
 
           <div className="card" style={{overflow:"hidden"}}>
@@ -592,7 +1151,7 @@ function Payments({ go }) {
               </tr></thead>
               <tbody>
                 {filtered.length===0 && (
-                  <tr><td colSpan={8}><EmptyState icon={<I.FileText size={22}/>} title="لا فواتير بعد" body="أنشئ أول فاتورة من زر «فاتورة جديدة»."/></td></tr>
+                  <tr><td colSpan={8}><EmptyState icon={<I.FileText size={22}/>} title="لا فواتير للفترة المحددة" body={loading ? "جارٍ التحميل…" : "لا توجد فواتير مطابقة لعوامل التصفية الحالية."}/></td></tr>
                 )}
                 {filtered.map(p=>{
                   const remaining = p.amount - p.paid;
@@ -656,6 +1215,18 @@ function Payments({ go }) {
               </tbody>
             </table>
             </div>
+            {payload.count > PAGE_SIZE && (
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 14px",borderTop:"1px solid var(--ink-100)",gap:8}}>
+                <div className="muted" style={{fontSize:12}}>
+                  {(page*PAGE_SIZE)+1}–{Math.min((page+1)*PAGE_SIZE, payload.count)} من {payload.count}
+                </div>
+                <div style={{display:"flex",gap:6}}>
+                  <button className="btn btn-secondary" disabled={page===0} onClick={()=>setPage(p=>Math.max(0,p-1))} style={{padding:"5px 10px",fontSize:12}}>السابق</button>
+                  <div className="muted mono" style={{fontSize:12,padding:"5px 10px"}}>{page+1} / {totalPages}</div>
+                  <button className="btn btn-secondary" disabled={page>=totalPages-1} onClick={()=>setPage(p=>Math.min(totalPages-1,p+1))} style={{padding:"5px 10px",fontSize:12}}>التالي</button>
+                </div>
+              </div>
+            )}
           </div>
         </>
       )}
@@ -979,6 +1550,610 @@ function Packages({ go }) {
     </Page>
   );
 }
+
+// ══════════════════════════════════════════════════════════════
+// Quick Payment (دفع سريع) — single-modal cash flow
+// ══════════════════════════════════════════════════════════════
+// Search → financial overview → selection with per-item amount →
+// method → confirmation → transactional write → printable receipt.
+// Everything reads from Supabase (fallback: local mirror in demo/offline
+// mode). No fixture values are ever displayed as real.
+
+const QP_METHODS = [
+  { id: "cash",           label: "نقدي",         icon: "Dollar" },
+  { id: "visa",           label: "فيزا",         icon: "CreditCard" },
+  { id: "instapay",       label: "إنستاباي",     icon: "Phone" },
+  { id: "vodafone_cash",  label: "فودافون كاش",  icon: "Phone" },
+  { id: "bank_transfer",  label: "تحويل بنكي",   icon: "Layers" },
+];
+
+// PRD Section 6 — reference numbers appear on card/wallet/transfer payments.
+const QP_REF_METHODS = new Set(["visa", "instapay", "vodafone_cash", "bank_transfer"]);
+
+function qpMethodLabel(id) {
+  const m = QP_METHODS.find(x => x.id === id);
+  return m ? m.label : id;
+}
+
+// Selection key so appointments/invoices/subscriptions with the same
+// underlying id never collide in the picks map.
+function qpSelKey(type, id) { return `${type}:${id}`; }
+
+function QuickPaymentModal({ onClose, onDone }) {
+  // ── Search state ──────────────────────────────────────────
+  const [query, setQuery] = React.useState("");
+  const [results, setResults] = React.useState([]);
+  const [searching, setSearching] = React.useState(false);
+
+  // ── Selected patient + their financials ───────────────────
+  const [patient, setPatient] = React.useState(null);
+  const [loading, setLoading] = React.useState(false);
+  const [fin, setFin] = React.useState({ appointments: [], invoices: [], subscriptions: [] });
+
+  // ── Per-item allocations ──────────────────────────────────
+  // picks[key] = { type, id, amount, max, label }
+  const [picks, setPicks] = React.useState({});
+
+  // ── Payment details ───────────────────────────────────────
+  const [method, setMethod] = React.useState("");
+  const [reference, setReference] = React.useState("");
+  const [txId, setTxId] = React.useState("");
+  const [notes, setNotes] = React.useState("");
+
+  // ── Flow control ──────────────────────────────────────────
+  const [confirming, setConfirming] = React.useState(false);
+  const [saving, setSaving] = React.useState(false);
+  const [receipt, setReceipt] = React.useState(null); // set on success
+  const [error, setError] = React.useState("");
+
+  // Debounced search — keystroke-driven, but only hits the store after
+  // a short pause so a fast typist doesn't flicker the results list.
+  React.useEffect(() => {
+    if (patient) return; // search hidden once a patient is chosen
+    if (!query.trim()) { setResults([]); return; }
+    let cancelled = false;
+    setSearching(true);
+    const t = setTimeout(async () => {
+      try {
+        const r = await (window.QuickPay && window.QuickPay.searchPatients(query));
+        if (!cancelled) setResults(r || []);
+      } finally { if (!cancelled) setSearching(false); }
+    }, 180);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [query, patient]);
+
+  async function pickPatient(p) {
+    setPatient(p);
+    setResults([]);
+    setLoading(true);
+    setError("");
+    try {
+      const f = await window.QuickPay.loadFinancials(p.patient_id || p.id);
+      setFin(f);
+    } catch (e) {
+      console.warn("load financials failed", e);
+      setError("تعذّر تحميل البيانات المالية");
+    } finally { setLoading(false); }
+  }
+
+  function clearPatient() {
+    setPatient(null);
+    setFin({ appointments: [], invoices: [], subscriptions: [] });
+    setPicks({});
+    setError("");
+  }
+
+  function toggle(type, row, defaultAmount, label) {
+    const key = qpSelKey(type, row);
+    setPicks(prev => {
+      const next = { ...prev };
+      if (next[key]) {
+        delete next[key];
+      } else {
+        const max = Number(defaultAmount) || 0;
+        next[key] = { type, id: row, amount: max, max, label };
+      }
+      return next;
+    });
+  }
+
+  function setAmount(key, raw) {
+    setPicks(prev => {
+      const cur = prev[key]; if (!cur) return prev;
+      // Allow the user to clear the field temporarily.
+      const num = raw === "" ? "" : Math.max(0, Number(raw) || 0);
+      return { ...prev, [key]: { ...cur, amount: num } };
+    });
+  }
+
+  // ── Derived: totals + validation ──────────────────────────
+  const selected = Object.values(picks);
+  const total = selected.reduce((s, a) => s + (Number(a.amount) || 0), 0);
+  const hasOverpay = selected.some(a => (Number(a.amount) || 0) > a.max + 0.001);
+  const hasZero    = selected.some(a => !(Number(a.amount) > 0));
+  const readyToConfirm = patient && selected.length > 0 && method && !hasOverpay && !hasZero;
+
+  const anyFinancialItems =
+    fin.appointments.length + fin.invoices.length + fin.subscriptions.length > 0;
+
+  // ── Submit ────────────────────────────────────────────────
+  async function confirmPayment() {
+    if (!readyToConfirm) return;
+    if (QP_REF_METHODS.has(method) && !reference.trim() && !txId.trim()) {
+      // Reference isn't strictly required by the schema, but the receptionist
+      // is asking for card/wallet — flag missing reference as a soft prompt.
+      if (!window.confirm("لم يُدخل رقم مرجعي — هل تريد المتابعة؟")) return;
+    }
+    setSaving(true);
+    setError("");
+    try {
+      const allocations = selected.map(a => ({
+        type: a.type, id: a.id, amount: Number(a.amount),
+      }));
+      const res = await window.QuickPay.recordPayment({
+        patient_id: patient.patient_id || patient.id,
+        method,
+        reference: reference.trim(),
+        transaction_id: txId.trim(),
+        notes: notes.trim(),
+        allocations,
+      });
+      if (!res.ok) { setError(res.error || "تعذّر تسجيل الدفع"); setSaving(false); return; }
+      // Snapshot everything needed for the receipt BEFORE state resets.
+      setReceipt({
+        payment_id: res.payment_id,
+        receipt_no: res.receipt_no,
+        amount: res.amount,
+        method,
+        reference: reference.trim(),
+        transaction_id: txId.trim(),
+        notes: notes.trim(),
+        allocations: selected.map(a => ({ ...a })),
+        patient: {
+          id: patient.patient_id || patient.id,
+          name: patient.name,
+          phone: patient.phone,
+        },
+        cashier: (window.ME && window.ME.name) || "—",
+        date: new Date().toISOString(),
+      });
+      if (window.showToast) window.showToast(`تم تسجيل الدفع (${res.receipt_no})`, "success");
+    } catch (e) {
+      console.warn("quick payment failed", e);
+      setError(e.message || "تعذّر تسجيل الدفع");
+    } finally { setSaving(false); }
+  }
+
+  // ── Receipt view: paint over the whole modal on success ───
+  if (receipt) {
+    return (
+      <QuickPaymentReceipt
+        r={receipt}
+        onClose={() => { onClose && onClose(); if (onDone) onDone(); }}
+      />
+    );
+  }
+
+  // ── Confirmation overlay ──────────────────────────────────
+  if (confirming) {
+    return (
+      <Modal open onClose={() => setConfirming(false)} title="تأكيد الدفع" width={520}
+        footer={<>
+          <button className="btn btn-ghost" onClick={() => setConfirming(false)} disabled={saving}>رجوع</button>
+          <button className="btn btn-blue" disabled={saving || !readyToConfirm} onClick={confirmPayment}>
+            {saving ? <span className="spin" style={{width:14,height:14,border:"2px solid #fff",borderTopColor:"transparent",borderRadius:"50%"}}/>
+                    : <><I.Check size={13}/> تأكيد الدفع</>}
+          </button>
+        </>}>
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          <QpSummaryRow label="المريض" value={patient.name} sub={patient.patient_id || patient.id}/>
+          <div className="card" style={{padding:12,background:"var(--ink-50)"}}>
+            <div className="muted" style={{fontSize:11,marginBottom:6,letterSpacing:".05em",textTransform:"uppercase"}}>العناصر المحددة</div>
+            {selected.map(a => (
+              <div key={qpSelKey(a.type, a.id)} style={{display:"flex",justifyContent:"space-between",fontSize:12.5,padding:"4px 0"}}>
+                <span>{a.label}</span>
+                <span className="mono">EGP {Number(a.amount).toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+          <QpSummaryRow label="طريقة الدفع" value={qpMethodLabel(method)}/>
+          {(reference || txId) && (
+            <QpSummaryRow label="رقم مرجعي" value={reference || txId}/>
+          )}
+          <div style={{display:"flex",justifyContent:"space-between",padding:"10px 12px",background:"var(--blue-50)",border:"1px solid var(--blue-100)",borderRadius:10}}>
+            <span style={{fontWeight:600}}>الإجمالي</span>
+            <span className="mono" style={{fontWeight:700,fontSize:16,color:"var(--blue-900)"}}>EGP {total.toLocaleString()}</span>
+          </div>
+          {error && <div style={{fontSize:12,color:"var(--red)"}}>{error}</div>}
+        </div>
+      </Modal>
+    );
+  }
+
+  // ── Main modal ────────────────────────────────────────────
+  return (
+    <Modal open onClose={onClose} title="دفع سريع" width={760}
+      footer={<>
+        <button className="btn btn-ghost" onClick={onClose}>إلغاء</button>
+        {patient && (
+          <button className="btn btn-secondary" onClick={clearPatient}>مريض آخر</button>
+        )}
+        <button className="btn btn-blue" disabled={!readyToConfirm} onClick={() => setConfirming(true)}>
+          <I.ArrowLeft size={13}/> مراجعة الدفع (EGP {total.toLocaleString()})
+        </button>
+      </>}>
+      {!patient && (
+        <QpPatientSearch
+          query={query} setQuery={setQuery}
+          results={results} searching={searching}
+          onPick={pickPatient}
+        />
+      )}
+      {patient && (
+        <div style={{display:"flex",flexDirection:"column",gap:16}}>
+          <QpPatientChip patient={patient} onClear={clearPatient}/>
+          {loading && (
+            <div className="muted" style={{padding:"24px 0",textAlign:"center",fontSize:13}}>
+              <span className="spin" style={{display:"inline-block",width:16,height:16,border:"2px solid var(--ink-200)",borderTopColor:"var(--blue-500)",borderRadius:"50%",marginInlineEnd:8,verticalAlign:"middle"}}/>
+              جارٍ تحميل الرصيد المالي…
+            </div>
+          )}
+          {!loading && !anyFinancialItems && (
+            <EmptyState icon={<I.Check size={22}/>} title="لا مستحقات على المريض"
+              body="لا مواعيد أو فواتير أو اشتراكات بها رصيد متبقٍ."/>
+          )}
+          {!loading && anyFinancialItems && (
+            <>
+              <QpItemsSection
+                title="مواعيد غير مدفوعة" icon={<I.Calendar size={14}/>}
+                items={fin.appointments.map(a => ({
+                  key: a.booking_id || a.id,
+                  primary: `${a.type || "جلسة"} — ${a.date || "—"} ${a.time || ""}`.trim(),
+                  secondary: `${a.dr || a.doctor_name || ""} ${a.th ? "· " + a.th : ""}`.trim() || "موعد",
+                  remaining: a.remaining, badge: "b-amber",
+                }))}
+                type="appointment" picks={picks} toggle={toggle} setAmount={setAmount}
+              />
+              <QpItemsSection
+                title="فواتير غير مدفوعة" icon={<I.FileText size={14}/>}
+                items={fin.invoices.map(v => ({
+                  key: v.invoice_id || v.id,
+                  primary: `فاتورة ${v.invoice_id || v.id}`,
+                  secondary: `إجمالي EGP ${Number(v.amount||0).toLocaleString()} · مدفوع EGP ${Number(v.paid||0).toLocaleString()}`,
+                  remaining: v.remaining, badge: "b-blue",
+                }))}
+                type="invoice" picks={picks} toggle={toggle} setAmount={setAmount}
+              />
+              <QpItemsSection
+                title="اشتراكات وباقات" icon={<I.Package size={14}/>}
+                items={fin.subscriptions.map(s => {
+                  const remainingSessions = Math.max(0, (s.total_sessions||0) - (s.used_sessions||0));
+                  return {
+                    key: s.subscription_id || s.id,
+                    primary: s.package_name || "باقة",
+                    secondary: `${s.used_sessions||0}/${s.total_sessions||0} جلسات · متبقٍ ${remainingSessions}` +
+                               (s.expires_at ? ` · تنتهي ${s.expires_at}` : ""),
+                    remaining: s.remaining, badge: "b-violet",
+                    disabled: s.remaining <= 0,
+                  };
+                })}
+                type="subscription" picks={picks} toggle={toggle} setAmount={setAmount}
+              />
+
+              <QpPaymentDetails
+                method={method} setMethod={setMethod}
+                reference={reference} setReference={setReference}
+                txId={txId} setTxId={setTxId}
+                notes={notes} setNotes={setNotes}
+              />
+
+              <div style={{
+                display:"flex",alignItems:"center",justifyContent:"space-between",
+                padding:"12px 14px",background:"var(--blue-50)",
+                border:"1px solid var(--blue-100)",borderRadius:12
+              }}>
+                <div>
+                  <div className="muted" style={{fontSize:11.5,letterSpacing:".05em",textTransform:"uppercase"}}>الإجمالي المستحق</div>
+                  <div className="mono" style={{fontSize:22,fontWeight:700,color:"var(--blue-900)"}}>EGP {total.toLocaleString()}</div>
+                </div>
+                <div style={{textAlign:"right",fontSize:12,color:"var(--ink-500)"}}>
+                  {selected.length} عنصر محدد
+                  {hasOverpay && <div style={{color:"var(--red)",marginTop:4}}>مبلغ يتجاوز المتبقي</div>}
+                  {!hasOverpay && hasZero && <div style={{color:"var(--red)",marginTop:4}}>أدخل مبلغًا أكبر من صفر</div>}
+                </div>
+              </div>
+
+              {error && <div style={{fontSize:12,color:"var(--red)"}}>{error}</div>}
+            </>
+          )}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// ── Patient search UI ────────────────────────────────────────
+function QpPatientSearch({ query, setQuery, results, searching, onPick }) {
+  return (
+    <div>
+      <div className="muted" style={{fontSize:12.5,marginBottom:10,padding:"10px 12px",background:"var(--blue-50)",border:"1px solid var(--blue-100)",borderRadius:8}}>
+        ابحث عن المريض بالاسم، رقم الهاتف، أو رقم الملف — ثم اختره لعرض المستحقات.
+      </div>
+      <div style={{position:"relative",marginBottom:12}}>
+        <I.Search size={15} style={{position:"absolute",insetInlineStart:12,top:"50%",transform:"translateY(-50%)",color:"var(--ink-400)"}}/>
+        <input className="input"
+          style={{paddingInlineStart:34, height:44, fontSize:14}}
+          placeholder="مثال: هناء، +20100…، P-10241"
+          value={query} onChange={e => setQuery(e.target.value)} autoFocus/>
+        {searching && (
+          <span className="spin" style={{position:"absolute",insetInlineEnd:12,top:"50%",transform:"translateY(-50%)",width:14,height:14,border:"2px solid var(--ink-200)",borderTopColor:"var(--blue-500)",borderRadius:"50%"}}/>
+        )}
+      </div>
+      {query.trim() && !searching && results.length === 0 && (
+        <div className="muted" style={{textAlign:"center",padding:"32px 12px",fontSize:13}}>
+          لا نتائج مطابقة.
+        </div>
+      )}
+      {results.length > 0 && (
+        <div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:340,overflowY:"auto"}}>
+          {results.map(p => (
+            <button key={p.patient_id || p.id} type="button" onClick={() => onPick(p)}
+              style={{
+                display:"flex",alignItems:"center",gap:12,textAlign:"start",
+                padding:"10px 12px",border:"1px solid var(--ink-200)",borderRadius:12,
+                background:"#fff",cursor:"pointer",font:"inherit",
+              }}>
+              <div className="av md">{(p.name||"?").split(" ").map(x=>x[0]).join("").slice(0,2)}</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13.5,fontWeight:600}}>{p.name}</div>
+                <div className="muted" style={{fontSize:11.5}}>
+                  {p.phone || "—"} · <span className="mono">{p.patient_id || p.id}</span>
+                </div>
+              </div>
+              <I.ArrowLeft size={14} style={{color:"var(--ink-400)"}}/>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Selected patient chip ────────────────────────────────────
+function QpPatientChip({ patient, onClear }) {
+  return (
+    <div style={{
+      display:"flex",alignItems:"center",gap:12,padding:"10px 12px",
+      background:"var(--ink-50)",border:"1px solid var(--ink-200)",borderRadius:12
+    }}>
+      <div className="av md">{(patient.name||"?").split(" ").map(x=>x[0]).join("").slice(0,2)}</div>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:13.5,fontWeight:600}}>{patient.name}</div>
+        <div className="muted" style={{fontSize:11.5}}>
+          {patient.phone || "—"} · <span className="mono">{patient.patient_id || patient.id}</span>
+        </div>
+      </div>
+      <button className="btn btn-ghost" style={{fontSize:12}} onClick={onClear}>تغيير</button>
+    </div>
+  );
+}
+
+// ── One financial category (appts / invoices / subs) ─────────
+function QpItemsSection({ title, icon, items, type, picks, toggle, setAmount }) {
+  if (!items || items.length === 0) return null;
+  return (
+    <div className="card" style={{padding:12}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+        {icon}
+        <div className="h3">{title}</div>
+        <span className="badge b-grey" style={{marginInlineStart:"auto"}}>{items.length}</span>
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+        {items.map(it => {
+          const key = qpSelKey(type, it.key);
+          const on = !!picks[key];
+          return (
+            <div key={key} style={{
+              display:"flex",alignItems:"center",gap:10,padding:"10px 12px",
+              border:"1px solid " + (on ? "var(--blue-500)" : "var(--ink-200)"),
+              borderRadius:10, background: on ? "var(--blue-50)" : "#fff",
+              opacity: it.disabled ? 0.55 : 1,
+            }}>
+              <input type="checkbox" checked={on} disabled={it.disabled}
+                onChange={() => toggle(type, it.key, it.remaining, it.primary)}
+                style={{width:16,height:16,cursor: it.disabled ? "not-allowed":"pointer"}}/>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:500}}>{it.primary}</div>
+                <div className="muted" style={{fontSize:11.5}}>{it.secondary}</div>
+              </div>
+              {on ? (
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  <span className="muted" style={{fontSize:11}}>مبلغ الدفع</span>
+                  <input className="input mono"
+                    style={{width:120,textAlign:"end"}}
+                    type="number" min="0" step="1" max={it.remaining}
+                    value={picks[key].amount === "" ? "" : picks[key].amount}
+                    onChange={e => setAmount(key, e.target.value)}/>
+                  <span className={"badge " + (it.badge || "b-grey")}>
+                    من {Number(it.remaining||0).toLocaleString()}
+                  </span>
+                </div>
+              ) : (
+                <div className="mono" style={{fontSize:13,fontWeight:600,minWidth:110,textAlign:"end"}}>
+                  EGP {Number(it.remaining||0).toLocaleString()}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Method + reference/notes ─────────────────────────────────
+function QpPaymentDetails({ method, setMethod, reference, setReference, txId, setTxId, notes, setNotes }) {
+  return (
+    <div className="card" style={{padding:12}}>
+      <div className="h3" style={{marginBottom:10}}>طريقة الدفع</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,marginBottom:12}}>
+        {QP_METHODS.map(m => {
+          const Ic = (window.I && window.I[m.icon]) || window.I.Dollar;
+          const on = method === m.id;
+          return (
+            <button key={m.id} type="button" onClick={() => setMethod(m.id)}
+              style={{
+                display:"flex",alignItems:"center",gap:8,padding:"10px 12px",
+                border:"1px solid " + (on ? "var(--blue-500)" : "var(--ink-200)"),
+                background: on ? "var(--blue-50)" : "#fff",
+                borderRadius:10, cursor:"pointer", font:"inherit",
+                textAlign:"start", color: on ? "var(--blue-900)" : "var(--ink-900)",
+              }}>
+              <Ic size={14}/> <span style={{fontSize:13, fontWeight:500}}>{m.label}</span>
+            </button>
+          );
+        })}
+      </div>
+      {QP_REF_METHODS.has(method) && (
+        <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:10,marginBottom:8}}>
+          <Field label="رقم مرجعي (اختياري)">
+            <input className="input" value={reference} onChange={e => setReference(e.target.value)}
+              placeholder="آخر 4 أرقام / رقم العملية"/>
+          </Field>
+          <Field label="رقم المعاملة (اختياري)">
+            <input className="input" value={txId} onChange={e => setTxId(e.target.value)}
+              placeholder="Transaction ID"/>
+          </Field>
+        </div>
+      )}
+      <Field label="ملاحظات (اختياري)">
+        <textarea className="input" rows={2}
+          style={{padding:10, resize:"vertical"}}
+          value={notes} onChange={e => setNotes(e.target.value)}
+          placeholder="أي تفاصيل تخص عملية الدفع…"/>
+      </Field>
+    </div>
+  );
+}
+
+function QpSummaryRow({ label, value, sub }) {
+  return (
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",fontSize:13}}>
+      <div className="muted" style={{fontSize:12}}>{label}</div>
+      <div style={{textAlign:"end",maxWidth:"60%"}}>
+        <div style={{fontWeight:600}}>{value}</div>
+        {sub && <div className="mono muted" style={{fontSize:11}}>{sub}</div>}
+      </div>
+    </div>
+  );
+}
+
+// ── Receipt (post-success) ───────────────────────────────────
+function QuickPaymentReceipt({ r, onClose }) {
+  const clinic = window.CLINIC || {};
+  const clinicName = clinic.name || "العيادة";
+  const dateStr = new Date(r.date).toLocaleString("ar-EG");
+
+  function printReceipt() {
+    const esc = window.escHtml || (x => String(x||""));
+    const rows = r.allocations.map(a => `
+      <tr>
+        <td>${esc(a.label || a.type + " " + a.id)}</td>
+        <td style="text-align:end" class="mono">EGP ${Number(a.amount||0).toLocaleString()}</td>
+      </tr>`).join("");
+    const body = `
+      <div style="border:1px solid #EEF2F6;border-radius:10px;padding:18px 20px;margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+          <div>
+            <div style="font-size:18px;font-weight:600">${esc(clinicName)}</div>
+            <div style="color:#647686;font-size:11.5px;margin-top:4px">${esc(clinic.address || "")}</div>
+          </div>
+          <div style="text-align:end">
+            <div style="font-size:22px" class="serif">إيصال دفع</div>
+            <div class="mono" style="margin-top:4px;font-size:12.5px">${esc(r.receipt_no || "")}</div>
+            <div style="color:#647686;font-size:11.5px;margin-top:4px">${esc(dateStr)}</div>
+          </div>
+        </div>
+      </div>
+      <table>
+        <tbody>
+          <tr><th>المريض</th><td>${esc(r.patient.name)} <span class="mono" style="color:#647686">${esc(r.patient.id)}</span></td></tr>
+          <tr><th>الهاتف</th><td>${esc(r.patient.phone || "—")}</td></tr>
+          <tr><th>طريقة الدفع</th><td>${esc(qpMethodLabel(r.method))}</td></tr>
+          ${r.reference ? `<tr><th>رقم مرجعي</th><td class="mono">${esc(r.reference)}</td></tr>`:""}
+          ${r.transaction_id ? `<tr><th>رقم المعاملة</th><td class="mono">${esc(r.transaction_id)}</td></tr>`:""}
+          <tr><th>الكاشير</th><td>${esc(r.cashier)}</td></tr>
+        </tbody>
+      </table>
+      <div style="height:14px"></div>
+      <table>
+        <thead><tr><th>البند</th><th style="text-align:end">المبلغ</th></tr></thead>
+        <tbody>${rows}
+          <tr><th style="border-top:2px solid #0F1E2B">الإجمالي المدفوع</th>
+              <td style="border-top:2px solid #0F1E2B;text-align:end;font-weight:600" class="mono">EGP ${Number(r.amount||0).toLocaleString()}</td></tr>
+        </tbody>
+      </table>
+      ${r.notes ? `<div style="margin-top:16px;font-size:12.5px;color:#647686"><strong>ملاحظات:</strong> ${esc(r.notes)}</div>` : ""}
+    `;
+    (window.printHTML || (()=>{}))(`إيصال ${r.receipt_no}`, body);
+  }
+
+  function downloadCsv() {
+    const rows = [
+      "البند,المبلغ",
+      ...r.allocations.map(a => `"${(a.label||a.type+" "+a.id).replace(/"/g,'""')}",${Number(a.amount||0)}`),
+      `"الإجمالي المدفوع",${Number(r.amount||0)}`,
+    ];
+    const blob = new Blob([rows.join("\n")], { type:"text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `${r.receipt_no || "receipt"}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <Modal open onClose={onClose} title={`إيصال ${r.receipt_no || ""}`} width={600}
+      footer={<>
+        <button className="btn btn-ghost" onClick={onClose}>إغلاق</button>
+        <button className="btn btn-secondary" onClick={downloadCsv}><I.Download size={13}/> تحميل CSV</button>
+        <button className="btn btn-blue" onClick={printReceipt}><I.Print size={13}/> طباعة / PDF</button>
+      </>}>
+      <div style={{display:"flex",flexDirection:"column",gap:14}}>
+        <div style={{
+          display:"flex",alignItems:"center",gap:10,padding:"12px 14px",
+          background:"var(--green-bg)",border:"1px solid rgba(63,169,132,.35)",
+          borderRadius:12,color:"#2C8067"
+        }}>
+          <I.Check size={16}/>
+          <div>
+            <div style={{fontWeight:600,fontSize:13.5}}>تمت العملية بنجاح</div>
+            <div style={{fontSize:11.5}}>تم تحديث الرصيد والإيرادات وسجل المدفوعات.</div>
+          </div>
+        </div>
+        <QpSummaryRow label="المريض" value={r.patient.name} sub={r.patient.id}/>
+        <QpSummaryRow label="طريقة الدفع" value={qpMethodLabel(r.method)}/>
+        {r.reference && <QpSummaryRow label="رقم مرجعي" value={r.reference}/>}
+        {r.transaction_id && <QpSummaryRow label="رقم المعاملة" value={r.transaction_id}/>}
+        <QpSummaryRow label="الكاشير" value={r.cashier}/>
+        <div className="card" style={{padding:12,background:"var(--ink-50)"}}>
+          <div className="muted" style={{fontSize:11,marginBottom:6,letterSpacing:".05em",textTransform:"uppercase"}}>العناصر المدفوعة</div>
+          {r.allocations.map((a, i) => (
+            <div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:12.5,padding:"4px 0"}}>
+              <span>{a.label || `${a.type} ${a.id}`}</span>
+              <span className="mono">EGP {Number(a.amount||0).toLocaleString()}</span>
+            </div>
+          ))}
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",padding:"10px 12px",background:"var(--blue-50)",border:"1px solid var(--blue-100)",borderRadius:10}}>
+          <span style={{fontWeight:600}}>المبلغ المدفوع</span>
+          <span className="mono" style={{fontWeight:700,fontSize:16,color:"var(--blue-900)"}}>EGP {Number(r.amount||0).toLocaleString()}</span>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+Object.assign(window, { QuickPaymentModal, QuickPaymentReceipt });
 
 Object.assign(window, { Payments, Packages, NewInvoiceModal });
 
@@ -4245,3 +5420,786 @@ function PublicBookingScreen({ onBack, onDone }) {
 }
 
 Object.assign(window, { PublicBookingScreen });
+
+// ═══════════════════════════════════════════════════════════════
+// Treatment Plan Templates — library, editor, preview, versions.
+// All data flows through window.Templates (DB when Supabase is on,
+// LS mirror otherwise). Doctors + admins can create/edit/archive/
+// duplicate/delete; therapists can view + apply; receptionists get
+// no access at all.
+// ═══════════════════════════════════════════════════════════════
+function __tplRole() {
+  const r = (window.ME && window.ME.role) || '';
+  return r;
+}
+function __tplPerms() {
+  const r = __tplRole();
+  const isAdmin  = r === 'مدير'   || r === 'admin';
+  const isDoctor = r === 'طبيب'   || r === 'doctor';
+  const isTher   = r === 'أخصائي' || r === 'therapist';
+  return {
+    canEdit:      isAdmin || isDoctor,
+    canDuplicate: isAdmin || isDoctor,
+    canArchive:   isAdmin || isDoctor,
+    canDelete:    isAdmin || isDoctor,
+    canApply:     isAdmin || isDoctor || isTher,
+    canView:      isAdmin || isDoctor || isTher,
+  };
+}
+
+const TPL_BUILTIN_MODALITIES = [
+  'الموجات فوق الصوتية','الليزر','التحفيز الكهربي','العلاج الحراري',
+  'العلاج بالثلج','العلاج اليدوي','الوخز الجاف','المساج','العلاج المائي',
+];
+
+function TemplatesLibraryModal({ onClose, onUse }) {
+  window.useDataVersion && window.useDataVersion();
+  const perms = __tplPerms();
+  const [rows, setRows]         = React.useState([]);
+  const [count, setCount]       = React.useState(0);
+  const [loading, setLoading]   = React.useState(true);
+  const [search, setSearch]     = React.useState('');
+  const [status, setStatus]     = React.useState('active');
+  const [category, setCategory] = React.useState('');
+  const [creatorMe, setCreatorMe] = React.useState(false);
+  const [sort, setSort]         = React.useState('recent');
+  const [editing, setEditing]   = React.useState(null);
+  const [preview, setPreview]   = React.useState(null);
+  const [confirmDel, setConfirmDel] = React.useState(null);
+  const [newOpen, setNewOpen]   = React.useState(false);
+
+  const reload = React.useCallback(async () => {
+    setLoading(true);
+    const meUid = (window.ME && window.ME.uid) || null;
+    const res = await window.Templates.list({
+      search, status, category,
+      creator: creatorMe ? meUid : null,
+      sort, limit: 200, offset: 0,
+    });
+    setRows(res.rows || []); setCount(res.count || 0); setLoading(false);
+  }, [search, status, category, creatorMe, sort]);
+
+  React.useEffect(() => {
+    reload();
+    const onUpd = () => reload();
+    window.addEventListener('kinetic:templates-updated', onUpd);
+    return () => window.removeEventListener('kinetic:templates-updated', onUpd);
+  }, [reload]);
+
+  const categories = React.useMemo(() => {
+    const seen = new Set();
+    for (const r of rows) if (r.category) seen.add(r.category);
+    return Array.from(seen);
+  }, [rows]);
+
+  async function doArchiveToggle(t) {
+    const fn = t.status === 'archived' ? window.Templates.restore : window.Templates.archive;
+    const res = await fn(t.template_id);
+    if (window.showToast) window.showToast(res.ok
+      ? (t.status === 'archived' ? 'تمت الاستعادة' : 'تمت الأرشفة')
+      : (res.error || 'تعذّر التنفيذ'),
+      res.ok ? 'success' : 'error');
+  }
+  async function doDuplicate(t) {
+    const res = await window.Templates.duplicate(t.template_id);
+    if (window.showToast) window.showToast(res.ok ? 'تم إنشاء نسخة' : (res.error || 'تعذّر النسخ'), res.ok ? 'success' : 'error');
+  }
+  async function doDelete(t) {
+    const res = await window.Templates.remove(t.template_id);
+    if (window.showToast) window.showToast(res.ok ? 'تم حذف القالب' : (res.error || 'تعذّر الحذف'), res.ok ? 'success' : 'error');
+    setConfirmDel(null);
+  }
+  function doUse(t) {
+    // Fire-and-forget: usage row + counter increments. The parent
+    // navigates immediately so the doctor sees the plan editor.
+    if (window.Templates) window.Templates.apply(t.template_id).catch(()=>{});
+    if (onUse) onUse(t);
+  }
+
+  if (!perms.canView) {
+    return (
+      <Modal open title="قوالب خطط العلاج" onClose={onClose} width={520}>
+        <div className="muted" style={{fontSize:13,padding:14,textAlign:'center'}}>لا تملك صلاحية الاطلاع على قوالب خطط العلاج.</div>
+      </Modal>
+    );
+  }
+
+  return (
+    <>
+      <Modal
+        open onClose={onClose}
+        title="قوالب خطط العلاج"
+        width={900}
+        footer={<>
+          <button className="btn btn-ghost" onClick={onClose}>إغلاق</button>
+          {perms.canEdit && (
+            <button className="btn btn-blue" onClick={()=>setNewOpen(true)}>
+              <I.Plus size={13}/> قالب جديد
+            </button>
+          )}
+        </>}
+      >
+        <div style={{display:'grid',gap:12}}>
+          <div style={{display:'grid',gridTemplateColumns:'1.4fr 1fr 1fr 1fr',gap:8}}>
+            <div style={{position:'relative'}}>
+              <I.Search size={14} style={{position:'absolute',left:11,top:'50%',transform:'translateY(-50%)',color:'var(--ink-400)'}}/>
+              <input className="input" placeholder="ابحث بالاسم/التشخيص/التمرين/الطريقة…" value={search} onChange={e=>setSearch(e.target.value)} style={{paddingLeft:32}}/>
+            </div>
+            <select className="input" value={status} onChange={e=>setStatus(e.target.value)}>
+              <option value="active">النشطة</option>
+              <option value="archived">المؤرشفة</option>
+              <option value="">الكل</option>
+            </select>
+            <select className="input" value={category} onChange={e=>setCategory(e.target.value)}>
+              <option value="">كل الفئات</option>
+              {categories.map(c=><option key={c} value={c}>{c}</option>)}
+            </select>
+            <select className="input" value={sort} onChange={e=>setSort(e.target.value)}>
+              <option value="recent">الأحدث</option>
+              <option value="oldest">الأقدم</option>
+              <option value="usage">الأكثر استخدامًا</option>
+              <option value="name">اسم القالب</option>
+            </select>
+          </div>
+          <label style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:'var(--ink-600)'}}>
+            <input type="checkbox" checked={creatorMe} onChange={e=>setCreatorMe(e.target.checked)}/>
+            قوالبي فقط
+          </label>
+
+          {loading && <div className="muted" style={{fontSize:13,padding:14,textAlign:'center'}}>جارٍ التحميل…</div>}
+          {!loading && rows.length === 0 && (
+            <div style={{padding:24,textAlign:'center',border:'1px dashed var(--ink-200)',borderRadius:12,color:'var(--ink-500)'}}>
+              <I.FileText size={22} style={{opacity:.4}}/>
+              <div style={{marginTop:8,fontSize:13}}>لا يوجد قوالب مطابقة</div>
+              {perms.canEdit && (
+                <button className="btn btn-blue" style={{marginTop:12}} onClick={()=>setNewOpen(true)}>
+                  <I.Plus size={13}/> قالب جديد
+                </button>
+              )}
+            </div>
+          )}
+          {!loading && rows.length > 0 && (
+            <div style={{maxHeight:'55vh',overflowY:'auto',border:'1px solid var(--ink-100)',borderRadius:12}}>
+              {rows.map(t => (
+                <TemplateRow
+                  key={t.template_id}
+                  t={t}
+                  perms={perms}
+                  onUse={()=>doUse(t)}
+                  onPreview={()=>setPreview(t.template_id)}
+                  onEdit={()=>setEditing(t.template_id)}
+                  onDuplicate={()=>doDuplicate(t)}
+                  onArchiveToggle={()=>doArchiveToggle(t)}
+                  onDelete={()=>setConfirmDel(t)}
+                />
+              ))}
+            </div>
+          )}
+          <div className="muted" style={{fontSize:11.5}}>الإجمالي: {count}</div>
+        </div>
+      </Modal>
+
+      {newOpen && (
+        <TemplateEditorModal
+          templateId={null}
+          onClose={()=>setNewOpen(false)}
+          onSaved={()=>{ setNewOpen(false); reload(); }}
+        />
+      )}
+      {editing && (
+        <TemplateEditorModal
+          templateId={editing}
+          onClose={()=>setEditing(null)}
+          onSaved={()=>{ setEditing(null); reload(); }}
+        />
+      )}
+      {preview && (
+        <TemplatePreviewModal
+          templateId={preview}
+          onClose={()=>setPreview(null)}
+          onUse={perms.canApply ? (t)=>{ setPreview(null); doUse(t); } : null}
+        />
+      )}
+      {confirmDel && (
+        <Modal open onClose={()=>setConfirmDel(null)} title="تأكيد الحذف" width={440}
+          footer={<>
+            <button className="btn btn-ghost" onClick={()=>setConfirmDel(null)}>إلغاء</button>
+            <button className="btn btn-red" onClick={()=>doDelete(confirmDel)} style={{background:'var(--red)',color:'#fff'}}>حذف نهائي</button>
+          </>}>
+          <div style={{fontSize:13.5}}>هل تريد حذف <strong>{confirmDel.name}</strong> نهائيًا؟ لا يمكن التراجع.</div>
+          {(confirmDel.usage_count || 0) > 0 && (
+            <div style={{marginTop:10,padding:10,background:'#fef2f2',border:'1px solid #fecaca',borderRadius:8,fontSize:12,color:'#991b1b'}}>
+              هذا القالب مستخدم في {confirmDel.usage_count} خطة — سيرفض النظام الحذف. استخدم الأرشفة بدلاً منه.
+            </div>
+          )}
+        </Modal>
+      )}
+    </>
+  );
+}
+
+function TemplateRow({ t, perms, onUse, onPreview, onEdit, onDuplicate, onArchiveToggle, onDelete }) {
+  const archived = t.status === 'archived';
+  return (
+    <div style={{
+      display:'grid',gridTemplateColumns:'1fr auto',gap:10,padding:'12px 14px',
+      borderBottom:'1px solid var(--ink-100)',opacity: archived ? .65 : 1,
+    }}>
+      <div style={{minWidth:0}}>
+        <div style={{display:'flex',alignItems:'center',gap:8}}>
+          <strong style={{fontSize:13.5}}>{t.name}</strong>
+          {archived && <span className="badge b-grey" style={{fontSize:10.5}}>مؤرشف</span>}
+          {(t.usage_count || 0) > 0 && (
+            <span className="badge b-blue" style={{fontSize:10.5}}>{t.usage_count} استخدام</span>
+          )}
+        </div>
+        <div className="muted" style={{fontSize:11.5,marginTop:3}}>
+          {[t.diagnosis, t.category, t.body_part].filter(Boolean).join(' · ') || '—'}
+        </div>
+        <div className="muted" style={{fontSize:11,marginTop:2}}>
+          {(t.exercises?.length || 0)} تمرين · {(t.methods?.length || 0)} طريقة · {(t.modalities?.length || 0)} وسيلة
+          {t.estimated_sessions ? ` · ${t.estimated_sessions} جلسة` : ''}
+        </div>
+      </div>
+      <div style={{display:'flex',flexWrap:'wrap',gap:6,alignItems:'center'}}>
+        <button className="btn btn-secondary" style={{fontSize:11.5,padding:'5px 9px'}} onClick={onPreview}>
+          <I.Eye size={12}/> معاينة
+        </button>
+        {perms.canApply && !archived && (
+          <button className="btn btn-blue" style={{fontSize:11.5,padding:'5px 9px'}} onClick={onUse}>
+            استخدام
+          </button>
+        )}
+        {perms.canEdit && (
+          <button className="btn btn-secondary" style={{fontSize:11.5,padding:'5px 9px'}} onClick={onEdit}>
+            <I.Edit size={12}/> تعديل
+          </button>
+        )}
+        {perms.canDuplicate && (
+          <button className="btn btn-secondary" style={{fontSize:11.5,padding:'5px 9px'}} onClick={onDuplicate}>
+            <I.FileText size={12}/> نسخ
+          </button>
+        )}
+        {perms.canArchive && (
+          <button className="btn btn-secondary" style={{fontSize:11.5,padding:'5px 9px'}} onClick={onArchiveToggle}>
+            {archived ? 'استعادة' : 'أرشفة'}
+          </button>
+        )}
+        {perms.canDelete && (
+          <button className="btn btn-secondary" style={{fontSize:11.5,padding:'5px 9px',color:'var(--red)'}} onClick={onDelete}>
+            <I.Trash size={12}/> حذف
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Editor ─────────────────────────────────────────────────────
+function TemplateEditorModal({ templateId, onClose, onSaved }) {
+  window.useDataVersion && window.useDataVersion();
+  const isEdit = !!templateId;
+  const [loading, setLoading]   = React.useState(isEdit);
+  const [saving, setSaving]     = React.useState(false);
+  const [error, setError]       = React.useState('');
+  const [state, setState]       = React.useState({
+    name:'', category:'', diagnosis:'', body_part:'',
+    goals: [''],
+    exercises: [], methods: [], modalities: [],
+    home_instructions:'', notes:'', warnings:'', followup_instructions:'',
+    estimated_sessions:'', weekly_frequency:'', expected_recovery_days:'',
+  });
+  const [changeSummary, setChangeSummary] = React.useState('');
+
+  React.useEffect(() => {
+    if (!isEdit) return;
+    (async () => {
+      const res = await window.Templates.get(templateId);
+      if (res && res.template) {
+        const t = res.template;
+        setState({
+          name: t.name || '',
+          category: t.category || '',
+          diagnosis: t.diagnosis || '',
+          body_part: t.body_part || '',
+          goals: Array.isArray(t.goals) && t.goals.length ? t.goals : [''],
+          exercises: Array.isArray(t.exercises) ? t.exercises : [],
+          methods: Array.isArray(t.methods) ? t.methods : [],
+          modalities: Array.isArray(t.modalities) ? t.modalities : [],
+          home_instructions: t.home_instructions || '',
+          notes: t.notes || '',
+          warnings: t.warnings || '',
+          followup_instructions: t.followup_instructions || '',
+          estimated_sessions: t.estimated_sessions ?? '',
+          weekly_frequency: t.weekly_frequency ?? '',
+          expected_recovery_days: t.expected_recovery_days ?? '',
+        });
+      }
+      setLoading(false);
+    })();
+  }, [isEdit, templateId]);
+
+  React.useEffect(() => {
+    if (window.TxMethods) window.TxMethods.list().catch(()=>{});
+  }, []);
+
+  const libMethods = (DATA.treatmentMethods || []).filter(m => m.status !== 'archived');
+
+  function up(k, v) { setState(s => ({ ...s, [k]: v })); }
+
+  function addGoal() { up('goals', [...state.goals, '']); }
+  function setGoal(i, v) { up('goals', state.goals.map((g,idx)=>idx===i?v:g)); }
+  function removeGoal(i) { up('goals', state.goals.filter((_,idx)=>idx!==i)); }
+
+  function addExercise() {
+    up('exercises', [...state.exercises, {
+      name:'', description:'', sets:'', reps:'', duration:'',
+      hold_time:'', rest_time:'', equipment:'', notes:'',
+    }]);
+  }
+  function setExercise(i, patch) {
+    up('exercises', state.exercises.map((e,idx)=>idx===i?{...e,...patch}:e));
+  }
+  function removeExercise(i) {
+    up('exercises', state.exercises.filter((_,idx)=>idx!==i));
+  }
+  function moveExercise(i, dir) {
+    const arr = state.exercises.slice();
+    const j = i + dir;
+    if (j < 0 || j >= arr.length) return;
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+    up('exercises', arr);
+  }
+
+  function toggleMethod(name) {
+    const has = state.methods.some(m => (m.name || m) === name);
+    if (has) up('methods', state.methods.filter(m => (m.name || m) !== name));
+    else     up('methods', [...state.methods, { name }]);
+  }
+  function addCustomMethod(name) {
+    const n = String(name || '').trim();
+    if (!n) return;
+    if (state.methods.some(m => (m.name || m) === n)) return;
+    up('methods', [...state.methods, { name: n }]);
+  }
+  function removeMethod(name) {
+    up('methods', state.methods.filter(m => (m.name || m) !== name));
+  }
+
+  function toggleModality(name) {
+    if (state.modalities.includes(name)) up('modalities', state.modalities.filter(m => m !== name));
+    else                                  up('modalities', [...state.modalities, name]);
+  }
+  function addCustomModality(name) {
+    const n = String(name || '').trim();
+    if (!n || state.modalities.includes(n)) return;
+    up('modalities', [...state.modalities, n]);
+  }
+
+  async function doSave() {
+    setError('');
+    if (!state.name.trim()) { setError('اسم القالب مطلوب'); return; }
+    setSaving(true);
+    const payload = { ...state, goals: state.goals.filter(g => (g||'').trim()) };
+    const res = isEdit
+      ? await window.Templates.update(templateId, payload, changeSummary)
+      : await window.Templates.create(payload);
+    setSaving(false);
+    if (!res.ok) { setError(res.error || 'تعذّر الحفظ'); return; }
+    if (window.showToast) window.showToast(isEdit ? 'تم تحديث القالب' : 'تم إنشاء القالب', 'success');
+    if (onSaved) onSaved(res.template_id);
+  }
+
+  return (
+    <Modal
+      open onClose={onClose}
+      title={isEdit ? 'تعديل قالب' : 'قالب جديد'}
+      width={960}
+      footer={<>
+        <button className="btn btn-ghost" onClick={onClose} disabled={saving}>إلغاء</button>
+        <button className="btn btn-blue" onClick={doSave} disabled={saving || loading}>
+          <I.Check size={13}/> {saving ? 'جارٍ الحفظ…' : 'حفظ'}
+        </button>
+      </>}
+    >
+      {loading ? (
+        <div className="muted" style={{fontSize:13,padding:14,textAlign:'center'}}>جارٍ التحميل…</div>
+      ) : (
+        <div style={{display:'grid',gap:14,maxHeight:'70vh',overflowY:'auto',paddingLeft:4}}>
+          {error && (
+            <div style={{padding:10,background:'#fef2f2',border:'1px solid #fecaca',borderRadius:8,fontSize:12.5,color:'#991b1b'}}>{error}</div>
+          )}
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+            <Field label="اسم القالب" required>
+              <input className="input" value={state.name} onChange={e=>up('name',e.target.value)}/>
+            </Field>
+            <Field label="الفئة">
+              <input className="input" value={state.category} onChange={e=>up('category',e.target.value)} placeholder="مثال: تأهيل الركبة"/>
+            </Field>
+            <Field label="التشخيص">
+              <input className="input" value={state.diagnosis} onChange={e=>up('diagnosis',e.target.value)}/>
+            </Field>
+            <Field label="الجزء المستهدف">
+              <input className="input" value={state.body_part} onChange={e=>up('body_part',e.target.value)}/>
+            </Field>
+            <Field label="عدد الجلسات المتوقّع">
+              <input className="input" type="number" value={state.estimated_sessions} onChange={e=>up('estimated_sessions',e.target.value)}/>
+            </Field>
+            <Field label="التكرار الأسبوعي">
+              <input className="input" type="number" value={state.weekly_frequency} onChange={e=>up('weekly_frequency',e.target.value)}/>
+            </Field>
+            <Field label="مدّة التعافي المتوقّعة (أيام)">
+              <input className="input" type="number" value={state.expected_recovery_days} onChange={e=>up('expected_recovery_days',e.target.value)}/>
+            </Field>
+          </div>
+
+          <TemplateGoals goals={state.goals} setGoal={setGoal} addGoal={addGoal} removeGoal={removeGoal}/>
+          <TemplateExercises
+            list={state.exercises}
+            onAdd={addExercise} onChange={setExercise}
+            onRemove={removeExercise} onMove={moveExercise}
+          />
+          <TemplateMethods
+            selected={state.methods}
+            library={libMethods}
+            onToggle={toggleMethod}
+            onAddCustom={addCustomMethod}
+            onRemove={removeMethod}
+          />
+          <TemplateModalities
+            selected={state.modalities}
+            onToggle={toggleModality}
+            onAddCustom={addCustomModality}
+          />
+
+          <Field label="تعليمات المريض في المنزل">
+            <textarea className="input" style={{height:70,padding:10}} value={state.home_instructions} onChange={e=>up('home_instructions',e.target.value)}/>
+          </Field>
+          <Field label="ملاحظات داخلية">
+            <textarea className="input" style={{height:70,padding:10}} value={state.notes} onChange={e=>up('notes',e.target.value)}/>
+          </Field>
+          <Field label="تحذيرات">
+            <textarea className="input" style={{height:60,padding:10}} value={state.warnings} onChange={e=>up('warnings',e.target.value)}/>
+          </Field>
+          <Field label="تعليمات المتابعة">
+            <textarea className="input" style={{height:60,padding:10}} value={state.followup_instructions} onChange={e=>up('followup_instructions',e.target.value)}/>
+          </Field>
+
+          {isEdit && (
+            <Field label="ملخّص التغيير (لأرشيف الإصدارات)">
+              <input className="input" value={changeSummary} onChange={e=>setChangeSummary(e.target.value)} placeholder="مثال: أضفت تمرين إطالة"/>
+            </Field>
+          )}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function TemplateGoals({ goals, setGoal, addGoal, removeGoal }) {
+  return (
+    <div className="card card-pad" style={{background:'var(--ink-50)'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+        <strong style={{fontSize:13.5}}>الأهداف</strong>
+        <button className="btn btn-secondary" style={{fontSize:11.5,padding:'4px 8px'}} onClick={addGoal}>
+          <I.Plus size={12}/> هدف
+        </button>
+      </div>
+      {goals.map((g,i)=>(
+        <div key={i} style={{display:'flex',gap:6,marginBottom:6}}>
+          <input className="input" value={g} onChange={e=>setGoal(i,e.target.value)} placeholder="اكتب هدف العلاج"/>
+          <button className="btn btn-ghost" style={{padding:'6px 8px',color:'var(--red)'}} onClick={()=>removeGoal(i)}><I.X size={12}/></button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TemplateExercises({ list, onAdd, onChange, onRemove, onMove }) {
+  return (
+    <div className="card card-pad" style={{background:'var(--ink-50)'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+        <strong style={{fontSize:13.5}}>التمارين</strong>
+        <button className="btn btn-secondary" style={{fontSize:11.5,padding:'4px 8px'}} onClick={onAdd}>
+          <I.Plus size={12}/> تمرين
+        </button>
+      </div>
+      {list.length === 0 && (
+        <div className="muted" style={{fontSize:12,textAlign:'center',padding:10}}>لا يوجد تمارين بعد</div>
+      )}
+      {list.map((e,i)=>(
+        <div key={i} style={{padding:10,background:'#fff',border:'1px solid var(--ink-200)',borderRadius:10,marginBottom:8}}>
+          <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:6}}>
+            <span className="muted" style={{fontSize:11.5,width:24}}>#{i+1}</span>
+            <input className="input" value={e.name} onChange={ev=>onChange(i,{name:ev.target.value})} placeholder="اسم التمرين" style={{flex:1}}/>
+            <button className="btn btn-ghost" style={{padding:'4px 6px'}} onClick={()=>onMove(i,-1)} disabled={i===0} title="أعلى"><I.Chevron size={12}/></button>
+            <button className="btn btn-ghost" style={{padding:'4px 6px',transform:'rotate(180deg)'}} onClick={()=>onMove(i,+1)} disabled={i===list.length-1} title="أسفل"><I.Chevron size={12}/></button>
+            <button className="btn btn-ghost" style={{padding:'4px 6px',color:'var(--red)'}} onClick={()=>onRemove(i)}><I.Trash size={12}/></button>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(6,1fr)',gap:6}}>
+            <input className="input" style={{fontSize:12}} value={e.sets} onChange={ev=>onChange(i,{sets:ev.target.value})} placeholder="مجموعات"/>
+            <input className="input" style={{fontSize:12}} value={e.reps} onChange={ev=>onChange(i,{reps:ev.target.value})} placeholder="عدّات"/>
+            <input className="input" style={{fontSize:12}} value={e.duration} onChange={ev=>onChange(i,{duration:ev.target.value})} placeholder="مدّة"/>
+            <input className="input" style={{fontSize:12}} value={e.hold_time} onChange={ev=>onChange(i,{hold_time:ev.target.value})} placeholder="ثبات"/>
+            <input className="input" style={{fontSize:12}} value={e.rest_time} onChange={ev=>onChange(i,{rest_time:ev.target.value})} placeholder="راحة"/>
+            <input className="input" style={{fontSize:12}} value={e.equipment} onChange={ev=>onChange(i,{equipment:ev.target.value})} placeholder="أدوات"/>
+          </div>
+          <input className="input" style={{marginTop:6,fontSize:12}} value={e.description} onChange={ev=>onChange(i,{description:ev.target.value})} placeholder="وصف التمرين"/>
+          <input className="input" style={{marginTop:6,fontSize:12}} value={e.notes} onChange={ev=>onChange(i,{notes:ev.target.value})} placeholder="ملاحظات"/>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TemplateMethods({ selected, library, onToggle, onAddCustom, onRemove }) {
+  const [custom, setCustom] = React.useState('');
+  const activeNames = new Set(selected.map(m => m.name || m));
+  return (
+    <div className="card card-pad" style={{background:'var(--ink-50)'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+        <strong style={{fontSize:13.5}}>طرق العلاج</strong>
+        <span className="muted" style={{fontSize:11}}>{selected.length} محدّدة</span>
+      </div>
+      <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:8}}>
+        {library.map(m => {
+          const on = activeNames.has(m.name);
+          return (
+            <button key={m.method_id || m.id} type="button" onClick={()=>onToggle(m.name)}
+              className="btn btn-secondary"
+              style={{fontSize:12,padding:'5px 9px',background: on?'var(--blue-50)':'#fff',borderColor: on?'var(--blue-500)':'var(--ink-200)',color: on?'var(--blue-900)':'var(--ink-700)'}}>
+              {on ? '✓' : '+'} {m.name}
+            </button>
+          );
+        })}
+      </div>
+      {selected.filter(m => !library.some(lm => lm.name === (m.name || m))).length > 0 && (
+        <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:8}}>
+          {selected.filter(m => !library.some(lm => lm.name === (m.name || m))).map((m,i)=>(
+            <span key={i} style={{fontSize:12,padding:'4px 8px',background:'#fff',border:'1px dashed var(--blue-500)',borderRadius:8,color:'var(--blue-900)',display:'inline-flex',alignItems:'center',gap:6}}>
+              {m.name || m}
+              <button className="btn btn-ghost" style={{padding:'0 2px'}} onClick={()=>onRemove(m.name || m)}><I.X size={10}/></button>
+            </span>
+          ))}
+        </div>
+      )}
+      <div style={{display:'flex',gap:6}}>
+        <input className="input" style={{fontSize:12}} value={custom} onChange={e=>setCustom(e.target.value)} placeholder="أضف طريقة مخصّصة"/>
+        <button className="btn btn-secondary" style={{fontSize:12}} onClick={()=>{ onAddCustom(custom); setCustom(''); }}>
+          <I.Plus size={12}/> إضافة
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function TemplateModalities({ selected, onToggle, onAddCustom }) {
+  const [custom, setCustom] = React.useState('');
+  return (
+    <div className="card card-pad" style={{background:'var(--ink-50)'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+        <strong style={{fontSize:13.5}}>الوسائل العلاجية</strong>
+        <span className="muted" style={{fontSize:11}}>{selected.length} محدّدة</span>
+      </div>
+      <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:8}}>
+        {TPL_BUILTIN_MODALITIES.map(m => {
+          const on = selected.includes(m);
+          return (
+            <button key={m} type="button" onClick={()=>onToggle(m)}
+              className="btn btn-secondary"
+              style={{fontSize:12,padding:'5px 9px',background: on?'var(--blue-50)':'#fff',borderColor: on?'var(--blue-500)':'var(--ink-200)',color: on?'var(--blue-900)':'var(--ink-700)'}}>
+              {on ? '✓' : '+'} {m}
+            </button>
+          );
+        })}
+      </div>
+      {selected.filter(m => !TPL_BUILTIN_MODALITIES.includes(m)).length > 0 && (
+        <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:8}}>
+          {selected.filter(m => !TPL_BUILTIN_MODALITIES.includes(m)).map((m,i)=>(
+            <span key={i} style={{fontSize:12,padding:'4px 8px',background:'#fff',border:'1px dashed var(--blue-500)',borderRadius:8,color:'var(--blue-900)',display:'inline-flex',alignItems:'center',gap:6}}>
+              {m}
+              <button className="btn btn-ghost" style={{padding:'0 2px'}} onClick={()=>onToggle(m)}><I.X size={10}/></button>
+            </span>
+          ))}
+        </div>
+      )}
+      <div style={{display:'flex',gap:6}}>
+        <input className="input" style={{fontSize:12}} value={custom} onChange={e=>setCustom(e.target.value)} placeholder="أضف وسيلة مخصّصة"/>
+        <button className="btn btn-secondary" style={{fontSize:12}} onClick={()=>{ onAddCustom(custom); setCustom(''); }}>
+          <I.Plus size={12}/> إضافة
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Preview + Versions ────────────────────────────────────────
+function TemplatePreviewModal({ templateId, onClose, onUse }) {
+  window.useDataVersion && window.useDataVersion();
+  const [loading, setLoading] = React.useState(true);
+  const [data, setData]       = React.useState(null);
+  const [restoring, setRestoring] = React.useState('');
+
+  const reload = React.useCallback(async () => {
+    setLoading(true);
+    const res = await window.Templates.get(templateId);
+    setData(res); setLoading(false);
+  }, [templateId]);
+
+  React.useEffect(() => {
+    reload();
+    const onUpd = () => reload();
+    window.addEventListener('kinetic:templates-updated', onUpd);
+    return () => window.removeEventListener('kinetic:templates-updated', onUpd);
+  }, [reload]);
+
+  async function doRestoreVersion(v) {
+    setRestoring(v.version_id);
+    const res = await window.Templates.restoreVersion(v.version_id);
+    setRestoring('');
+    if (window.showToast) window.showToast(res.ok ? 'تمت الاستعادة' : (res.error || 'تعذّرت الاستعادة'), res.ok ? 'success' : 'error');
+  }
+
+  const t = data && data.template;
+  const stats = data && data.stats || {};
+  const versions = (data && data.versions) || [];
+
+  return (
+    <Modal
+      open onClose={onClose}
+      title={t ? `معاينة — ${t.name}` : 'معاينة القالب'}
+      width={780}
+      footer={<>
+        <button className="btn btn-ghost" onClick={onClose}>إغلاق</button>
+        {onUse && t && t.status !== 'archived' && (
+          <button className="btn btn-blue" onClick={()=>onUse(t)}><I.Check size={13}/> استخدام</button>
+        )}
+      </>}
+    >
+      {loading && <div className="muted" style={{fontSize:13,padding:14,textAlign:'center'}}>جارٍ التحميل…</div>}
+      {!loading && !t && <div className="muted" style={{fontSize:13,padding:14,textAlign:'center'}}>القالب غير موجود</div>}
+      {t && (
+        <div style={{display:'grid',gap:14,maxHeight:'68vh',overflowY:'auto',paddingLeft:4}}>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:8}}>
+            <PreviewStat label="عدد الجلسات" value={t.estimated_sessions || '—'}/>
+            <PreviewStat label="التكرار الأسبوعي" value={t.weekly_frequency || '—'}/>
+            <PreviewStat label="مدّة التعافي" value={t.expected_recovery_days ? `${t.expected_recovery_days} يوم` : '—'}/>
+            <PreviewStat label="الإصدار" value={t.version || 1}/>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:8}}>
+            <PreviewStat label="عدد الاستخدامات" value={stats.usage_count ?? 0}/>
+            <PreviewStat label="نسبة الإكمال" value={`${stats.completion_rate ?? 0}%`}/>
+            <PreviewStat label="متوسّط التعافي" value={stats.avg_recovery ? `${stats.avg_recovery} يوم` : '—'}/>
+            <PreviewStat label="آخر استخدام" value={stats.last_used_at ? new Date(stats.last_used_at).toLocaleDateString('ar-EG') : '—'}/>
+          </div>
+
+          <PreviewSection title="معلومات">
+            <PreviewLine k="التشخيص" v={t.diagnosis}/>
+            <PreviewLine k="الفئة" v={t.category}/>
+            <PreviewLine k="الجزء المستهدف" v={t.body_part}/>
+          </PreviewSection>
+
+          {Array.isArray(t.goals) && t.goals.length > 0 && (
+            <PreviewSection title="الأهداف">
+              <ul style={{margin:0,paddingRight:18,fontSize:13}}>
+                {t.goals.map((g,i)=><li key={i}>{g}</li>)}
+              </ul>
+            </PreviewSection>
+          )}
+
+          {Array.isArray(t.exercises) && t.exercises.length > 0 && (
+            <PreviewSection title={`التمارين (${t.exercises.length})`}>
+              {t.exercises.map((e,i)=>(
+                <div key={i} style={{padding:8,background:'#fff',border:'1px solid var(--ink-200)',borderRadius:8,marginBottom:6,fontSize:12.5}}>
+                  <strong>{i+1}. {e.name}</strong>
+                  {e.description && <div className="muted" style={{fontSize:11.5}}>{e.description}</div>}
+                  <div className="muted" style={{fontSize:11.5,marginTop:2}}>
+                    {[e.sets && `${e.sets} مجموعات`, e.reps && `${e.reps} عدّات`, e.duration && `${e.duration} مدّة`,
+                       e.hold_time && `ثبات ${e.hold_time}`, e.rest_time && `راحة ${e.rest_time}`, e.equipment].filter(Boolean).join(' · ')}
+                  </div>
+                </div>
+              ))}
+            </PreviewSection>
+          )}
+
+          {Array.isArray(t.methods) && t.methods.length > 0 && (
+            <PreviewSection title="طرق العلاج">
+              <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+                {t.methods.map((m,i)=><span key={i} className="badge b-blue" style={{fontSize:11.5}}>{m.name || m}</span>)}
+              </div>
+            </PreviewSection>
+          )}
+          {Array.isArray(t.modalities) && t.modalities.length > 0 && (
+            <PreviewSection title="الوسائل العلاجية">
+              <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+                {t.modalities.map((m,i)=><span key={i} className="badge b-grey" style={{fontSize:11.5}}>{m}</span>)}
+              </div>
+            </PreviewSection>
+          )}
+          {(t.home_instructions || t.notes || t.warnings || t.followup_instructions) && (
+            <PreviewSection title="ملاحظات وتعليمات">
+              {t.home_instructions && <PreviewLine k="تعليمات المنزل" v={t.home_instructions}/>}
+              {t.followup_instructions && <PreviewLine k="المتابعة" v={t.followup_instructions}/>}
+              {t.notes && <PreviewLine k="ملاحظات" v={t.notes}/>}
+              {t.warnings && <PreviewLine k="تحذيرات" v={t.warnings}/>}
+            </PreviewSection>
+          )}
+          <PreviewSection title="سِجل الإنشاء">
+            <PreviewLine k="أنشأه" v={t.created_by_name}/>
+            <PreviewLine k="تاريخ الإنشاء" v={t.created_at && new Date(t.created_at).toLocaleString('ar-EG')}/>
+            <PreviewLine k="آخر تعديل" v={t.updated_by_name}/>
+            <PreviewLine k="تاريخ التعديل" v={t.updated_at && new Date(t.updated_at).toLocaleString('ar-EG')}/>
+          </PreviewSection>
+
+          {versions.length > 0 && (
+            <PreviewSection title={`سِجل الإصدارات (${versions.length})`}>
+              {versions.map(v=>(
+                <div key={v.version_id} style={{display:'flex',alignItems:'center',gap:8,padding:8,background:'#fff',border:'1px solid var(--ink-200)',borderRadius:8,marginBottom:6,fontSize:12}}>
+                  <span className="badge b-grey" style={{fontSize:10.5}}>v{v.version_num}</span>
+                  <span style={{flex:1}}>{v.change_summary || '—'}</span>
+                  <span className="muted" style={{fontSize:11}}>{v.editor_name || '—'}</span>
+                  <span className="muted" style={{fontSize:11}}>{v.created_at && new Date(v.created_at).toLocaleDateString('ar-EG')}</span>
+                  {__tplPerms().canEdit && (
+                    <button className="btn btn-ghost" style={{fontSize:11,padding:'3px 7px'}} disabled={restoring===v.version_id} onClick={()=>doRestoreVersion(v)}>
+                      {restoring === v.version_id ? '…' : 'استعادة'}
+                    </button>
+                  )}
+                </div>
+              ))}
+            </PreviewSection>
+          )}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function PreviewStat({ label, value }) {
+  return (
+    <div style={{padding:10,background:'#fff',border:'1px solid var(--ink-200)',borderRadius:10}}>
+      <div className="muted" style={{fontSize:11}}>{label}</div>
+      <div style={{fontSize:14,fontWeight:600,marginTop:2}}>{value}</div>
+    </div>
+  );
+}
+function PreviewSection({ title, children }) {
+  return (
+    <div>
+      <div style={{fontSize:12,fontWeight:600,color:'var(--ink-700)',marginBottom:6}}>{title}</div>
+      {children}
+    </div>
+  );
+}
+function PreviewLine({ k, v }) {
+  if (!v) return null;
+  return (
+    <div style={{display:'flex',gap:8,fontSize:12.5,padding:'3px 0'}}>
+      <span className="muted" style={{minWidth:120}}>{k}</span>
+      <span style={{flex:1}}>{v}</span>
+    </div>
+  );
+}
+
+Object.assign(window, {
+  TemplatesLibraryModal, TemplateEditorModal, TemplatePreviewModal,
+});

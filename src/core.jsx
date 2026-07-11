@@ -187,9 +187,13 @@ window.DATA = window.IS_DEMO ? {
   payments: seedPayments,
   campaigns: seedCampaigns,
   sessions: seedSessions,
+  paymentHistory: [],
+  subscriptions: [],
+  treatmentMethods: [],
 } : {
   patients: [], appts: [], therapists: [], departments: [], doctors: [],
   packages: [], payments: [], campaigns: [], sessions: [],
+  paymentHistory: [], subscriptions: [], treatmentMethods: [],
 };
 
 // ── Reactive data hook ─────────────────────────────────────────
