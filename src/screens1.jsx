@@ -711,14 +711,8 @@ function PatientHistory({ p }) {
   }
   return (
     <div>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,flexWrap:"wrap",gap:10}}>
+      <div style={{marginBottom:14}}>
         <div className="h3">السجل الزمني</div>
-        <div className="seg">
-          <button className="on">الكل</button>
-          <button>الجلسات</button>
-          <button>ملاحظات</button>
-          <button>الملفات</button>
-        </div>
       </div>
       <div style={{position:"relative",paddingLeft:24}}>
         <div style={{position:"absolute",left:9,top:8,bottom:8,width:2,background:"var(--ink-100)"}}/>
