@@ -964,11 +964,14 @@ function AuthScreen({ onLogin, onBookAsGuest }) {
         const dbRole = res.role || res.staff?.role;
         const arRole = ROLE_TO_AR[dbRole] || role;
         const prof = (window.ROLE_PROFILES||{})[arRole] || { name:res.staff?.name || res.user?.email || email, email };
+        // Clinicians scope their caseload by their OWN name (from the staff
+        // record), not a fixed profile — so real accounts see real patients.
+        const isClinician = arRole === "طبيب" || arRole === "الأخصائي";
         onLogin && onLogin({
           name: res.staff?.name || prof.name,
           role: arRole,
           email: res.user?.email || email,
-          match: prof.match || null,
+          match: isClinician ? (res.staff?.name || prof.match || null) : (prof.match || null),
           title: prof.title,
           color: prof.color,
           scope: window.roleScope ? window.roleScope(arRole) : "all",

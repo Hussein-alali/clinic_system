@@ -233,202 +233,6 @@ function Sessions({ go }) {
   );
 }
 
-function SessionCurrent({ p }) {
-  const [pain, setPain] = React.useState(3);
-  const [mood, setMood] = React.useState(3);
-  const [signed, setSigned] = React.useState(false);
-  const [notes, setNotes] = React.useState("انخفض الألم في انحناء الفقرات القطنية. تحمّل المريض التحريك اليدوي درجة 3 جيدًا. أفاد المريض بأنه نام طوال الليل لأول مرة منذ 3 أسابيع.\n\nتمت زيادة مقاومة الثيراباند إلى الأحمر. الالتزام بالبرنامج المنزلي: 6/6 أيام.");
-  const goals = [
-    { g:"ROM lumbar flexion +5°", done:true },
-    { g:"الألم ≤ 3/10 at rest",     done:true },
-    { g:"المشي 2 كم دون ألم",   done:false },
-  ];
-
-  return (
-    <div className="rgrid c-lg" style={{"--gtc":"1.4fr 1fr"}}>
-      <div style={{display:"flex",flexDirection:"column",gap:18}}>
-        {/* جلسة header */}
-        <div className="card card-pad" style={{display:"flex",alignItems:"center",gap:18,position:"relative",overflow:"hidden",flexWrap:"wrap"}}>
-          <div style={{position:"absolute",top:0,left:0,right:0,height:3,background:"linear-gradient(90deg, var(--blue-500), var(--blue-300))"}}/>
-          <div className="av lg" style={{background:"var(--blue-500)",color:"#fff",width:54,height:54,fontSize:18}}>{p.name.split(" ").map(x=>x[0]).join("").slice(0,2)}</div>
-          <div style={{flex:1,minWidth:200}}>
-            <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-              <div className="h2">{p.name}</div>
-              <span className="badge b-violet"><span className="dot"></span>الجلسة #7 قيد التنفيذ</span>
-            </div>
-            <div style={{display:"flex",gap:"4px 18px",marginTop:6,fontSize:12.5,color:"var(--ink-500)",flexWrap:"wrap"}}>
-              <span>{p.diag}</span><span>·</span>
-              <span>الخطة TP-2231</span><span>·</span>
-              <span>بدأت 10:00 ص · مضى 32 دقيقة</span>
-            </div>
-          </div>
-          <SessionTimer/>
-        </div>
-
-        {/* pain & mood */}
-        <div className="card card-pad">
-          <div className="h3" style={{marginBottom:14}}>تسجيل الألم والمزاج</div>
-          <div className="label">مستوى الألم (٠ – ١٠)</div>
-          <div style={{display:"flex",gap:5,marginBottom:6,flexWrap:"wrap"}}>
-            {Array.from({length:11},(_,i)=>i).map(n=>{
-              const color = n<=3?"#3FA984":n<=6?"#D49044":"#D8665A";
-              const sel = pain===n;
-              return (
-                <button key={n} onClick={()=>setPain(n)}
-                  style={{
-                    flex:"1 0 36px", height:44, borderRadius:8,
-                    border:`1px solid ${sel?color:"var(--ink-200)"}`,
-                    background: sel?color:"#fff",
-                    color: sel?"#fff":"var(--ink-700)",
-                    fontWeight:600,fontSize:14,cursor:"pointer",
-                    transition:"all .12s"
-                  }} className="mono">{n}</button>
-              );
-            })}
-          </div>
-          <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"var(--ink-500)",marginBottom:18}}>
-            <span>لا ألم</span><span>متوسط</span><span>لا يُحتمل</span>
-          </div>
-
-          <div className="label">المزاج اليوم</div>
-          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-            {[
-              {l:"أسوأ بكثير",c:"#D8665A"},
-              {l:"أسوأ",c:"#D49044"},
-              {l:"كما هو",c:"#8898A8"},
-              {l:"أفضل",c:"#7BBDE8"},
-              {l:"أفضل بكثير",c:"#3FA984"},
-            ].map((m,i)=>(
-              <button key={i} className="btn btn-secondary" onClick={()=>setMood(i)} style={{flex:"1 0 30%",justifyContent:"center",fontSize:12,borderColor:i===mood?m.c:"var(--ink-200)",background:i===mood?`${m.c}22`:"#fff",color:i===mood?m.c:"var(--ink-700)",fontWeight:i===mood?600:500}}>{m.l}</button>
-            ))}
-          </div>
-        </div>
-
-        {/* جلسة notes */}
-        <div className="card card-pad">
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
-            <div className="h3">ملاحظات الجلسة</div>
-            <div style={{display:"flex",gap:6}}>
-              <button className="btn btn-ghost" style={{fontSize:12}} onClick={()=>{
-                window.startDictation && window.startDictation({ onText: (t)=> setNotes(n=>n+"\n"+t) });
-              }}><I.Mic size={13}/> إملاء</button>
-              <button className="btn btn-ghost" style={{fontSize:12}} onClick={()=>{
-                setNotes(n=>n+"\n\nاقتراح ذكي: استمر في تمارين التقوية الوظيفية، مع التركيز على تحسين المدى الحركي وتقليل الألم عند الحركة. يُنصح بتكرار التقييم بعد 3 جلسات.");
-                if(window.showToast)window.showToast("تمت إضافة اقتراح ذكي","success");
-              }}><I.Sparkle size={13}/> اقتراح</button>
-            </div>
-          </div>
-          <textarea className="input" style={{height:200,padding:14,resize:"vertical",fontSize:13.5,lineHeight:1.55}} value={notes} onChange={e=>setNotes(e.target.value)}/>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:10,flexWrap:"wrap",gap:8}}>
-            <div className="muted" style={{fontSize:11.5}}>محفوظ تلقائيًا منذ 12 ث</div>
-            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-              {["علاج يدوي","تسخين","تحفيز كهربي","تقوية"].map(t=>(
-                <span key={t} className="pill tag-blue">{t}</span>
-              ))}
-              <button className="btn btn-ghost btn-icon" style={{padding:4}}><I.Plus size={12}/></button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* right aside */}
-      <div style={{display:"flex",flexDirection:"column",gap:18}}>
-        {/* progress tracker */}
-        <div className="card card-pad">
-          <div className="h3" style={{marginBottom:14}}>متابعة التقدّم</div>
-          <div style={{position:"relative",height:140}}>
-            <PainTrendChart/>
-          </div>
-          <div style={{display:"flex",justifyContent:"space-between",marginTop:10}}>
-            <div><div className="muted" style={{fontSize:11}}>ألم البداية</div><div className="mono" style={{fontWeight:600}}>7/10</div></div>
-            <div><div className="muted" style={{fontSize:11}}>اليوم</div><div className="mono" style={{fontWeight:600,color:"var(--green)"}}>{pain}/10</div></div>
-            <div><div className="muted" style={{fontSize:11}}>الهدف</div><div className="mono" style={{fontWeight:600}}>≤ 2/10</div></div>
-          </div>
-        </div>
-
-        {/* goals */}
-        <div className="card card-pad">
-          <div className="h3" style={{marginBottom:12}}>أهداف اليوم</div>
-          {goals.map((g,i)=>(
-            <label key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 10px",borderRadius:8,background:i%2===0?"var(--ink-50)":"transparent",fontSize:13,marginBottom:4}}>
-              <input type="checkbox" defaultChecked={g.done}/>
-              <span style={{flex:1,textDecoration:g.done?"line-through":"none",color:g.done?"var(--ink-500)":"var(--ink-900)"}}>{g.g}</span>
-            </label>
-          ))}
-        </div>
-
-        {/* signature */}
-        <div className="card card-pad">
-          <div className="h3" style={{marginBottom:6}}>المريض sign-off</div>
-          <div className="muted" style={{fontSize:12,marginBottom:12}}>مطلوب لإنهاء الجلسة وخصم الباقة.</div>
-          <div style={{
-            height:120,border:`1.5px dashed ${signed?"var(--green)":"var(--ink-300)"}`,
-            borderRadius:12,background:signed?"var(--green-bg)":"var(--ink-50)",
-            display:"flex",alignItems:"center",justifyContent:"center",position:"relative",
-            cursor:"pointer", transition:"all .15s"
-          }} onClick={()=>setSigned(!signed)}>
-            {signed ? (
-              <svg viewBox="0 0 240 80" width="180" height="60">
-                <path d="M10 50 C 30 20, 50 70, 70 40 S 110 10, 130 45 S 180 70, 210 30" fill="none" stroke="var(--ink-900)" strokeWidth="2" strokeLinecap="round"/>
-              </svg>
-            ) : (
-              <div style={{textAlign:"center",color:"var(--ink-500)"}}>
-                <I.Edit size={18} style={{marginBottom:6}}/>
-                <div style={{fontSize:12.5}}>اضغط للتوقيع أو مرّر للمريض</div>
-              </div>
-            )}
-          </div>
-          {signed && <div style={{display:"flex",alignItems:"center",gap:8,marginTop:10,fontSize:12,color:"var(--green)"}}><I.Check size={13}/> Signed بواسطة Hana M. · 10:32 AM</div>}
-
-          <button className="btn btn-blue" style={{width:"100%",justifyContent:"center",marginTop:14}} disabled={!signed} onClick={async ()=>{
-            try {
-              if (window.KineticData && p) {
-                const patientId = p.patient_id || p.id;
-                const nextNum = ((p.done || 0) + 1);
-                await window.KineticData.upsert("sessions", {
-                  session_id: "S-" + patientId + "-" + Date.now(),
-                  patient_id: patientId,
-                  therapist_id: window.ME && window.ME.match || null,
-                  date: new Date().toISOString().slice(0,10),
-                  pain_score: pain,
-                  session_notes: notes,
-                  session_number: nextNum,
-                });
-              }
-              if (window.showToast) window.showToast("تم إنهاء الجلسة وحفظ الملاحظات", "success");
-            } catch (e) {
-              console.warn("finish session persist failed", e);
-              if (window.showToast) window.showToast("تعذّر حفظ الجلسة", "error");
-            }
-          }}>
-            <I.Check size={14}/> إنهاء الجلسة
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function SessionTimer() {
-  const [seconds, setSeconds] = React.useState(32*60 + 14);
-  const [running, setRunning] = React.useState(true);
-  React.useEffect(()=>{
-    if (!running) return;
-    const id = setInterval(()=>setSeconds(s=>s+1), 1000);
-    return ()=>clearInterval(id);
-  },[running]);
-  const m = Math.floor(seconds/60);
-  const s = seconds%60;
-  return (
-    <div style={{textAlign:"right"}}>
-      <div className="mono" style={{fontSize:26,fontWeight:600,color:"var(--blue-700)",letterSpacing:"-.01em"}}>{String(m).padStart(2,"0")}:{String(s).padStart(2,"0")}</div>
-      <button className="btn btn-ghost" style={{fontSize:11,marginTop:4,padding:"3px 8px"}} onClick={()=>setRunning(!running)}>
-        {running ? "إيقاف مؤقت" : "استئناف"}
-      </button>
-    </div>
-  );
-}
-
 function PainTrendChart() {
   const data = DATA.sessions.slice().reverse().map((s,i) => ({ label: `S${i+1}`, v: 11 - (s.pain ?? s.pain_score ?? 0) }));
   return <AreaChart data={data} height={140} color="#3FA984" fill="rgba(63,169,132,.18)"/>;
@@ -3620,9 +3424,9 @@ function PatientBookingFlow({ onClose, onDone }) {
   const [step, setStep] = React.useState(1);
   const [picks, setPicks] = React.useState({
     reason: null,
-    therapist: "كريم صالح",
-    date: "الثلاثاء، 26 مايو",
-    time: "10:00",
+    therapist: null,
+    date: new Date().toISOString().slice(0, 10),
+    time: "",
   });
   const [confirming, setConfirming] = React.useState(false);
 
@@ -3698,9 +3502,9 @@ function PatientBookingFlow({ onClose, onDone }) {
 
               <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:10}}>
                 {[
-                  { id:"continue", l:"متابعة my plan",     sub:`${PATIENT_ME.remaining} Sessions left · انزلاق غضروفي L4–L5`, ic:<I.Heart size={18}/>, primary:true },
+                  { id:"continue", l:"متابعة خطتي",     sub:`${PATIENT_ME.remaining} جلسات متبقية${PATIENT_ME.diag&&PATIENT_ME.diag!=="—"?` · ${PATIENT_ME.diag}`:""}`, ic:<I.Heart size={18}/>, primary:true },
                   { id:"new",      l:"مشكلة جديدة",            sub:"شيء جديد يضايقك",                                  ic:<I.Plus size={18}/> },
-                  { id:"followup", l:"متابعة مع الطبيب", sub:"متابعة مع د. ياسمين عادل",                                   ic:<I.Stethoscope size={18}/> },
+                  { id:"followup", l:"متابعة مع الطبيب", sub:PATIENT_ME.doctor&&PATIENT_ME.doctor!=="—"?`متابعة مع ${PATIENT_ME.doctor}`:"متابعة مع طبيبك",                                   ic:<I.Stethoscope size={18}/> },
                   { id:"assess",   l:"تقييم أولي",   sub:"أول زيارة",                                                  ic:<I.Sparkle size={18}/> },
                 ].map(o=>(
                   <button key={o.id} onClick={()=>{setPicks({...picks,reason:o.id}); next();}} style={{
