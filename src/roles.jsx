@@ -50,23 +50,40 @@ function roleAllows(role, route){
 // ── Data scoping (reads window.ME, set by App) ─────────────────
 // These are DEFENCE-IN-DEPTH UX filters. They hide rows from a role's UI
 // but do NOT enforce access — real enforcement lives in Supabase RLS.
+//
+// `me.match` is the logged-in clinician's own name (set from the staff
+// record at sign-in, not a fixed profile). We match on name OR the
+// resolved therapist_id so the filter works for real production accounts,
+// not just the demo personas.
+function myName(){ const me = window.ME; return me ? (me.match || me.name || "") : ""; }
+// The DATA.therapists row id for the logged-in therapist (by name), so we
+// can also match patients/appointments linked via therapist_id.
+function myTherapistId(){
+  const nm = myName(); if (!nm) return null;
+  const t = (DATA.therapists || []).find(x => x.name === nm);
+  return t ? t.id : null;
+}
 function scopePatients(list){
   const me = window.ME;
   if (!me || me.scope==="all" || me.scope==="reception") return list;
-  if (me.scope==="doctor")    return list.filter(p=>p.dr===me.match);
-  if (me.scope==="therapist") return list.filter(p=>p.th===me.match);
+  const nm = myName();
+  if (me.scope==="doctor")    return list.filter(p=>p.dr===nm);
+  if (me.scope==="therapist") { const tid = myTherapistId();
+    return list.filter(p=>p.th===nm || (tid && p.therapist_id===tid)); }
   return list;
 }
 function scopeAppts(list){
   const me = window.ME;
   if (!me || me.scope==="all" || me.scope==="reception") return list;
-  if (me.scope==="doctor")    return list.filter(a=>a.dr===me.match);
-  if (me.scope==="therapist") return list.filter(a=>a.th===me.match);
+  const nm = myName();
+  if (me.scope==="doctor")    return list.filter(a=>a.dr===nm);
+  if (me.scope==="therapist") { const tid = myTherapistId();
+    return list.filter(a=>a.th===nm || (tid && a.therapist_id===tid)); }
   return list;
 }
 function scopeTherapists(list){
   const me = window.ME;
-  if (me && me.scope==="therapist") return list.filter(t=>t.name===me.match);
+  if (me && me.scope==="therapist") return list.filter(t=>t.name===myName());
   return list;
 }
 // Payments: gate by the caller's visible patient set. Doctor/therapist only
