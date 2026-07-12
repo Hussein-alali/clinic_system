@@ -98,6 +98,40 @@ function HistoricalImportPage() {
       return;
     }
 
+    // ── Preflight: verify auth before we touch the DB. ─────────
+    // Without a session, the Supabase client falls back to the anon
+    // key, `auth.uid()` in Postgres is null, `public.app_role()`
+    // returns null, and the RLS `admin/reception write patients`
+    // policy rejects the INSERT (code 42501). Fail fast with a
+    // clear message instead of a silent DB reject.
+    const sb = window.SB;
+    if (!sb) {
+      console.error("[import] save aborted — Supabase client not configured");
+      if (window.showToast) window.showToast("لم يتم تكوين قاعدة البيانات", "error");
+      return;
+    }
+    let session = null;
+    try { const { data } = await sb.auth.getSession(); session = data && data.session; }
+    catch (e) { console.error("[import] getSession threw", e); }
+    const authUser = session && session.user;
+    const role = authUser && (authUser.user_metadata && authUser.user_metadata.role) || "";
+    const accessToken = session && session.access_token;
+    console.info("[import] auth state before insert", {
+      hasSession:      !!session,
+      hasAccessToken:  !!accessToken,
+      userId:          authUser && authUser.id,
+      email:           authUser && authUser.email,
+      role:            role || "(missing user_metadata.role)",
+    });
+    if (!authUser) {
+      if (window.showToast) window.showToast("يجب تسجيل الدخول أولاً — RLS يمنع الحفظ", "error");
+      return;
+    }
+    if (role !== "admin" && role !== "receptionist") {
+      if (window.showToast) window.showToast(`دورك (${role || "غير محدد"}) لا يسمح بالإدخال — يجب أن تكون مدير أو استقبال`, "error");
+      return;
+    }
+
     // Fast dedup: warn if the same phone is already in memory.
     const phoneKey = normalizePhone(form.phone);
     if (phoneKey) {
@@ -137,11 +171,38 @@ function HistoricalImportPage() {
         remain: 0,
       };
 
+      console.info("[import] outbound patients payload", row);
       const res = window.KineticData ? await window.KineticData.upsert("patients", row) : null;
+      console.info("[import] upsert result", {
+        _ok:     res && res._ok,
+        _error:  res && res._error,
+        row:     res,
+      });
       if (!res || res._ok === false) {
         const msg = (res && res._error) || "تعذّر حفظ المريض في قاعدة البيانات";
+        console.error("[import] patient insert rejected by Postgres", { error: msg, payload: row });
         if (window.showToast) window.showToast(msg, "error");
         return;
+      }
+
+      // Verify by reading back directly from Postgres — no cache, no LS.
+      // If the row is missing here, an RLS policy silently swallowed the
+      // write and we should surface it instead of showing "saved".
+      try {
+        const fresh = window.KineticData ? await window.KineticData.list("patients") : [];
+        const found = Array.isArray(fresh) && fresh.find(p => p.patient_id === pid || p.id === pid);
+        console.info("[import] postgres readback", {
+          totalPatients: Array.isArray(fresh) ? fresh.length : 0,
+          foundNewRow:   !!found,
+          pid,
+        });
+        if (!found) {
+          console.error("[import] patient saved but not readable back from Postgres — likely RLS SELECT policy");
+          if (window.showToast) window.showToast("تم الإرسال لكن السجل غير مرئي — تحقق من صلاحيات RLS", "error");
+          return;
+        }
+      } catch (e) {
+        console.error("[import] readback failed", e);
       }
 
       // Save patient first, then upload + link every file by the new patient_id.

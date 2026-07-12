@@ -3726,12 +3726,6 @@ function App() {
     setTimeout(()=>setToast(null), 2400);
   }
 
-  // TEMPORARY: historical import page — standalone, before auth/nav.
-  if (importMode) {
-    const ImportPage = window.HistoricalImportPage;
-    return <>{ImportPage ? <ImportPage/> : null}{toast && <Toast msg={toast.msg} kind={toast.kind}/>}</>;
-  }
-
   if (publicBooking) return <PublicBookingScreen onBack={()=>setPublicBooking(false)} onDone={()=>{
     setPublicBooking(false);
     setToast({ msg:"Booking confirmed — واتساب sent.", kind:"success" });
@@ -3739,6 +3733,31 @@ function App() {
   }}/>;
 
   if (!user) return <><AuthScreen onLogin={handleLogin} onBookAsGuest={()=>setPublicBooking(true)}/>{toast && <Toast msg={toast.msg} kind={toast.kind}/>}</>;
+
+  // Historical import page (?import=1). Requires an authenticated
+  // admin or receptionist — RLS on `patients` rejects inserts from
+  // anyone else, so gate it here to fail fast with a clear message.
+  if (importMode) {
+    const ImportPage = window.HistoricalImportPage;
+    const role = (user && user.role) || "";
+    if (role !== "admin" && role !== "receptionist") {
+      return (
+        <div style={{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:"var(--ink-50)", padding:24 }}>
+          <div className="card card-pad" style={{ maxWidth:440, textAlign:"center" }}>
+            <div style={{ fontSize:34, marginBottom:10 }}>🔒</div>
+            <div className="h3" style={{ marginBottom:6 }}>لا تملك صلاحية الوصول</div>
+            <div className="muted" style={{ fontSize:13.5, marginBottom:16 }}>
+              صفحة الإدخال التاريخي متاحة للمدير أو موظف الاستقبال فقط. دورك الحالي: <strong>{role || "غير محدد"}</strong>.
+            </div>
+            <button className="btn btn-blue" onClick={()=>{ try { const u = new URL(window.location.href); u.searchParams.delete("import"); window.location.href = u.pathname + (u.search||"") + u.hash; } catch { window.location.href = "./"; } }}>
+              عودة للتطبيق
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return <>{ImportPage ? <ImportPage/> : null}{toast && <Toast msg={toast.msg} kind={toast.kind}/>}</>;
+  }
 
   // Patients get a totally different shell — focused on their care.
   // Set the identity BEFORE the early return so a page refresh (which
