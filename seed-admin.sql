@@ -4,17 +4,17 @@
 -- Run this ONCE in the Supabase SQL editor, AFTER running
 -- supabase-schema.sql.
 --
---   Email:    amir@kinetic.eg
---   Password: Amir@2026!     ←  CHANGE THIS after first login
+--   Email:    amr@clinic.eg
+--   Password: Amr@2026!     ←  CHANGE THIS after first login
 --                                (Supabase Dashboard → Authentication →
---                                 Users → amir@kinetic.eg → Reset password)
+--                                 Users → amr@clinic.eg → Reset password)
 --
 -- What it does:
---   1. Creates the Supabase Auth user with role "admin" in
---      user_metadata (this is what the app's RLS policies and the
---      login screen read).
+--   1. Creates the Supabase Auth user (role "admin" is kept in
+--      user_metadata for display, but permissions come from staff).
 --   2. Creates the matching row in the `staff` table, linked via
---      auth_uid, so the app can resolve the display name and role.
+--      auth_uid. This row is what public.app_role() and the app read
+--      to authorize the user — it MUST exist for the account to work.
 --
 -- Safe to re-run: it skips the auth user if the email already exists
 -- and upserts the staff row.
@@ -26,7 +26,7 @@ do $$
 declare
   uid uuid;
 begin
-  select id into uid from auth.users where email = 'amir@kinetic.eg';
+  select id into uid from auth.users where email = 'amr@clinic.eg';
 
   if uid is null then
     uid := gen_random_uuid();
@@ -53,205 +53,15 @@ begin
       now(),
       '{"provider":"email","providers":["email"]}'::jsonb,
       '{"role":"admin","name":"أمير"}'::jsonb,
-      now(), now()
-    );react-dom.development.js:29905 Download the React DevTools for a better development experience: https://reactjs.org/link/react-devtools
-transformScriptTags.ts:271 You are using the in-browser Babel transformer. Be sure to precompile your scripts for production - https://babeljs.io/docs/setup/
-(anonymous) @ transformScriptTags.ts:271
-supabase-js@2:13  POST https://yjtyvtyqyiqnqdctxpyz.supabase.co/rest/v1/clinic_settings 400 (Bad Request)
-(anonymous) @ supabase-js@2:13
-(anonymous) @ supabase-js@2:13
-await in (anonymous)
-(anonymous) @ supabase-js@2:7
-then @ supabase-js@2:7
-supabase-js@2:14  POST https://yjtyvtyqyiqnqdctxpyz.supabase.co/auth/v1/signup 400 (Bad Request)
-(anonymous) @ supabase-js@2:14
-Lr @ supabase-js@2:14
-Y @ supabase-js@2:14
-signUp @ supabase-js@2:16
-(anonymous) @ supabase.jsx:336
-(anonymous) @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-asyncGeneratorStep @ screens2.jsx:2
-_next @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-_adminCreateUser @ supabase.jsx:351
-adminCreateUser @ supabase.jsx:313
-(anonymous) @ screens2.jsx:3133
-(anonymous) @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-asyncGeneratorStep @ screens2.jsx:2
-_next @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-_submit @ screens2.jsx:3139
-submit @ screens2.jsx:3131
-callCallback @ react-dom.development.js:4151
-invokeGuardedCallbackDev @ react-dom.development.js:4200
-invokeGuardedCallback @ react-dom.development.js:4264
-invokeGuardedCallbackAndCatchFirstError @ react-dom.development.js:4278
-executeDispatch @ react-dom.development.js:9051
-processDispatchQueueItemsInOrder @ react-dom.development.js:9083
-processDispatchQueue @ react-dom.development.js:9096
-dispatchEventsForPlugins @ react-dom.development.js:9107
-(anonymous) @ react-dom.development.js:9298
-batchedUpdates$1 @ react-dom.development.js:26189
-batchedUpdates @ react-dom.development.js:3978
-dispatchEventForPluginEventSystem @ react-dom.development.js:9297
-dispatchEventWithEnableCapturePhaseSelectiveHydrationWithoutDiscreteEventReplay @ react-dom.development.js:6475
-dispatchEvent @ react-dom.development.js:6467
-dispatchDiscreteEvent @ react-dom.development.js:6440
-supabase-js@2:16 GoTrueClient@kinetic-provision:1 (2.110.2) 2026-07-12T00:21:35.887Z Multiple GoTrueClient instances detected in the same browser context. It is not an error, but this should be avoided as it may produce undefined behavior when used concurrently under the same storage key.
-e @ supabase-js@2:16
-Di @ supabase-js@2:17
-_initSupabaseAuthClient @ supabase-js@2:17
-Oi @ supabase-js@2:17
-ki @ supabase-js@2:17
-(anonymous) @ supabase.jsx:333
-(anonymous) @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-asyncGeneratorStep @ screens2.jsx:2
-_next @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-adminCreateUser @ supabase.jsx:313
-(anonymous) @ screens2.jsx:3133
-(anonymous) @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-asyncGeneratorStep @ screens2.jsx:2
-_next @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-_submit @ screens2.jsx:3139
-submit @ screens2.jsx:3131
-callCallback @ react-dom.development.js:4151
-invokeGuardedCallbackDev @ react-dom.development.js:4200
-invokeGuardedCallback @ react-dom.development.js:4264
-invokeGuardedCallbackAndCatchFirstError @ react-dom.development.js:4278
-executeDispatch @ react-dom.development.js:9051
-processDispatchQueueItemsInOrder @ react-dom.development.js:9083
-processDispatchQueue @ react-dom.development.js:9096
-dispatchEventsForPlugins @ react-dom.development.js:9107
-(anonymous) @ react-dom.development.js:9298
-batchedUpdates$1 @ react-dom.development.js:26189
-batchedUpdates @ react-dom.development.js:3978
-dispatchEventForPluginEventSystem @ react-dom.development.js:9297
-dispatchEventWithEnableCapturePhaseSelectiveHydrationWithoutDiscreteEventReplay @ react-dom.development.js:6475
-dispatchEvent @ react-dom.development.js:6467
-dispatchDiscreteEvent @ react-dom.development.js:6440
-supabase-js@2:14  POST https://yjtyvtyqyiqnqdctxpyz.supabase.co/auth/v1/signup 400 (Bad Request)
-(anonymous) @ supabase-js@2:14
-Lr @ supabase-js@2:14
-Y @ supabase-js@2:14
-signUp @ supabase-js@2:16
-(anonymous) @ supabase.jsx:336
-(anonymous) @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-asyncGeneratorStep @ screens2.jsx:2
-_next @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-adminCreateUser @ supabase.jsx:313
-(anonymous) @ screens2.jsx:3133
-(anonymous) @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-asyncGeneratorStep @ screens2.jsx:2
-_next @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-_submit @ screens2.jsx:3139
-submit @ screens2.jsx:3131
-callCallback @ react-dom.development.js:4151
-invokeGuardedCallbackDev @ react-dom.development.js:4200
-invokeGuardedCallback @ react-dom.development.js:4264
-invokeGuardedCallbackAndCatchFirstError @ react-dom.development.js:4278
-executeDispatch @ react-dom.development.js:9051
-processDispatchQueueItemsInOrder @ react-dom.development.js:9083
-processDispatchQueue @ react-dom.development.js:9096
-dispatchEventsForPlugins @ react-dom.development.js:9107
-(anonymous) @ react-dom.development.js:9298
-batchedUpdates$1 @ react-dom.development.js:26189
-batchedUpdates @ react-dom.development.js:3978
-dispatchEventForPluginEventSystem @ react-dom.development.js:9297
-dispatchEventWithEnableCapturePhaseSelectiveHydrationWithoutDiscreteEventReplay @ react-dom.development.js:6475
-dispatchEvent @ react-dom.development.js:6467
-dispatchDiscreteEvent @ react-dom.development.js:6440
-supabase-js@2:16 GoTrueClient@kinetic-provision:2 (2.110.2) 2026-07-12T00:21:54.541Z Multiple GoTrueClient instances detected in the same browser context. It is not an error, but this should be avoided as it may produce undefined behavior when used concurrently under the same storage key.
-e @ supabase-js@2:16
-Di @ supabase-js@2:17
-_initSupabaseAuthClient @ supabase-js@2:17
-Oi @ supabase-js@2:17
-ki @ supabase-js@2:17
-(anonymous) @ supabase.jsx:333
-(anonymous) @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-asyncGeneratorStep @ screens2.jsx:2
-_next @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-adminCreateUser @ supabase.jsx:313
-(anonymous) @ screens2.jsx:3133
-(anonymous) @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-asyncGeneratorStep @ screens2.jsx:2
-_next @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-_submit @ screens2.jsx:3139
-submit @ screens2.jsx:3131
-callCallback @ react-dom.development.js:4151
-invokeGuardedCallbackDev @ react-dom.development.js:4200
-invokeGuardedCallback @ react-dom.development.js:4264
-invokeGuardedCallbackAndCatchFirstError @ react-dom.development.js:4278
-executeDispatch @ react-dom.development.js:9051
-processDispatchQueueItemsInOrder @ react-dom.development.js:9083
-processDispatchQueue @ react-dom.development.js:9096
-dispatchEventsForPlugins @ react-dom.development.js:9107
-(anonymous) @ react-dom.development.js:9298
-batchedUpdates$1 @ react-dom.development.js:26189
-batchedUpdates @ react-dom.development.js:3978
-dispatchEventForPluginEventSystem @ react-dom.development.js:9297
-dispatchEventWithEnableCapturePhaseSelectiveHydrationWithoutDiscreteEventReplay @ react-dom.development.js:6475
-dispatchEvent @ react-dom.development.js:6467
-dispatchDiscreteEvent @ react-dom.development.js:6440
-supabase-js@2:14  POST https://yjtyvtyqyiqnqdctxpyz.supabase.co/auth/v1/signup 429 (Too Many Requests)
-(anonymous) @ supabase-js@2:14
-Lr @ supabase-js@2:14
-Y @ supabase-js@2:14
-signUp @ supabase-js@2:16
-(anonymous) @ supabase.jsx:336
-(anonymous) @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-asyncGeneratorStep @ screens2.jsx:2
-_next @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-adminCreateUser @ supabase.jsx:313
-(anonymous) @ screens2.jsx:3133
-(anonymous) @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-asyncGeneratorStep @ screens2.jsx:2
-_next @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-(anonymous) @ screens2.jsx:2
-_submit @ screens2.jsx:3139
-submit @ screens2.jsx:3131
-callCallback @ react-dom.development.js:4151
-invokeGuardedCallbackDev @ react-dom.development.js:4200
-invokeGuardedCallback @ react-dom.development.js:4264
-invokeGuardedCallbackAndCatchFirstError @ react-dom.development.js:4278
-executeDispatch @ react-dom.development.js:9051
-processDispatchQueueItemsInOrder @ react-dom.development.js:9083
-processDispatchQueue @ react-dom.development.js:9096
-dispatchEventsForPlugins @ react-dom.development.js:9107
-(anonymous) @ react-dom.development.js:9298
-batchedUpdates$1 @ react-dom.development.js:26189
-batchedUpdates @ react-dom.development.js:3978
-dispatchEventForPluginEventSystem @ react-dom.development.js:9297
-dispatchEventWithEnableCapturePhaseSelectiveHydrationWithoutDiscreteEventReplay @ react-dom.development.js:6475
-dispatchEvent @ react-dom.development.js:6467
-dispatchDiscreteEvent @ react-dom.development.js:6440
+      now(), now(),
+      '', '',
+      '', '', '',
+      '', '',
+      '',
+      false
+    );
 
+    insert into auth.identities (
       id, user_id, provider_id, identity_data, provider,
       last_sign_in_at, created_at, updated_at
     ) values (
@@ -279,7 +89,7 @@ dispatchDiscreteEvent @ react-dom.development.js:6440
     email_confirmed_at         = coalesce(email_confirmed_at, now()),
     raw_user_meta_data         = coalesce(raw_user_meta_data, '{}'::jsonb)
                                    || '{"role":"admin","name":"أمير"}'::jsonb
-  where email = 'amir@kinetic.eg';
+  where email = 'amr@clinic.eg';
 
   insert into staff (staff_id, name, role, email, auth_uid)
   values ('ST-AMR', 'عمرو', 'admin', 'amr@clinic.eg', uid)

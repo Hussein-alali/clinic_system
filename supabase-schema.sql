@@ -9,16 +9,22 @@
 -- ============================================================
 
 -- ── Role helper ──────────────────────────────────────────────
--- Standard Supabase JWTs put 'authenticated' in the top-level role claim;
--- the clinic role (admin/receptionist/doctor/therapist/patient) is stored
--- in user_metadata. All policies below read it through this helper.
+-- The clinic role (admin/receptionist/doctor/therapist) is read from the
+-- `staff` table by auth.uid() — NOT from the JWT's user_metadata, which
+-- any signed-in user can rewrite for themselves via auth.updateUser().
+-- SECURITY DEFINER so the lookup bypasses staff's own RLS (no recursion).
+-- Anonymous requests: auth.uid() is null → role is null → every staff
+-- policy below evaluates to false.
+-- NOTE: the staff table is created further down this file; plpgsql only
+-- resolves the table reference at call time, so defining the function
+-- first is safe on a fresh database.
 create or replace function public.app_role() returns text
-language sql stable as $$
-  select coalesce(
-    auth.jwt() -> 'user_metadata' ->> 'role',
-    auth.jwt() ->> 'role'
-  )
-$$;
+language plpgsql stable security definer
+set search_path = public
+as $$
+begin
+  return (select s.role from staff s where s.auth_uid = auth.uid() limit 1);
+end $$;
 
 -- ── Clinic branding (singleton row) ─────────────────────────
 create table if not exists clinic_settings (
@@ -266,8 +272,12 @@ create table if not exists patient_files (
   file_name    text not null,
   file_type    text,
   file_url     text,
+  uploaded_by  uuid,                        -- auth.uid() of the uploader
   uploaded_at  timestamptz default now()
 );
+-- Databases created before uploaded_by existed (the RLS delete policy
+-- below references it).
+alter table patient_files add column if not exists uploaded_by uuid;
 create index if not exists patient_files_patient_id_idx on patient_files(patient_id);
 
 -- ── Audit log (PRD Section 8) ───────────────────────────────
@@ -337,18 +347,30 @@ create policy "admin write branches" on branches for all using (
   public.app_role() = 'admin'
 );
 
--- Helper: current role from JWT ('admin' | 'receptionist' | 'doctor' | 'therapist' | 'patient')
--- (public.app_role()) is set by Supabase Auth via user_metadata.role or a trigger.
+-- Helper: public.app_role() (defined at the top of this file) returns the
+-- current user's role read from the staff table in PostgreSQL
+-- ('admin' | 'receptionist' | 'doctor' | 'therapist'), or null for anon.
 
 -- ── patients ─────────────────────────────────────────────────
 drop policy if exists "staff read patients" on patients;
 create policy "staff read patients" on patients for select using (
   public.app_role() in ('admin','receptionist','doctor','therapist')
 );
+-- Every staff role can register + update patients; only admin/reception
+-- can delete.
 drop policy if exists "admin/reception write patients" on patients;
-create policy "admin/reception write patients" on patients for all using (
-  public.app_role() in ('admin','receptionist')
+drop policy if exists "staff insert patients" on patients;
+create policy "staff insert patients" on patients for insert with check (
+  public.app_role() in ('admin','receptionist','doctor','therapist')
+);
+drop policy if exists "staff update patients" on patients;
+create policy "staff update patients" on patients for update using (
+  public.app_role() in ('admin','receptionist','doctor','therapist')
 ) with check (
+  public.app_role() in ('admin','receptionist','doctor','therapist')
+);
+drop policy if exists "admin/reception delete patients" on patients;
+create policy "admin/reception delete patients" on patients for delete using (
   public.app_role() in ('admin','receptionist')
 );
 
@@ -473,11 +495,24 @@ drop policy if exists "staff read patient_files" on patient_files;
 create policy "staff read patient_files" on patient_files for select using (
   public.app_role() in ('admin','receptionist','doctor','therapist')
 );
+-- Every staff role can attach documents to a patient; uploaders can
+-- delete their own rows (compensating rollback when a storage upload
+-- succeeds but the metadata insert fails); admin/reception can manage all.
 drop policy if exists "admin/reception write patient_files" on patient_files;
-create policy "admin/reception write patient_files" on patient_files for all using (
+drop policy if exists "staff insert patient_files" on patient_files;
+create policy "staff insert patient_files" on patient_files for insert with check (
+  public.app_role() in ('admin','receptionist','doctor','therapist')
+);
+drop policy if exists "admin/reception update patient_files" on patient_files;
+create policy "admin/reception update patient_files" on patient_files for update using (
   public.app_role() in ('admin','receptionist')
 ) with check (
   public.app_role() in ('admin','receptionist')
+);
+drop policy if exists "staff delete patient_files" on patient_files;
+create policy "staff delete patient_files" on patient_files for delete using (
+  public.app_role() in ('admin','receptionist')
+  or uploaded_by = auth.uid()
 );
 
 -- ── audit_events ─────────────────────────────────────────────
@@ -717,13 +752,31 @@ create policy "staff read patient files bucket" on storage.objects for select us
   bucket_id = 'patient-files'
   and public.app_role() in ('admin','receptionist','doctor','therapist')
 );
+-- Every staff role can upload patient documents; uploaders can remove
+-- their own objects (upload rollback) — storage sets owner/owner_id to
+-- auth.uid() on upload; admin/reception can manage all.
 drop policy if exists "admin/reception write patient files bucket" on storage.objects;
-create policy "admin/reception write patient files bucket" on storage.objects for all using (
+drop policy if exists "staff upload patient files bucket" on storage.objects;
+create policy "staff upload patient files bucket" on storage.objects for insert with check (
+  bucket_id = 'patient-files'
+  and public.app_role() in ('admin','receptionist','doctor','therapist')
+);
+drop policy if exists "admin/reception update patient files bucket" on storage.objects;
+create policy "admin/reception update patient files bucket" on storage.objects for update using (
   bucket_id = 'patient-files'
   and public.app_role() in ('admin','receptionist')
 ) with check (
   bucket_id = 'patient-files'
   and public.app_role() in ('admin','receptionist')
+);
+drop policy if exists "staff delete patient files bucket" on storage.objects;
+create policy "staff delete patient files bucket" on storage.objects for delete using (
+  bucket_id = 'patient-files'
+  and (
+    public.app_role() in ('admin','receptionist')
+    or owner = auth.uid()
+    or owner_id = auth.uid()::text
+  )
 );
 
 

@@ -289,11 +289,14 @@ async function signInEmail(email, password) {
   let role = null, staffRow = null;
   const uid = data.user && data.user.id;
   const meta = (data.user && data.user.user_metadata) || {};
-  role = meta.role || null;
   if (uid) {
     const q = await sb.from("staff").select("*").eq("auth_uid", uid).maybeSingle();
-    if (!q.error && q.data) { staffRow = q.data; role = role || q.data.role; }
+    if (!q.error && q.data) { staffRow = q.data; role = q.data.role || null; }
   }
+  // The staff table in PostgreSQL is authoritative (it's what RLS's
+  // app_role() reads); user_metadata is only a display fallback for
+  // accounts whose staff row hasn't been provisioned yet.
+  role = role || meta.role || null;
   return { ok: true, session: data.session, user: data.user, role, staff: staffRow };
 }
 
@@ -315,6 +318,64 @@ async function getSession() {
   if (!sb) return null;
   const { data } = await sb.auth.getSession();
   return data.session || null;
+}
+
+// ── Verified staff identity (server-side truth) ───────────────
+// Single source of truth for permission checks: the session comes from
+// Supabase Auth (revalidated server-side via getUser) and the role is
+// read from the `staff` table in PostgreSQL by auth_uid. NEVER derived
+// from localStorage, sessionStorage, or frontend state — those are
+// forgeable and are UI hints only. Mirrors public.app_role() in RLS.
+// Returns:
+//   { ok:true,  session, user, role, staff }
+//   { ok:false, reason:'no-database'|'no-session'|'invalid-session'
+//              |'staff-lookup-failed'|'no-staff-role'|'role-not-staff',
+//     error, role? }
+const STAFF_ROLES = ["admin", "receptionist", "doctor", "therapist"];
+async function getAuthStaff() {
+  if (!sb) return { ok: false, reason: "no-database", error: "لم يتم تكوين قاعدة البيانات" };
+
+  let session = null;
+  try {
+    const { data, error } = await sb.auth.getSession();
+    if (error) throw error;
+    session = data && data.session;
+  } catch (e) {
+    return { ok: false, reason: "no-session", error: e.message || String(e) };
+  }
+  if (!session || !session.user) {
+    return { ok: false, reason: "no-session", error: "لا توجد جلسة مسجّلة" };
+  }
+
+  // Revalidate against the Auth server — a locally cached but revoked or
+  // tampered session must not pass.
+  let user = null;
+  try {
+    const { data, error } = await sb.auth.getUser();
+    if (error || !data || !data.user) {
+      return { ok: false, reason: "invalid-session", error: (error && error.message) || "الجلسة غير صالحة" };
+    }
+    user = data.user;
+  } catch (e) {
+    return { ok: false, reason: "invalid-session", error: e.message || String(e) };
+  }
+
+  // Role from PostgreSQL — the same row RLS's app_role() reads.
+  const q = await sb.from("staff").select("staff_id,name,role,email").eq("auth_uid", user.id).maybeSingle();
+  if (q.error) {
+    return { ok: false, reason: "staff-lookup-failed", session, user,
+             error: q.error.message || "تعذّرت قراءة سجل الموظف" };
+  }
+  if (!q.data || !q.data.role) {
+    return { ok: false, reason: "no-staff-role", session, user,
+             error: "لا يوجد سجل موظف مرتبط بهذا الحساب في قاعدة البيانات" };
+  }
+  const role = String(q.data.role).trim();
+  if (!STAFF_ROLES.includes(role)) {
+    return { ok: false, reason: "role-not-staff", session, user, role, staff: q.data,
+             error: `الدور «${role}» ليس دور موظف` };
+  }
+  return { ok: true, session, user, role, staff: q.data };
 }
 
 // ── Admin user management (PRD 4.3) ───────────────────────────
@@ -692,8 +753,12 @@ async function upsertRow(name, row) {
       const { error } = await sb.from(cfg.key).upsert(dbRow, { onConflict: cfg.pk });
       if (error) {
         __ok = false;
-        __error = error.message || String(error);
-        console.warn(`upsertRow ${name} failed`, __error);
+        // Keep the FULL PostgreSQL error (code + message + details + hint)
+        // so callers can show exactly why the write was rejected — e.g.
+        // 42501 is an RLS policy violation.
+        __error = [error.code, error.message, error.details, error.hint]
+          .filter(Boolean).join(" · ") || String(error);
+        console.warn(`upsertRow ${name} failed`, { table: cfg.key, op: "UPSERT (INSERT ON CONFLICT UPDATE)", error });
       }
     }
   } else {
@@ -2365,7 +2430,7 @@ Object.assign(window, {
   loadClinic, saveClinic,
   loadSections, addSection, updateSection, removeSection,
   loadBranches, addBranch, updateBranch, setActiveBranch, removeBranch,
-  signInEmail, signOut, getSession, onAuthChange,
+  signInEmail, signOut, getSession, getAuthStaff, STAFF_ROLES, onAuthChange,
   adminCreateUser, sendPasswordReset, updateOwnPassword, updateOwnProfile, updateStaffMember,
   startDictation, printHTML, escHtml,
   KineticData, QuickPay, TxMethods, InvoicesAPI, PaymentReceipts, Templates, TplCategories,
