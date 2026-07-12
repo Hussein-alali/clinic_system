@@ -74,14 +74,42 @@ async function loadClinic() {
   return cached;
 }
 
+// Columns that actually exist on `clinic_settings`. Anything the form
+// adds outside this list is UI-only and must not be sent to PostgREST —
+// unknown columns 400 the upsert, which is the bug that made saves
+// appear successful but revert on reload.
+const CLINIC_COLS = [
+  "id","name","subtitle","logo","primary_color","branch","phone","email",
+  "address","tax_id","hours","website","currency","timezone",
+  "appointment_duration","updated_at",
+];
+
 async function saveClinic(patch) {
   const next = { ...(window.CLINIC || DEFAULT_CLINIC), ...patch, updated_at: new Date().toISOString() };
+
+  // Whitelist projection so PostgREST never sees a stray column.
+  const dbRow = { id: 1 };
+  for (const k of CLINIC_COLS) if (next[k] !== undefined) dbRow[k] = next[k];
+
+  if (sb) {
+    const { error } = await sb.from("clinic_settings").upsert(dbRow, { onConflict: "id" });
+    if (error) {
+      // Surface the real DB error to the caller so the UI can show it
+      // and the toast isn't a lie. Keep in-memory + LS untouched on
+      // failure — no partial write.
+      console.warn("saveClinic upsert failed", error);
+      throw new Error(error.message || "تعذّر حفظ بيانات العيادة");
+    }
+    // Re-read authoritative row so the client mirrors exactly what the
+    // DB persisted (server-side defaults, updated_at trigger, etc.).
+    try {
+      const { data } = await sb.from("clinic_settings").select("*").eq("id", 1).single();
+      if (data) Object.assign(next, data);
+    } catch (_) { /* non-fatal: keep the optimistic merge */ }
+  }
+
   window.CLINIC = next;
   writeLS(LS_CLINIC, next);
-  if (sb) {
-    // Upsert on singleton row id=1
-    await sb.from("clinic_settings").upsert({ id: 1, ...next });
-  }
   window.dispatchEvent(new CustomEvent("kinetic:clinic-updated", { detail: next }));
   return next;
 }
@@ -310,26 +338,91 @@ function nextStaffId() {
   return "U-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
 
-async function adminCreateUser({ email, password, name, role }) {
+// Map machine error codes from the Edge Function (or raw GoTrue text)
+// onto friendly Arabic messages. Never expose the raw Supabase error to
+// the toast.
+function __friendlyAuthError(code, fallback) {
+  const table = {
+    email_exists:        "هذا البريد مستخدم بالفعل",
+    weak_password:       "كلمة المرور ضعيفة — 6 أحرف على الأقل، ويفضّل مزيج أرقام وحروف",
+    invalid_email:       "بريد إلكتروني غير صحيح",
+    invalid_role:        "الدور المحدد غير صالح",
+    missing_name:        "أدخل الاسم الكامل",
+    forbidden:           "لا تملك صلاحية إنشاء المستخدمين — تحتاج دور «مدير»",
+    missing_token:       "انتهت الجلسة — سجّل الدخول من جديد",
+    invalid_token:       "انتهت الجلسة — سجّل الدخول من جديد",
+    rate_limited:        "تم تجاوز حد إنشاء الحسابات لهذه الدقيقة — جرّب بعد قليل",
+    server_misconfigured:"إعدادات الخادم غير مكتملة — تواصل مع الدعم",
+    staff_insert_failed: "تم إنشاء الحساب لكن فشل حفظه في جدول الموظفين",
+    method_not_allowed:  "طلب غير صالح",
+  };
+  if (code && table[code]) return table[code];
+  // Common raw GoTrue error phrases.
+  const t = String(fallback || "").toLowerCase();
+  if (t.includes("rate limit"))       return table.rate_limited;
+  if (t.includes("already registered")|| t.includes("duplicate")) return table.email_exists;
+  if (t.includes("password"))         return table.weak_password;
+  if (t.includes("invalid email"))    return table.invalid_email;
+  return fallback || "تعذّر إنشاء الحساب";
+}
+
+async function adminCreateUser({ email, password, name, role, phone }) {
   email = (email || "").trim().toLowerCase();
   const roleSlug = ROLE_SLUGS.includes(role) ? role : "receptionist";
   const displayName = (name || "").trim() || email.split("@")[0];
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok: false, error: "بريد إلكتروني غير صحيح" };
-  if (!password || password.length < 6) return { ok: false, error: "كلمة المرور 6 أحرف على الأقل" };
-
-  const staffId = nextStaffId();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok: false, error: __friendlyAuthError("invalid_email") };
+  if (!password || password.length < 6)          return { ok: false, error: __friendlyAuthError("weak_password") };
 
   // Demo / offline: create a local staff row only (no auth backend).
   if (!sb) {
-    await upsertRow("staff", { staff_id: staffId, name: displayName, email, role: roleSlug, phone: null, auth_uid: null });
+    const staffId = nextStaffId();
+    await upsertRow("staff", {
+      staff_id: staffId, name: displayName, email, role: roleSlug,
+      phone: phone || null, auth_uid: null, status: "active",
+      created_at: new Date().toISOString(),
+    });
     return { ok: true, demo: true };
   }
+
+  // ── Preferred path: Edge Function using service_role. ──
+  // This is the ONLY path that avoids the anon signUp email rate limit
+  // and creates the account already email-confirmed. If the function
+  // isn't deployed we fall through to the legacy signUp below.
+  try {
+    const { data, error } = await sb.functions.invoke("admin-create-user", {
+      body: { email, password, name: displayName, role: roleSlug, phone: phone || null },
+    });
+    if (!error && data && data.ok) {
+      window.dispatchEvent(new CustomEvent("kinetic:data-updated", { detail: { table: "staff" } }));
+      return { ok: true, uid: data.uid };
+    }
+    // If the function returned a structured failure, surface it verbatim.
+    if (data && data.ok === false) {
+      return { ok: false, error: __friendlyAuthError(data.error, data.detail) };
+    }
+    // Only "function not found" (404 / FunctionsFetchError) should trip
+    // the fallback — every other error is authoritative.
+    const msg = String((error && (error.message || error.name)) || "").toLowerCase();
+    const missing = msg.includes("not found") || msg.includes("failed to fetch") ||
+                    msg.includes("functionsfetch") || msg.includes("not deployed");
+    if (!missing) return { ok: false, error: __friendlyAuthError(null, error && error.message) };
+    console.info("admin-create-user edge function not deployed — falling back to signUp");
+  } catch (e) {
+    console.info("edge function unavailable, using signUp fallback", e);
+  }
+
+  // ── Fallback path: anon signUp on a secondary client. ──
+  // This is what the codebase used before the edge function existed.
+  // Downsides that the operator must accept when using this path:
+  //   1. Supabase project MUST have "Confirm email" OFF, or the user
+  //      won't be able to log in until they click the email link.
+  //   2. Subject to GoTrue rate limits (a handful of signups per hour
+  //      per SMTP config) — that's what caused the earlier "email rate
+  //      limit exceeded" errors.
   if (!window.supabase || !window.supabase.createClient) return { ok: false, error: "Supabase غير محمّل" };
 
   let uid = null, needsConfirm = false;
   try {
-    // Secondary client: its own (non-persisted) storage so signUp does not
-    // clobber the admin's session.
     const tmp = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       auth: { persistSession: false, autoRefreshToken: false, storageKey: "kinetic-provision" },
     });
@@ -337,16 +430,22 @@ async function adminCreateUser({ email, password, name, role }) {
       email, password,
       options: { data: { role: roleSlug, name: displayName } },
     });
-    if (error) return { ok: false, error: error.message };
+    if (error) return { ok: false, error: __friendlyAuthError(null, error.message) };
     uid = (data.user && data.user.id) || null;
-    needsConfirm = !data.session; // no session returned ⇒ email confirmation required
-    // Local scope only: never revoke the new user's server-side tokens.
+    needsConfirm = !data.session;
     try { await tmp.auth.signOut({ scope: "local" }); } catch {}
   } catch (e) {
-    return { ok: false, error: e.message || String(e) };
+    return { ok: false, error: __friendlyAuthError(null, e.message || String(e)) };
   }
 
-  await upsertRow("staff", { staff_id: staffId, name: displayName, email, role: roleSlug, phone: null, auth_uid: uid });
+  const staffId = nextStaffId();
+  await upsertRow("staff", {
+    staff_id: staffId, name: displayName, email, role: roleSlug,
+    phone: phone || null, auth_uid: uid, status: "active",
+    created_by: (window.ME && window.ME.id) || null,
+    created_at: new Date().toISOString(),
+  });
+  window.dispatchEvent(new CustomEvent("kinetic:data-updated", { detail: { table: "staff" } }));
   return { ok: true, needsConfirm, uid };
 }
 

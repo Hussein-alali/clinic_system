@@ -3281,39 +3281,75 @@ function EditProfileModal({ onClose }) {
 
 // ── Admin: Clinic details (name, contact, tax id) ────────────
 function ClinicDetailsPanel() {
-  const seed = window.CLINIC || {};
-  // Sample values only in demo; production starts blank so the admin enters
-  // the clinic's real identity (persisted to clinic_settings).
-  const d = window.IS_DEMO ? {
+  // Demo seed only; production starts blank so the admin enters the real
+  // clinic identity (persisted authoritatively in clinic_settings).
+  const demoSeed = window.IS_DEMO ? {
     name:"كينيتك للعلاج الطبيعي", branch:"مصر الجديدة", phone:"+20 2 2638 1100",
     email:"hello@kinetic.eg", address:"14 ش صلاح سالم, مصر الجديدة، القاهرة",
     tax_id:"514-203-091", hours:"الأحد–الخميس 08:00 – 20:00",
   } : {};
-  const [form, setForm] = React.useState({
-    name: seed.name || d.name || "",
-    branch: seed.branch || d.branch || "",
-    phone: seed.phone || d.phone || "",
-    email: seed.email || d.email || "",
-    address: seed.address || d.address || "",
-    tax_id: seed.tax_id || d.tax_id || "",
-    hours: seed.hours || d.hours || "",
+  const seedFromForm = (src) => ({
+    name: src.name || demoSeed.name || "",
+    branch: src.branch || demoSeed.branch || "",
+    phone: src.phone || demoSeed.phone || "",
+    email: src.email || demoSeed.email || "",
+    address: src.address || demoSeed.address || "",
+    tax_id: src.tax_id || demoSeed.tax_id || "",
+    hours: src.hours || demoSeed.hours || "",
+    website: src.website || "",
+    currency: src.currency || "EGP",
+    timezone: src.timezone || "Africa/Cairo",
+    appointment_duration: src.appointment_duration != null ? String(src.appointment_duration) : "30",
   });
+  const [form, setForm] = React.useState(() => seedFromForm(window.CLINIC || {}));
   const [saving, setSaving] = React.useState(false);
+  const [loading, setLoading] = React.useState(true);
+
+  // Fresh-fetch from DB on mount so what's rendered is what's persisted —
+  // this is the fix for "settings appear saved then revert on refresh".
+  React.useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        if (window.loadClinic) {
+          const fresh = await window.loadClinic();
+          if (alive && fresh) setForm(seedFromForm(fresh));
+        }
+      } catch (e) {
+        console.warn("clinic reload failed", e);
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
   async function onSave() {
     if (!form.name.trim()) { if (window.showToast) window.showToast("أدخل اسم العيادة","error"); return; }
+    if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
+      if (window.showToast) window.showToast("صيغة البريد الإلكتروني غير صحيحة","error"); return;
+    }
+    const dur = parseInt(form.appointment_duration, 10);
+    if (!Number.isFinite(dur) || dur < 5 || dur > 240) {
+      if (window.showToast) window.showToast("مدة الجلسة بين 5 و 240 دقيقة","error"); return;
+    }
     setSaving(true);
     try {
-      if (window.saveClinic) await window.saveClinic(form);
+      const payload = { ...form, appointment_duration: dur };
+      if (window.saveClinic) await window.saveClinic(payload);
       if (window.showToast) window.showToast("تم حفظ التغييرات","success");
     } catch (e) {
       console.warn("save clinic details failed", e);
-      if (window.showToast) window.showToast("تعذّر حفظ التغييرات","error");
+      const msg = (e && e.message) ? e.message : "تعذّر حفظ التغييرات";
+      if (window.showToast) window.showToast(msg, "error");
     } finally { setSaving(false); }
   }
   return (
     <div>
       <div className="h2" style={{marginBottom:18}}>بيانات العيادة</div>
+      {loading && <div className="muted" style={{fontSize:12,marginBottom:10}}>جاري تحميل البيانات…</div>}
       <div className="rgrid c-sm" style={{"--gtc":"repeat(2,1fr)",gap:14,maxWidth:720}}>
         <Field label="اسم العيادة" span={2}><input className="input" value={form.name} onChange={e=>set("name", e.target.value)}/></Field>
         <Field label="الفرع" span={2}><input className="input" value={form.branch} onChange={e=>set("branch", e.target.value)}/></Field>
@@ -3322,8 +3358,31 @@ function ClinicDetailsPanel() {
         <Field label="العنوان" span={2}><input className="input" value={form.address} onChange={e=>set("address", e.target.value)}/></Field>
         <Field label="الرقم الضريبي"><input className="input" value={form.tax_id} onChange={e=>set("tax_id", e.target.value)}/></Field>
         <Field label="ساعات العمل"><input className="input" value={form.hours} onChange={e=>set("hours", e.target.value)}/></Field>
+        <Field label="الموقع الإلكتروني" span={2}><input className="input" value={form.website} onChange={e=>set("website", e.target.value)} placeholder="https://…"/></Field>
+        <Field label="العملة">
+          <select className="input" value={form.currency} onChange={e=>set("currency", e.target.value)}>
+            <option value="EGP">جنيه مصري (EGP)</option>
+            <option value="SAR">ريال سعودي (SAR)</option>
+            <option value="AED">درهم إماراتي (AED)</option>
+            <option value="USD">دولار أمريكي (USD)</option>
+            <option value="EUR">يورو (EUR)</option>
+          </select>
+        </Field>
+        <Field label="المنطقة الزمنية">
+          <select className="input" value={form.timezone} onChange={e=>set("timezone", e.target.value)}>
+            <option value="Africa/Cairo">القاهرة (Africa/Cairo)</option>
+            <option value="Asia/Riyadh">الرياض (Asia/Riyadh)</option>
+            <option value="Asia/Dubai">دبي (Asia/Dubai)</option>
+            <option value="Asia/Amman">عمّان (Asia/Amman)</option>
+          </select>
+        </Field>
+        <Field label="مدة الجلسة (دقيقة)" span={2}>
+          <input className="input" type="number" min="5" max="240" step="5"
+                 value={form.appointment_duration}
+                 onChange={e=>set("appointment_duration", e.target.value)}/>
+        </Field>
       </div>
-      <button className="btn btn-blue" style={{marginTop:18}} disabled={saving} onClick={onSave}>
+      <button className="btn btn-blue" style={{marginTop:18}} disabled={saving||loading} onClick={onSave}>
         <I.Check size={13}/> {saving ? "جاري الحفظ…" : "حفظ التغييرات"}
       </button>
     </div>
