@@ -398,7 +398,7 @@ function nextStaffId() {
 // the toast.
 function __friendlyAuthError(code, fallback) {
   const table = {
-    email_exists:        "هذا البريد مستخدم بالفعل",
+    email_exists:        "هذا البريد مستخدم بالفعل — إن كان من محاولة سابقة فاشلة احذف المستخدم من Supabase → Authentication → Users ثم أعد المحاولة",
     weak_password:       "كلمة المرور ضعيفة — 6 أحرف على الأقل، ويفضّل مزيج أرقام وحروف",
     invalid_email:       "بريد إلكتروني غير صحيح",
     invalid_role:        "الدور المحدد غير صالح",
