@@ -109,6 +109,16 @@ alter table bookings add column if not exists paid           numeric default 0;
 alter table bookings add column if not exists payment_status text default 'pending'
   check (payment_status in ('pending','partial','paid'));
 
+-- ── Packages (declared early so patient_subscriptions FK resolves) ──
+-- Full column set is (re-)declared further down; this stub only exists
+-- so the `patient_subscriptions.package_id -> packages(id)` foreign key
+-- can be created in a single-pass migration. `create table if not
+-- exists` is a no-op if the full definition below already ran.
+create table if not exists packages (
+  id    text primary key,
+  name  text
+);
+
 -- ── Patient subscriptions / active packages ────────────────
 -- A patient may buy one or more packages (12 sessions, post-op 24 …).
 -- Session counters and remaining balance live here so Quick Payment can

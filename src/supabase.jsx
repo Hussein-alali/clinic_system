@@ -8,7 +8,7 @@
 
 // ── Config ────────────────────────────────────────────────────
 const SUPABASE_URL = window.SUPABASE_URL || "https://yjtyvtyqyiqnqdctxpyz.supabase.co";
-const SUPABASE_ANON_KEY = window.SUPABASE_ANON_KEY || "sb_publishable_doulZchKq9zleY_fTGhq-Q_5l3KTAv9";
+const SUPABASE_ANON_KEY = window.SUPABASE_ANON_KEY || "sb_publishable_fOuGESwDv4iQSRz0mPs2Bw_Of7zk58R";
 const LS_CLINIC = "kinetic.clinic";
 const LS_SECTIONS = "kinetic.sections";
 const LS_BRANCHES = "kinetic.branches";
