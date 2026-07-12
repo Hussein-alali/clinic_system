@@ -6,24 +6,21 @@ can run it with `npm start`.
 
 ## 1. Prepare Supabase (once)
 
-1. Open your Supabase project → **SQL Editor**.
-2. Apply the schema. Either:
-   - **Dashboard:** paste and run **`supabase-schema.sql`** (safe to re-run —
-     every statement is idempotent), or
-   - **CLI:** `supabase link --project-ref <ref>` then `supabase db push`
-     (applies `supabase/migrations/`). See **`supabase/README.md`**.
+Open your Supabase project → **SQL Editor** → New query, paste the entire
+contents of **`supabase-all-in-one.sql`**, and Run. That single file
+contains the full schema, every migration, all RLS policies, the
+`patient-files` storage bucket, and the admin seed — in the right order,
+and safe to re-run on a fresh or existing database.
 
-   This creates all tables, RLS policies, and the `patient-files` storage
-   bucket.
-3. Run **`seed-admin.sql`**. This creates the main admin account:
-   - **Email:** `amr@clinic.eg`
-   - **Password:** `Amr@2026!` — **change it after first login**
-     (Dashboard → Authentication → Users → Reset password).
-4. On an existing database, also run
-   **`supabase-migration-import-auth-2026-07-12.sql`** — it moves role
-   resolution from JWT `user_metadata` to the `staff` table and lets every
-   staff role (admin/receptionist/doctor/therapist) register patients and
-   upload their documents.
+It creates the main admin account:
+- **Email:** `amr@clinic.eg`
+- **Password:** `Amr@2026!` — **change it after first login**
+  (Dashboard → Authentication → Users → Reset password).
+
+(The individual files — `supabase-schema.sql`, `seed-admin.sql`, and the
+`supabase-migration-*.sql` files — are the sources the all-in-one file is
+generated from; you only need them if you prefer applying changes
+piecemeal.)
 
 The Supabase URL and anon key are set in `src/supabase.jsx` (overridable by
 defining `window.SUPABASE_URL` / `window.SUPABASE_ANON_KEY` in `index.html`
