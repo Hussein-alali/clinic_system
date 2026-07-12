@@ -406,7 +406,7 @@ function __friendlyAuthError(code, fallback) {
     forbidden:           "لا تملك صلاحية إنشاء المستخدمين — تحتاج دور «مدير»",
     missing_token:       "انتهت الجلسة — سجّل الدخول من جديد",
     invalid_token:       "انتهت الجلسة — سجّل الدخول من جديد",
-    rate_limited:        "تم تجاوز حد إنشاء الحسابات لهذه الدقيقة — جرّب بعد قليل",
+    rate_limited:        "تم تجاوز حد إنشاء الحسابات المؤقت — جرّب بعد ساعة، أو فعّل خدمة إنشاء الحسابات غير المحدودة (انظر deploy-edge-function.sh)",
     server_misconfigured:"إعدادات الخادم غير مكتملة — تواصل مع الدعم",
     staff_insert_failed: "تم إنشاء الحساب لكن فشل حفظه في جدول الموظفين",
     method_not_allowed:  "طلب غير صالح",

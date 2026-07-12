@@ -1,0 +1,5 @@
+# Supabase CLI project config (used by `supabase functions deploy`).
+# The function validates the caller's JWT itself (and must answer CORS
+# preflights without one), so platform-level JWT verification is off.
+[functions.admin-create-user]
+verify_jwt = false

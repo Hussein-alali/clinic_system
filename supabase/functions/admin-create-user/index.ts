@@ -14,13 +14,12 @@
 //     role key (from env, never shipped to the browser) to call
 //     `auth.admin.createUser`.
 //
-// Deploy:
+// Deploy (see also deploy-edge-function.sh in the repo root):
 //   supabase functions deploy admin-create-user --no-verify-jwt
 //
-// Env required (Dashboard → Functions → admin-create-user → Secrets):
-//   • SUPABASE_URL
-//   • SUPABASE_ANON_KEY
-//   • SUPABASE_SERVICE_ROLE_KEY
+// Env: SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY are
+// injected into Edge Functions automatically by the platform — nothing
+// to configure manually.
 // ═══════════════════════════════════════════════════════════════════════
 
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";

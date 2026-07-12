@@ -49,7 +49,43 @@ No environment variables are required.
 ## Adding more staff accounts
 
 Easiest: **Settings → المستخدمون والأدوار → إنشاء مستخدم** (creates the login +
-role for you). Or manually:
+role for you). Out of the box this uses the public signup API, which
+Supabase **rate-limits to a handful of accounts per hour** and which may
+require the new user to confirm their email.
+
+### Unlimited account creation (recommended)
+
+Deploy the `admin-create-user` Edge Function once — after that, admins
+create accounts instantly, with no rate limit and no confirmation email
+(the app automatically prefers the function when it exists). The
+service-role key stays on the server; it is never shipped to the browser.
+
+**Option A — Dashboard (no tools needed):**
+
+1. Supabase Dashboard → **Edge Functions** → **Deploy a new function**
+   → *Via Editor*.
+2. Name it exactly `admin-create-user`, paste the contents of
+   [`supabase/functions/admin-create-user/index.ts`](supabase/functions/admin-create-user/index.ts),
+   and deploy.
+3. In the function's **Details**, turn **Verify JWT** off (the function
+   validates the caller's JWT itself and must answer CORS preflights).
+4. Done — no secrets to configure; `SUPABASE_URL` / `SUPABASE_ANON_KEY` /
+   `SUPABASE_SERVICE_ROLE_KEY` are injected automatically.
+
+**Option B — CLI:** run `./deploy-edge-function.sh <project-ref>` with a
+personal access token from
+https://supabase.com/dashboard/account/tokens.
+
+Only signed-in **admins** can call the function — it checks the caller's
+role in the `staff` table and refuses everyone else.
+
+### Fallback path (no Edge Function)
+
+If the function isn't deployed the app falls back to public signup. For
+that to work, turn **"Confirm email" OFF** (Authentication → Sign In / Up
+→ Email), and expect the hourly rate limit.
+
+### Manual creation:
 
 1. Supabase Dashboard → Authentication → **Add user** (email + password).
 2. Add a row in the `staff` table with `auth_uid` = the user's UUID and
