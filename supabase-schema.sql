@@ -1,11 +1,19 @@
 -- ============================================================
--- Kinetic Clinic Management System — Supabase Schema
--- Run this in Supabase SQL editor to create the required tables.
+-- Kinetic Clinic Management System — Supabase Schema (consolidated)
+--
+-- This is the full schema as ONE paste-friendly file for the Dashboard
+-- SQL editor. It is identical to the CLI baseline migration at
+-- supabase/migrations/20260101000000_baseline_schema.sql — keep the two in
+-- sync. CLI users run `supabase db push`; Dashboard users paste this file.
+-- Every statement is idempotent, so it is safe to run on a fresh project or
+-- an existing database. See supabase/README.md for the full workflow.
+--
 -- After running, set the client keys in index.html:
 --   <script>
 --     window.SUPABASE_URL = "https://YOUR-PROJECT.supabase.co";
 --     window.SUPABASE_ANON_KEY = "YOUR-ANON-KEY";
 --   </script>
+-- Then run seed-admin.sql to create the admin account.
 -- ============================================================
 
 -- ── Role helper ──────────────────────────────────────────────
