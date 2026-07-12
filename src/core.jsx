@@ -89,6 +89,7 @@ window.Icon = Icon;
 
 window.DATA = {
   patients: [], appts: [], therapists: [], departments: [], doctors: [],
+  receptionists: [],
   packages: [], payments: [], campaigns: [], sessions: [],
   paymentHistory: [], subscriptions: [], treatmentMethods: [],
 };

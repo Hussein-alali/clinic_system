@@ -2785,7 +2785,7 @@ function SettingsPage({ go }) {
         { id:"clinic",    l:"بيانات العيادة",       ic:<I.MapPin size={14}/> },
         { id:"branding",  l:"الهوية البصرية",       ic:<I.Image size={14}/> },
         { id:"sections",  l:"أقسام مخصصة",          ic:<I.Layers size={14}/> },
-        { id:"depts",     l:"الأقسام والأطباء",      ic:<I.Stethoscope size={14}/> },
+        { id:"depts",     l:"الأقسام والفريق",       ic:<I.Stethoscope size={14}/> },
         { id:"users",     l:"المستخدمون والأدوار",    ic:<I.Users size={14}/> },
         { id:"templates", l:"قوالب خطط العلاج",      ic:<I.FileText size={14}/> },
         { id:"billing",   l:"الفوترة",              ic:<I.CreditCard size={14}/> },
@@ -2839,45 +2839,121 @@ const DOC_STATUS_OPTS = [
 const DOC_STATUS_AR = { available:"متاح", busy:"مشغول", leave:"في إجازة" };
 const newId = (p) => p + Date.now().toString(36) + Math.random().toString(36).slice(2,5);
 
+// ── useRoster: shared search + pagination for staff tables ─────
+// One hook for all three rosters (Doctors, Specialists, Receptionists)
+// so pagination behaviour, page-size, and reset-on-search are identical.
+function useRoster(rows, matchFn, pageSize = 10) {
+  const [search, setSearch] = React.useState("");
+  const [page, setPage] = React.useState(1);
+  const q = search.trim().toLowerCase();
+  const filtered = q
+    ? (rows || []).filter(r => matchFn(r, q))
+    : (rows || []).slice();
+  const total = filtered.length;
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(page, pages);
+  // Reset to page 1 whenever the query changes.
+  React.useEffect(() => { setPage(1); }, [q]);
+  const view = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
+  return { search, setSearch, page: safePage, setPage, pages, total, view, pageSize };
+}
+
+function RosterToolbar({ title, subtitle, search, setSearch, onAdd, addLabel, addDisabled }) {
+  return (
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,gap:12,flexWrap:"wrap"}}>
+      <div>
+        <div className="h2">{title}</div>
+        {subtitle && <div className="muted" style={{fontSize:12.5,marginTop:2}}>{subtitle}</div>}
+      </div>
+      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+        <input className="input" style={{height:34,minWidth:200,fontSize:12.5}} placeholder="بحث…"
+          value={search} onChange={e=>setSearch(e.target.value)}/>
+        {onAdd && <button className="btn btn-blue" onClick={onAdd} disabled={addDisabled}><I.Plus size={14}/> {addLabel}</button>}
+      </div>
+    </div>
+  );
+}
+
+function RosterPager({ page, pages, total, onPage }) {
+  if (total === 0) return null;
+  return (
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:8,gap:8,flexWrap:"wrap"}}>
+      <div className="muted" style={{fontSize:12}}>الإجمالي <span className="mono">{total}</span> · صفحة <span className="mono">{page}</span> من <span className="mono">{pages}</span></div>
+      <div style={{display:"flex",gap:4}}>
+        <button className="btn btn-secondary" style={{fontSize:12,padding:"4px 10px"}} disabled={page<=1} onClick={()=>onPage(page-1)}>السابق</button>
+        <button className="btn btn-secondary" style={{fontSize:12,padding:"4px 10px"}} disabled={page>=pages} onClick={()=>onPage(page+1)}>التالي</button>
+      </div>
+    </div>
+  );
+}
+
 function DeptDoctorsPanel() {
   const depts = (DATA.departments || []).slice().sort((a,b)=>(a.sort_order||0)-(b.sort_order||0));
-  const doctors = DATA.doctors || [];
+  const doctors      = DATA.doctors        || [];
+  const specialists  = DATA.therapists     || [];
+  const receptionists= DATA.receptionists  || [];
   const [deptModal, setDeptModal] = React.useState(null);   // dept row or {} for new
-  const [docModal, setDocModal] = React.useState(null);
+  const [docModal, setDocModal]   = React.useState(null);
+  const [specModal, setSpecModal] = React.useState(null);
+  const [rcpModal, setRcpModal]   = React.useState(null);
+
   const deptName = (id) => (depts.find(d=>d.id===id)||{}).name_ar || "—";
-  const countDocs = (id) => doctors.filter(d=>d.active!==false && d.department_id===id).length;
+  const countDocs   = (id) => doctors.filter(d=>d.active!==false && d.department_id===id).length;
+  const countSpecs  = (id) => specialists.filter(s=>s.active!==false && s.department_id===id).length;
+
+  // Rosters with search + pagination.
+  const doctorsRoster = useRoster(doctors, (r, q) =>
+    (r.name||"").toLowerCase().includes(q) ||
+    (r.specialization||"").toLowerCase().includes(q) ||
+    (r.phone||"").toLowerCase().includes(q) ||
+    (r.email||"").toLowerCase().includes(q) ||
+    (deptName(r.department_id)||"").toLowerCase().includes(q));
+  const specRoster = useRoster(specialists, (r, q) =>
+    (r.name||"").toLowerCase().includes(q) ||
+    (r.spec||"").toLowerCase().includes(q) ||
+    (r.phone||"").toLowerCase().includes(q) ||
+    (r.email||"").toLowerCase().includes(q) ||
+    (deptName(r.department_id)||"").toLowerCase().includes(q));
+  const rcpRoster = useRoster(receptionists, (r, q) =>
+    (r.name||"").toLowerCase().includes(q) ||
+    (r.phone||"").toLowerCase().includes(q) ||
+    (r.email||"").toLowerCase().includes(q));
 
   async function removeDept(d) {
-    if (doctors.some(x=>x.department_id===d.id)) { window.showToast && window.showToast("أزل أطباء القسم أولاً","error"); return; }
+    if (doctors.some(x=>x.department_id===d.id) || specialists.some(x=>x.department_id===d.id)) {
+      window.showToast && window.showToast("أزل أعضاء القسم أولاً","error"); return;
+    }
     if (!window.confirm(`حذف قسم «${d.name_ar}»؟`)) return;
     try { await window.KineticData.remove("departments", d.id); window.showToast && window.showToast("تم حذف القسم","success"); }
-    catch(e){ console.warn(e); window.showToast && window.showToast("تعذّر الحذف","error"); }
+    catch(e){ console.error(e); window.showToast && window.showToast(e.message || "تعذّر الحذف","error"); }
   }
-  async function removeDoc(d) {
-    if (!window.confirm(`حذف الطبيب «${d.name}»؟`)) return;
-    try { await window.KineticData.remove("doctors", d.id); window.showToast && window.showToast("تم حذف الطبيب","success"); }
-    catch(e){ console.warn(e); window.showToast && window.showToast("تعذّر الحذف","error"); }
+  async function removeRow(table, row, label) {
+    if (!window.confirm(`حذف ${label} «${row.name}»؟`)) return;
+    try { await window.KineticData.remove(table, row.id); window.showToast && window.showToast(`تم حذف ${label}`,"success"); }
+    catch(e){ console.error(e); window.showToast && window.showToast(e.message || "تعذّر الحذف","error"); }
   }
   async function toggleActive(table, row) {
-    try { await window.KineticData.upsert(table, { ...row, active: row.active===false }); }
-    catch(e){ console.warn(e); window.showToast && window.showToast("تعذّر التحديث","error"); }
+    const next = row.active === false;
+    try {
+      const res = await window.KineticData.upsert(table, { ...row, active: next });
+      if (res && res._ok === false) throw new Error(res._error || "تعذّر التحديث");
+      window.showToast && window.showToast(next ? "تم التفعيل" : "تم الإيقاف", "success");
+    }
+    catch(e){ console.error(e); window.showToast && window.showToast(e.message || "تعذّر التحديث","error"); }
   }
 
   return (
     <div>
-      {/* Departments */}
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,gap:12,flexWrap:"wrap"}}>
-        <div>
-          <div className="h2">الأقسام</div>
-          <div className="muted" style={{fontSize:12.5,marginTop:2}}>تظهر في صفحة الحجز تلقائيًا فور إضافتها.</div>
-        </div>
-        <button className="btn btn-blue" onClick={()=>setDeptModal({})}><I.Plus size={14}/> إضافة قسم</button>
-      </div>
+      {/* ── Departments ────────────────────────────────────────── */}
+      <RosterToolbar
+        title="الأقسام" subtitle="تظهر في صفحة الحجز تلقائيًا فور إضافتها."
+        search="" setSearch={()=>{}}
+        onAdd={()=>setDeptModal({})} addLabel="إضافة قسم"/>
       <div className="tbl-scroll" style={{marginBottom:26}}>
         <table className="tbl">
-          <thead><tr><th>القسم</th><th>بالإنجليزية</th><th>الأطباء</th><th>الحالة</th><th></th></tr></thead>
+          <thead><tr><th>القسم</th><th>بالإنجليزية</th><th>الأطباء</th><th>الأخصائيون</th><th>الحالة</th><th></th></tr></thead>
           <tbody>
-            {depts.length===0 && <tr><td colSpan={5}><EmptyState icon={<I.Layers size={22}/>} title="لا أقسام بعد" body="أضف أول قسم من زر «إضافة قسم»."/></td></tr>}
+            {depts.length===0 && <tr><td colSpan={6}><EmptyState icon={<I.Layers size={22}/>} title="لا أقسام بعد" body="أضف أول قسم من زر «إضافة قسم»."/></td></tr>}
             {depts.map(d=>(
               <tr key={d.id}>
                 <td><div style={{display:"flex",alignItems:"center",gap:8}}>
@@ -2886,6 +2962,7 @@ function DeptDoctorsPanel() {
                 </div></td>
                 <td className="muted" style={{fontSize:12.5}}>{d.name_en||"—"}</td>
                 <td className="mono">{countDocs(d.id)}</td>
+                <td className="mono">{countSpecs(d.id)}</td>
                 <td>
                   <button className={"badge " + (d.active!==false?"b-green":"b-grey")} style={{cursor:"pointer",border:"none"}} onClick={()=>toggleActive("departments", d)}>
                     <span className="dot"></span>{d.active!==false?"نشط":"موقوف"}
@@ -2901,20 +2978,17 @@ function DeptDoctorsPanel() {
         </table>
       </div>
 
-      {/* Doctors */}
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,gap:12,flexWrap:"wrap"}}>
-        <div>
-          <div className="h2">الأطباء</div>
-          <div className="muted" style={{fontSize:12.5,marginTop:2}}>يظهرون في الحجز ضمن أقسامهم عند تفعيلهم.</div>
-        </div>
-        <button className="btn btn-blue" onClick={()=>setDocModal({})} disabled={depts.length===0}><I.Plus size={14}/> إضافة طبيب</button>
-      </div>
+      {/* ── Doctors ───────────────────────────────────────────── */}
+      <RosterToolbar
+        title="الأطباء" subtitle="يظهرون في الحجز ضمن أقسامهم عند تفعيلهم."
+        search={doctorsRoster.search} setSearch={doctorsRoster.setSearch}
+        onAdd={()=>setDocModal({})} addLabel="إضافة طبيب" addDisabled={depts.length===0}/>
       <div className="tbl-scroll">
         <table className="tbl">
-          <thead><tr><th>الطبيب</th><th>القسم</th><th>التخصص</th><th>الخبرة</th><th>التوفر</th><th>الحالة</th><th></th></tr></thead>
+          <thead><tr><th>الطبيب</th><th>القسم</th><th>التخصص</th><th>الهاتف</th><th>البريد</th><th>التوفر</th><th>الحالة</th><th></th></tr></thead>
           <tbody>
-            {doctors.length===0 && <tr><td colSpan={7}><EmptyState icon={<I.Stethoscope size={22}/>} title="لا أطباء بعد" body={depts.length? "أضف أول طبيب من زر «إضافة طبيب».":"أضف قسمًا أولاً ثم أضف الأطباء."}/></td></tr>}
-            {doctors.map(d=>(
+            {doctorsRoster.total===0 && <tr><td colSpan={8}><EmptyState icon={<I.Stethoscope size={22}/>} title="لا أطباء" body={depts.length? "أضف أول طبيب من زر «إضافة طبيب».":"أضف قسمًا أولاً ثم أضف الأطباء."}/></td></tr>}
+            {doctorsRoster.view.map(d=>(
               <tr key={d.id}>
                 <td><div style={{display:"flex",alignItems:"center",gap:8}}>
                   <span className="av sm" style={{background:(d.color||"#7BBDE8")+"33",color:d.color||"var(--blue-700)"}}>{(d.name||"").replace("د. ","").split(" ").map(x=>x[0]||"").join("").slice(0,2)}</span>
@@ -2922,7 +2996,8 @@ function DeptDoctorsPanel() {
                 </div></td>
                 <td className="muted" style={{fontSize:12.5}}>{deptName(d.department_id)}</td>
                 <td className="muted" style={{fontSize:12.5}}>{d.specialization||"—"}</td>
-                <td className="mono">{d.experience_years||0} س</td>
+                <td className="mono" style={{fontSize:12}}>{d.phone||"—"}</td>
+                <td className="mono" style={{fontSize:12}}>{d.email||"—"}</td>
                 <td><span className={"badge " + (d.status==="available"?"b-green":d.status==="busy"?"b-amber":"b-grey")}><span className="dot"></span>{DOC_STATUS_AR[d.status]||d.status||"—"}</span></td>
                 <td>
                   <button className={"badge " + (d.active!==false?"b-green":"b-grey")} style={{cursor:"pointer",border:"none"}} onClick={()=>toggleActive("doctors", d)}>
@@ -2931,16 +3006,96 @@ function DeptDoctorsPanel() {
                 </td>
                 <td><RowMenu size={13} items={[
                   { label:"تعديل", icon:<I.Edit size={13}/>, onClick:()=>setDocModal(d) },
-                  { label:"حذف", icon:<I.Trash size={13}/>, danger:true, onClick:()=>removeDoc(d) },
+                  { label:d.active!==false?"إيقاف":"تفعيل", icon:d.active!==false?<I.Lock size={13}/>:<I.Check size={13}/>, onClick:()=>toggleActive("doctors", d) },
+                  { label:"حذف", icon:<I.Trash size={13}/>, danger:true, onClick:()=>removeRow("doctors", d, "الطبيب") },
                 ]}/></td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      <RosterPager page={doctorsRoster.page} pages={doctorsRoster.pages} total={doctorsRoster.total} onPage={doctorsRoster.setPage}/>
+
+      {/* ── Specialists (أخصائي) — persisted in `therapists` table ── */}
+      <div style={{height:26}}/>
+      <RosterToolbar
+        title="الأخصائيون" subtitle="فريق العلاج الطبيعي المعيّن للحالات."
+        search={specRoster.search} setSearch={specRoster.setSearch}
+        onAdd={()=>setSpecModal({})} addLabel="إضافة أخصائي" addDisabled={depts.length===0}/>
+      <div className="tbl-scroll">
+        <table className="tbl">
+          <thead><tr><th>الأخصائي</th><th>القسم</th><th>التخصص</th><th>الهاتف</th><th>البريد</th><th>رقم الترخيص</th><th>الحالة</th><th></th></tr></thead>
+          <tbody>
+            {specRoster.total===0 && <tr><td colSpan={8}><EmptyState icon={<I.Activity size={22}/>} title="لا أخصائيين" body={depts.length? "أضف أول أخصائي من زر «إضافة أخصائي».":"أضف قسمًا أولاً ثم أضف الأخصائيين."}/></td></tr>}
+            {specRoster.view.map(s=>(
+              <tr key={s.id}>
+                <td><div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span className="av sm" style={{background:(s.color||"#7BBDE8")+"33",color:s.color||"var(--blue-700)"}}>{(s.name||"").split(" ").map(x=>x[0]||"").join("").slice(0,2)}</span>
+                  {s.name}
+                </div></td>
+                <td className="muted" style={{fontSize:12.5}}>{deptName(s.department_id)}</td>
+                <td className="muted" style={{fontSize:12.5}}>{s.spec||"—"}</td>
+                <td className="mono" style={{fontSize:12}}>{s.phone||"—"}</td>
+                <td className="mono" style={{fontSize:12}}>{s.email||"—"}</td>
+                <td className="mono" style={{fontSize:12}}>{s.license_number||"—"}</td>
+                <td>
+                  <button className={"badge " + (s.active!==false?"b-green":"b-grey")} style={{cursor:"pointer",border:"none"}} onClick={()=>toggleActive("therapists", s)}>
+                    <span className="dot"></span>{s.active!==false?"مفعّل":"موقوف"}
+                  </button>
+                </td>
+                <td><RowMenu size={13} items={[
+                  { label:"تعديل", icon:<I.Edit size={13}/>, onClick:()=>setSpecModal(s) },
+                  { label:s.active!==false?"إيقاف":"تفعيل", icon:s.active!==false?<I.Lock size={13}/>:<I.Check size={13}/>, onClick:()=>toggleActive("therapists", s) },
+                  { label:"حذف", icon:<I.Trash size={13}/>, danger:true, onClick:()=>removeRow("therapists", s, "الأخصائي") },
+                ]}/></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <RosterPager page={specRoster.page} pages={specRoster.pages} total={specRoster.total} onPage={specRoster.setPage}/>
+
+      {/* ── Receptionists ─────────────────────────────────────── */}
+      <div style={{height:26}}/>
+      <RosterToolbar
+        title="موظفو الاستقبال" subtitle="يديرون الحجوزات والدفع من الواجهة الأمامية."
+        search={rcpRoster.search} setSearch={rcpRoster.setSearch}
+        onAdd={()=>setRcpModal({})} addLabel="إضافة موظف استقبال"/>
+      <div className="tbl-scroll">
+        <table className="tbl">
+          <thead><tr><th>الاسم</th><th>الهاتف</th><th>البريد</th><th>ملاحظات</th><th>الحالة</th><th></th></tr></thead>
+          <tbody>
+            {rcpRoster.total===0 && <tr><td colSpan={6}><EmptyState icon={<I.Users size={22}/>} title="لا موظفي استقبال" body="أضف أول موظف من زر «إضافة موظف استقبال»."/></td></tr>}
+            {rcpRoster.view.map(r=>(
+              <tr key={r.id}>
+                <td><div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span className="av sm">{(r.name||"?").split(" ").map(x=>x[0]||"").join("").slice(0,2)}</span>
+                  {r.name}
+                </div></td>
+                <td className="mono" style={{fontSize:12}}>{r.phone||"—"}</td>
+                <td className="mono" style={{fontSize:12}}>{r.email||"—"}</td>
+                <td className="muted" style={{fontSize:12.5,maxWidth:220,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}} title={r.notes||""}>{r.notes||"—"}</td>
+                <td>
+                  <button className={"badge " + (r.active!==false?"b-green":"b-grey")} style={{cursor:"pointer",border:"none"}} onClick={()=>toggleActive("receptionists", r)}>
+                    <span className="dot"></span>{r.active!==false?"مفعّل":"موقوف"}
+                  </button>
+                </td>
+                <td><RowMenu size={13} items={[
+                  { label:"تعديل", icon:<I.Edit size={13}/>, onClick:()=>setRcpModal(r) },
+                  { label:r.active!==false?"إيقاف":"تفعيل", icon:r.active!==false?<I.Lock size={13}/>:<I.Check size={13}/>, onClick:()=>toggleActive("receptionists", r) },
+                  { label:"حذف", icon:<I.Trash size={13}/>, danger:true, onClick:()=>removeRow("receptionists", r, "موظف الاستقبال") },
+                ]}/></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <RosterPager page={rcpRoster.page} pages={rcpRoster.pages} total={rcpRoster.total} onPage={rcpRoster.setPage}/>
 
       {deptModal && <DeptModal row={deptModal} onClose={()=>setDeptModal(null)}/>}
-      {docModal && <DoctorModal row={docModal} depts={depts} onClose={()=>setDocModal(null)}/>}
+      {docModal  && <DoctorModal row={docModal} depts={depts} onClose={()=>setDocModal(null)}/>}
+      {specModal && <SpecialistModal row={specModal} depts={depts} onClose={()=>setSpecModal(null)}/>}
+      {rcpModal  && <ReceptionistModal row={rcpModal} onClose={()=>setRcpModal(null)}/>}
     </div>
   );
 }
@@ -2997,25 +3152,32 @@ function DoctorModal({ row, depts, onClose }) {
     specialization: row.specialization||"", experience_years: row.experience_years||0,
     schedule: row.schedule||"", status: row.status||"available",
     color: row.color||"#7BBDE8", active: row.active!==false,
+    phone: row.phone||"", email: row.email||"", license_number: row.license_number||"", notes: row.notes||"",
   });
   const [busy, setBusy] = React.useState(false);
   const set = (k,v)=>setF(s=>({...s,[k]:v}));
   async function save() {
     if (!f.name.trim()) return window.showToast && window.showToast("أدخل اسم الطبيب","error");
     if (!f.department_id) return window.showToast && window.showToast("اختر القسم","error");
+    if (f.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email)) {
+      return window.showToast && window.showToast("صيغة البريد غير صحيحة","error");
+    }
     setBusy(true);
     try {
-      await window.KineticData.upsert("doctors", {
+      const res = await window.KineticData.upsert("doctors", {
         id: row.id || newId("DR-"), ...f, name: f.name.trim(),
         experience_years: Number(f.experience_years)||0,
+        phone: f.phone.trim() || null, email: f.email.trim() || null,
+        license_number: f.license_number.trim() || null, notes: f.notes.trim() || null,
       });
+      if (res && res._ok === false) throw new Error(res._error || "تعذّر الحفظ");
       window.showToast && window.showToast(isNew?"تمت إضافة الطبيب":"تم تحديث الطبيب","success");
       onClose();
-    } catch(e){ console.warn(e); window.showToast && window.showToast("تعذّر الحفظ","error"); }
+    } catch(e){ console.error(e); window.showToast && window.showToast(e.message || "تعذّر الحفظ","error"); }
     finally { setBusy(false); }
   }
   return (
-    <Modal title={isNew?"طبيب جديد":"تعديل طبيب"} onClose={onClose} width={540}
+    <Modal title={isNew?"طبيب جديد":"تعديل طبيب"} onClose={onClose} width={600}
       footer={<><button className="btn btn-ghost" onClick={onClose}>إلغاء</button>
         <button className="btn btn-blue" disabled={busy} onClick={save}><I.Check size={13}/> حفظ</button></>}>
       <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
@@ -3030,7 +3192,17 @@ function DoctorModal({ row, depts, onClose }) {
         <Field label="سنوات الخبرة"><input className="input" type="number" value={f.experience_years} onChange={e=>set("experience_years",e.target.value)}/></Field>
       </div>
       <div style={{height:12}}/>
-      <Field label="أوقات العمل"><input className="input" value={f.schedule} onChange={e=>set("schedule",e.target.value)} placeholder="مثال: الأحد–الخميس 09:00–17:00"/></Field>
+      <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
+        <Field label="الهاتف"><input className="input" value={f.phone} onChange={e=>set("phone",e.target.value)} placeholder="+20 …"/></Field>
+        <Field label="البريد الإلكتروني"><input className="input" value={f.email} onChange={e=>set("email",e.target.value)} placeholder="dr@clinic.com"/></Field>
+      </div>
+      <div style={{height:12}}/>
+      <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
+        <Field label="رقم الترخيص"><input className="input" value={f.license_number} onChange={e=>set("license_number",e.target.value)}/></Field>
+        <Field label="أوقات العمل"><input className="input" value={f.schedule} onChange={e=>set("schedule",e.target.value)} placeholder="مثال: الأحد–الخميس 09:00–17:00"/></Field>
+      </div>
+      <div style={{height:12}}/>
+      <Field label="ملاحظات"><textarea className="input" rows={2} value={f.notes} onChange={e=>set("notes",e.target.value)}/></Field>
       <div style={{height:12}}/>
       <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
         <Field label="التوفر"><select className="input" value={f.status} onChange={e=>set("status",e.target.value)}>{DOC_STATUS_OPTS.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}</select></Field>
@@ -3038,6 +3210,135 @@ function DoctorModal({ row, depts, onClose }) {
       </div>
       <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,marginTop:14,cursor:"pointer"}}>
         <input type="checkbox" checked={f.active} onChange={e=>set("active",e.target.checked)}/> طبيب مفعّل (متاح للحجز)
+      </label>
+    </Modal>
+  );
+}
+
+// ── Specialist modal (persists to `therapists` table) ────────
+function SpecialistModal({ row, depts, onClose }) {
+  const isNew = !row.id;
+  const [f, setF] = React.useState({
+    name: row.name || "",
+    department_id: row.department_id || (depts[0] && depts[0].id) || "",
+    spec: row.spec || "",
+    phone: row.phone || "",
+    email: row.email || "",
+    license_number: row.license_number || "",
+    notes: row.notes || "",
+    color: row.color || "#7BBDE8",
+    max: row.max != null ? row.max : 8,
+    active: row.active !== false,
+  });
+  const [busy, setBusy] = React.useState(false);
+  const set = (k,v) => setF(s => ({ ...s, [k]: v }));
+  async function save() {
+    if (!f.name.trim()) return window.showToast && window.showToast("أدخل اسم الأخصائي","error");
+    if (!f.department_id) return window.showToast && window.showToast("اختر القسم","error");
+    if (f.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email)) {
+      return window.showToast && window.showToast("صيغة البريد غير صحيحة","error");
+    }
+    setBusy(true);
+    try {
+      const res = await window.KineticData.upsert("therapists", {
+        id: row.id || newId("TH-"),
+        name: f.name.trim(),
+        department_id: f.department_id,
+        spec: f.spec.trim() || null,
+        phone: f.phone.trim() || null,
+        email: f.email.trim() || null,
+        license_number: f.license_number.trim() || null,
+        notes: f.notes.trim() || null,
+        color: f.color, max: Number(f.max)||0,
+        active: !!f.active,
+      });
+      if (res && res._ok === false) throw new Error(res._error || "تعذّر الحفظ");
+      window.showToast && window.showToast(isNew ? "تمت إضافة الأخصائي" : "تم تحديث الأخصائي", "success");
+      onClose();
+    } catch (e) { console.error(e); window.showToast && window.showToast(e.message || "تعذّر الحفظ","error"); }
+    finally { setBusy(false); }
+  }
+  return (
+    <Modal title={isNew?"أخصائي جديد":"تعديل أخصائي"} onClose={onClose} width={600}
+      footer={<><button className="btn btn-ghost" onClick={onClose}>إلغاء</button>
+        <button className="btn btn-blue" disabled={busy} onClick={save}><I.Check size={13}/> حفظ</button></>}>
+      <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
+        <Field label="الاسم" required><input className="input" value={f.name} onChange={e=>set("name",e.target.value)}/></Field>
+        <Field label="القسم" required><select className="input" value={f.department_id} onChange={e=>set("department_id",e.target.value)}>
+          {depts.map(d=><option key={d.id} value={d.id}>{d.name_ar}</option>)}
+        </select></Field>
+      </div>
+      <div style={{height:12}}/>
+      <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
+        <Field label="التخصص"><input className="input" value={f.spec} onChange={e=>set("spec",e.target.value)}/></Field>
+        <Field label="الحد الأقصى للجلسات/يوم"><input className="input" type="number" min="0" max="60" value={f.max} onChange={e=>set("max",e.target.value)}/></Field>
+      </div>
+      <div style={{height:12}}/>
+      <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
+        <Field label="الهاتف"><input className="input" value={f.phone} onChange={e=>set("phone",e.target.value)} placeholder="+20 …"/></Field>
+        <Field label="البريد الإلكتروني"><input className="input" value={f.email} onChange={e=>set("email",e.target.value)} placeholder="you@clinic.com"/></Field>
+      </div>
+      <div style={{height:12}}/>
+      <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
+        <Field label="رقم الترخيص (اختياري)"><input className="input" value={f.license_number} onChange={e=>set("license_number",e.target.value)}/></Field>
+        <Field label="اللون"><input className="input" type="color" value={f.color} onChange={e=>set("color",e.target.value)} style={{padding:4,height:40}}/></Field>
+      </div>
+      <div style={{height:12}}/>
+      <Field label="ملاحظات"><textarea className="input" rows={2} value={f.notes} onChange={e=>set("notes",e.target.value)}/></Field>
+      <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,marginTop:14,cursor:"pointer"}}>
+        <input type="checkbox" checked={f.active} onChange={e=>set("active",e.target.checked)}/> أخصائي مفعّل (متاح للتعيين)
+      </label>
+    </Modal>
+  );
+}
+
+// ── Receptionist modal (persists to `receptionists` table) ───
+function ReceptionistModal({ row, onClose }) {
+  const isNew = !row.id;
+  const [f, setF] = React.useState({
+    name: row.name || "",
+    phone: row.phone || "",
+    email: row.email || "",
+    notes: row.notes || "",
+    active: row.active !== false,
+  });
+  const [busy, setBusy] = React.useState(false);
+  const set = (k,v) => setF(s => ({ ...s, [k]: v }));
+  async function save() {
+    if (!f.name.trim()) return window.showToast && window.showToast("أدخل الاسم","error");
+    if (f.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email)) {
+      return window.showToast && window.showToast("صيغة البريد غير صحيحة","error");
+    }
+    setBusy(true);
+    try {
+      const res = await window.KineticData.upsert("receptionists", {
+        id: row.id || newId("RC-"),
+        name: f.name.trim(),
+        phone: f.phone.trim() || null,
+        email: f.email.trim() || null,
+        notes: f.notes.trim() || null,
+        active: !!f.active,
+      });
+      if (res && res._ok === false) throw new Error(res._error || "تعذّر الحفظ");
+      window.showToast && window.showToast(isNew ? "تمت إضافة موظف الاستقبال" : "تم التحديث", "success");
+      onClose();
+    } catch (e) { console.error(e); window.showToast && window.showToast(e.message || "تعذّر الحفظ","error"); }
+    finally { setBusy(false); }
+  }
+  return (
+    <Modal title={isNew?"موظف استقبال جديد":"تعديل موظف استقبال"} onClose={onClose} width={520}
+      footer={<><button className="btn btn-ghost" onClick={onClose}>إلغاء</button>
+        <button className="btn btn-blue" disabled={busy} onClick={save}><I.Check size={13}/> حفظ</button></>}>
+      <Field label="الاسم" required><input className="input" value={f.name} onChange={e=>set("name",e.target.value)}/></Field>
+      <div style={{height:12}}/>
+      <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
+        <Field label="الهاتف"><input className="input" value={f.phone} onChange={e=>set("phone",e.target.value)} placeholder="+20 …"/></Field>
+        <Field label="البريد الإلكتروني"><input className="input" value={f.email} onChange={e=>set("email",e.target.value)} placeholder="you@clinic.com"/></Field>
+      </div>
+      <div style={{height:12}}/>
+      <Field label="ملاحظات"><textarea className="input" rows={3} value={f.notes} onChange={e=>set("notes",e.target.value)}/></Field>
+      <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,marginTop:14,cursor:"pointer"}}>
+        <input type="checkbox" checked={f.active} onChange={e=>set("active",e.target.checked)}/> موظف استقبال مفعّل
       </label>
     </Modal>
   );
@@ -3281,21 +3582,15 @@ function EditProfileModal({ onClose }) {
 
 // ── Admin: Clinic details (name, contact, tax id) ────────────
 function ClinicDetailsPanel() {
-  // Demo seed only; production starts blank so the admin enters the real
-  // clinic identity (persisted authoritatively in clinic_settings).
-  const demoSeed = window.IS_DEMO ? {
-    name:"كينيتك للعلاج الطبيعي", branch:"مصر الجديدة", phone:"+20 2 2638 1100",
-    email:"hello@kinetic.eg", address:"14 ش صلاح سالم, مصر الجديدة، القاهرة",
-    tax_id:"514-203-091", hours:"الأحد–الخميس 08:00 – 20:00",
-  } : {};
+  // Production reads authoritatively from clinic_settings. No demo seed.
   const seedFromForm = (src) => ({
-    name: src.name || demoSeed.name || "",
-    branch: src.branch || demoSeed.branch || "",
-    phone: src.phone || demoSeed.phone || "",
-    email: src.email || demoSeed.email || "",
-    address: src.address || demoSeed.address || "",
-    tax_id: src.tax_id || demoSeed.tax_id || "",
-    hours: src.hours || demoSeed.hours || "",
+    name: src.name || "",
+    branch: src.branch || "",
+    phone: src.phone || "",
+    email: src.email || "",
+    address: src.address || "",
+    tax_id: src.tax_id || "",
+    hours: src.hours || "",
     website: src.website || "",
     currency: src.currency || "EGP",
     timezone: src.timezone || "Africa/Cairo",
@@ -3335,13 +3630,18 @@ function ClinicDetailsPanel() {
     if (!Number.isFinite(dur) || dur < 5 || dur > 240) {
       if (window.showToast) window.showToast("مدة الجلسة بين 5 و 240 دقيقة","error"); return;
     }
+    if (!window.saveClinic) {
+      if (window.showToast) window.showToast("قاعدة البيانات غير متصلة","error");
+      return;
+    }
     setSaving(true);
     try {
       const payload = { ...form, appointment_duration: dur };
-      if (window.saveClinic) await window.saveClinic(payload);
+      const fresh = await window.saveClinic(payload);
+      setForm(seedFromForm(fresh));
       if (window.showToast) window.showToast("تم حفظ التغييرات","success");
     } catch (e) {
-      console.warn("save clinic details failed", e);
+      console.error("save clinic details failed", e);
       const msg = (e && e.message) ? e.message : "تعذّر حفظ التغييرات";
       if (window.showToast) window.showToast(msg, "error");
     } finally { setSaving(false); }
@@ -3392,9 +3692,25 @@ function ClinicDetailsPanel() {
 // 404
 // ── Admin: Clinic branding (logo + name) ─────────────────────
 function BrandingPanel() {
-  const [clinic, setClinic] = React.useState(window.CLINIC || { name:"كينيتك", subtitle:"نظام العيادة", logo:null, primary:"#7BBDE8" });
+  // Seed from window.CLINIC (which loadClinic() hydrates from Postgres);
+  // no hardcoded names — the name field starts empty until DB responds.
+  const [clinic, setClinic] = React.useState(window.CLINIC || { name:"", subtitle:"", logo:null, primary_color:"#7BBDE8" });
   const [saving, setSaving] = React.useState(false);
   const fileRef = React.useRef(null);
+  // Reload from Postgres on mount so we don't render a stale in-memory
+  // copy — matches ClinicDetailsPanel's fresh-fetch guarantee.
+  React.useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        if (window.loadClinic) {
+          const fresh = await window.loadClinic();
+          if (alive && fresh) setClinic(fresh);
+        }
+      } catch (e) { console.warn("branding reload failed", e); }
+    })();
+    return () => { alive = false; };
+  }, []);
 
   function onPickFile(e) {
     const file = e.target.files && e.target.files[0];
@@ -3413,13 +3729,19 @@ function BrandingPanel() {
   }
 
   async function onSave() {
+    if (!window.saveClinic) {
+      if (window.showToast) window.showToast("قاعدة البيانات غير متصلة","error");
+      return;
+    }
     setSaving(true);
     try {
-      if (window.saveClinic) await window.saveClinic(clinic);
+      const fresh = await window.saveClinic(clinic);
+      setClinic(fresh);
       if (window.showToast) window.showToast("تم حفظ الهوية البصرية","success");
     } catch (e) {
-      console.warn("save branding failed", e);
-      if (window.showToast) window.showToast("تعذّر حفظ الهوية البصرية","error");
+      console.error("save branding failed", e);
+      const msg = (e && e.message) ? e.message : "تعذّر حفظ الهوية البصرية";
+      if (window.showToast) window.showToast(msg,"error");
     } finally { setSaving(false); }
   }
 
@@ -3652,6 +3974,23 @@ function App() {
   // Re-render the entire app when any DB table changes (upsert / remove /
   // hydrate). Cheap: it just bumps a state counter.
   window.useDataVersion();
+
+  // Keep the document <title> in sync with the clinic name from Postgres,
+  // so tabs, PDFs and any recent-clinic-name reads reflect the current
+  // singleton value — no code change required when the admin renames.
+  React.useEffect(() => {
+    const applyTitle = () => {
+      const c = window.CLINIC || {};
+      const base = c.name || "";
+      const sub  = c.subtitle || "";
+      const t = [base, sub].filter(Boolean).join(" — ");
+      if (t) document.title = t;
+    };
+    applyTitle();
+    window.addEventListener("kinetic:clinic-updated", applyTitle);
+    return () => window.removeEventListener("kinetic:clinic-updated", applyTitle);
+  }, []);
+
   const [rawRoute, setRoute] = React.useState(() => {
     return localStorage.getItem("kinetic.route") || "dashboard";
   });
@@ -4852,7 +5191,7 @@ function PatientBookingFlow({ onClose, onDone }) {
 
               <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:10}}>
                 {[
-                  ...DATA.therapists.map(t=>({ name:t.name, spec:t.spec||"", color:t.color||"#7BBDE8", yourUsual: t.name===PATIENT_ME.therapist })),
+                  ...DATA.therapists.filter(t=>t.active!==false).map(t=>({ name:t.name, spec:t.spec||"", color:t.color||"#7BBDE8", yourUsual: t.name===PATIENT_ME.therapist })),
                   { name:"أي أخصائي", spec:"الأقرب توفرًا", color:"#BDD8E9", any:true },
                 ].map((t,i)=>(
                   <button key={i} onClick={()=>{setPicks({...picks,therapist:t.name}); next();}} style={{
@@ -5219,7 +5558,7 @@ function PublicBookingScreen({ onBack, onDone }) {
                   <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:10}}>
                     {[
                       { name:"أي أخصائي",  spec:"أقرب موعد",        color:"#BDD8E9", any:true, recommended:true },
-                      ...DATA.therapists.map(t=>({ name:t.name, spec:t.spec, color:t.color }))
+                      ...DATA.therapists.filter(t=>t.active!==false).map(t=>({ name:t.name, spec:t.spec, color:t.color }))
                     ].map((t,i)=>(
                       <button key={i} onClick={()=>{update("therapist",t.any?null:t.name); next();}} style={{
                         padding:16,textAlign:"left",cursor:"pointer",fontFamily:"inherit",

@@ -27,10 +27,16 @@ window.SB = sb;
 window.IS_DEMO = false;
 
 // ── Default clinic branding ───────────────────────────────────
+// Empty placeholders only — the authoritative values live in the
+// `clinic_settings` singleton row. If loadClinic() has not resolved yet
+// (the very first frame after boot) the sidebar shows the placeholder
+// name for one paint, then re-renders on the `kinetic:clinic-updated`
+// event. No hardcoded "Kinetic" / "كينيتك" name leaks into the DB or the
+// exported PDFs — those all go through `window.CLINIC.name`.
 const DEFAULT_CLINIC = {
-  name: "كينيتك",
-  subtitle: "نظام العيادة",
-  logo: null,           // data-URL when uploaded
+  name: "",
+  subtitle: "",
+  logo: null,
   primary: "#7BBDE8",
 };
 
@@ -56,19 +62,24 @@ function escHtml(s) {
 }
 
 // ── Clinic branding: load / save ──────────────────────────────
+// Reads the singleton row (id = 1). Postgres is the single source of
+// truth — no localStorage fallback for the branding fields, because a
+// stale LS value was the reason the Settings page appeared to save
+// then revert on refresh.
 async function loadClinic() {
-  if (sb) {
-    const { data, error } = await sb.from("clinic_settings").select("*").limit(1).single();
-    if (!error && data) {
-      const merged = { ...DEFAULT_CLINIC, ...data };
-      window.CLINIC = merged;
-      writeLS(LS_CLINIC, merged);
-      return merged;
-    }
+  if (!sb) {
+    window.CLINIC = { ...DEFAULT_CLINIC };
+    return window.CLINIC;
   }
-  const cached = readLS(LS_CLINIC, DEFAULT_CLINIC);
-  window.CLINIC = cached;
-  return cached;
+  const { data, error } = await sb.from("clinic_settings").select("*").eq("id", 1).maybeSingle();
+  if (error) {
+    console.error("[clinic] loadClinic failed", error);
+    throw new Error(error.message || "تعذّر تحميل بيانات العيادة");
+  }
+  const merged = { ...DEFAULT_CLINIC, ...(data || {}) };
+  window.CLINIC = merged;
+  window.dispatchEvent(new CustomEvent("kinetic:clinic-updated", { detail: merged }));
+  return merged;
 }
 
 // Columns that actually exist on `clinic_settings`. Anything the form
@@ -82,33 +93,33 @@ const CLINIC_COLS = [
 ];
 
 async function saveClinic(patch) {
-  const next = { ...(window.CLINIC || DEFAULT_CLINIC), ...patch, updated_at: new Date().toISOString() };
+  if (!sb) throw new Error("قاعدة البيانات غير متصلة");
+  const merged = { ...(window.CLINIC || DEFAULT_CLINIC), ...patch };
 
   // Whitelist projection so PostgREST never sees a stray column.
   const dbRow = { id: 1 };
-  for (const k of CLINIC_COLS) if (next[k] !== undefined) dbRow[k] = next[k];
+  for (const k of CLINIC_COLS) if (merged[k] !== undefined) dbRow[k] = merged[k];
+  dbRow.updated_at = new Date().toISOString();
 
-  if (sb) {
-    const { error } = await sb.from("clinic_settings").upsert(dbRow, { onConflict: "id" });
-    if (error) {
-      // Surface the real DB error to the caller so the UI can show it
-      // and the toast isn't a lie. Keep in-memory + LS untouched on
-      // failure — no partial write.
-      console.warn("saveClinic upsert failed", error);
-      throw new Error(error.message || "تعذّر حفظ بيانات العيادة");
-    }
-    // Re-read authoritative row so the client mirrors exactly what the
-    // DB persisted (server-side defaults, updated_at trigger, etc.).
-    try {
-      const { data } = await sb.from("clinic_settings").select("*").eq("id", 1).single();
-      if (data) Object.assign(next, data);
-    } catch (_) { /* non-fatal: keep the optimistic merge */ }
-  }
+  console.info("[clinic] outbound clinic_settings payload", dbRow);
+  // UPDATE the singleton by primary key. The migration guarantees the row
+  // exists, so we do NOT need upsert — an UPDATE that affects 0 rows must
+  // surface as a real failure (either RLS blocked us or the row was
+  // deleted out from under us), and the caller must see that.
+  const { data, error, status } = await sb
+    .from("clinic_settings")
+    .update(dbRow)
+    .eq("id", 1)
+    .select("*")
+    .maybeSingle();
+  console.info("[clinic] update result", { status, error, data });
+  if (error) throw new Error(error.message || "تعذّر حفظ بيانات العيادة");
+  if (!data) throw new Error("لم يتم تحديث أي صف — تحقق من صلاحيات الحفظ");
 
-  window.CLINIC = next;
-  writeLS(LS_CLINIC, next);
-  window.dispatchEvent(new CustomEvent("kinetic:clinic-updated", { detail: next }));
-  return next;
+  const authoritative = { ...DEFAULT_CLINIC, ...data };
+  window.CLINIC = authoritative;
+  window.dispatchEvent(new CustomEvent("kinetic:clinic-updated", { detail: authoritative }));
+  return authoritative;
 }
 
 // ── Custom sections: load / save / add / remove / update ──────
@@ -271,7 +282,13 @@ async function removeBranch(id) {
 }
 
 // ── Kick off initial hydration (fire-and-forget, but log failures) ─
-window.CLINIC = readLS(LS_CLINIC, DEFAULT_CLINIC);
+// Clinic branding is DB-only — do NOT seed from localStorage. A stale LS
+// value was the reason the Settings page appeared to save then revert
+// on refresh. The first paint may render placeholders for one frame;
+// loadClinic() below fires the `kinetic:clinic-updated` event which
+// causes Sidebar / login / PDF header to re-render with the DB values.
+window.CLINIC = { ...DEFAULT_CLINIC };
+try { localStorage.removeItem(LS_CLINIC); } catch (_) {}
 window.CUSTOM_SECTIONS = readLS(LS_SECTIONS, DEFAULT_SECTIONS);
 window.BRANCHES = readLS(LS_BRANCHES, DEFAULT_BRANCHES);
 window.ACTIVE_BRANCH_ID = readLS(LS_ACTIVE_BRANCH, window.BRANCHES[0]?.id || null);
@@ -636,7 +653,10 @@ function startDictation(opts) {
 function printHTML(title, bodyHtml) {
   const w = window.open("", "_blank", "width=900,height=1000");
   if (!w) { if (window.showToast) window.showToast("متصفح النافذة المنبثقة محجوب", "error"); return; }
-  const brand = escHtml((window.CLINIC && window.CLINIC.name) || "Kinetic");
+  // Brand name comes from the DB singleton — never a hardcoded fallback.
+  // Empty string keeps the PDF header sane if the clinic hasn't set a
+  // name yet, without leaking the placeholder into the export.
+  const brand = escHtml((window.CLINIC && window.CLINIC.name) || "");
   const safeTitle = escHtml(title);
   w.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"/>
     <title>${safeTitle}</title>
@@ -699,11 +719,16 @@ const DATA_TABLES = {
   staff:      { key: "staff",      pk: "staff_id",    ls: "kinetic.staff",
                 cols: ["staff_id","name","role","phone","email","auth_uid"] },
   therapists: { key: "therapists", pk: "id",          ls: "kinetic.therapists",
-                cols: ["id","name","spec","load","max","color"] },
+                cols: ["id","name","spec","load","max","color","department_id","phone","email",
+                       "license_number","notes","active","created_at","updated_at"] },
   departments:{ key: "departments",pk: "id",          ls: "kinetic.departments",
                 cols: ["id","name_ar","name_en","description","icon","color","sort_order","active"] },
   doctors:    { key: "doctors",    pk: "id",          ls: "kinetic.doctors",
-                cols: ["id","name","department_id","specialization","experience_years","photo","schedule","status","color","active"] },
+                cols: ["id","name","department_id","specialization","experience_years","photo","schedule",
+                       "status","color","active","phone","email","license_number","notes",
+                       "created_at","updated_at"] },
+  receptionists: { key: "receptionists", pk: "id",    ls: "kinetic.receptionists",
+                cols: ["id","name","phone","email","notes","active","created_at","updated_at"] },
   packages:   { key: "packages",   pk: "id",          ls: "kinetic.packages",
                 cols: ["id","name","sessions","price","active","popular","color","sold"] },
   campaigns:  { key: "campaigns",  pk: "id",          ls: "kinetic.campaigns",

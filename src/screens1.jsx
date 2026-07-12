@@ -283,7 +283,7 @@ function Dashboard({ go }) {
         <StatCard label={labels.appts} value={`${booked.length}/${periodAppts.length}`} accent="#3A7FB5" icon={<I.Calendar size={15}/>}/>
         <StatCard label={labels.rev}   value={fmtEGP(periodRevenue)} accent="#3FA984" icon={<I.Dollar size={15}/>}/>
         <StatCard label="الإيرادات الشهرية"   value={fmtEGP(monthRevenue)} accent="#7E6BD3" icon={<I.Chart size={15}/>}/>
-        <StatCard label="الأخصائيون النشطون" value={`${DATA.therapists.length}/${DATA.therapists.length}`} accent="#D49044" icon={<I.Stethoscope size={15}/>}/>
+        <StatCard label="الأخصائيون النشطون" value={`${(DATA.therapists||[]).filter(t=>t.active!==false).length}/${(DATA.therapists||[]).length}`} accent="#D49044" icon={<I.Stethoscope size={15}/>}/>
         <StatCard label="الجلسات المتبقية" value={remainTotal.toLocaleString()} accent="#D8665A" icon={<I.Activity size={15}/>}/>
       </div>
 
@@ -874,7 +874,13 @@ function PatientEditModal({ patient, onClose, onSaved }) {
   }
 
   const doctors    = (DATA.doctors    || []).filter(d => d.active !== false);
-  const therapists = DATA.therapists || [];
+  // Inactive specialists stay hidden from the assignment dropdown; the
+  // patient's currently-assigned specialist (form.therapist_id) is kept
+  // in the option list even when inactive, so historical records don't
+  // silently lose their assignment on render.
+  const activeThs = (DATA.therapists || []).filter(t => t.active !== false);
+  const currentT  = (DATA.therapists || []).find(t => (t.staff_id||t.id) === form.therapist_id);
+  const therapists = currentT && currentT.active === false ? [...activeThs, currentT] : activeThs;
 
   const dis = (allowed) => allowed ? undefined : { disabled: true, style:{background:"var(--ink-50)",cursor:"not-allowed"} };
   const errStyle = (k) => errors[k] ? { border:"1px solid var(--red)" } : {};
@@ -2289,7 +2295,13 @@ function CalendarView({ dateOffset, setDateOffset }) {
   }
 
   // ── Staff columns (therapists + doctors) ──
-  const therapists = window.scopeTherapists ? window.scopeTherapists(DATA.therapists || []) : (DATA.therapists || []);
+  // Inactive rosters are hidden from the calendar grid — historical
+  // appointments still exist in the DB and can be looked up by id, but
+  // an inactive specialist no longer takes up column space in the day/
+  // week view. The columnIndexIn() lookup below falls back to name so a
+  // rendered historical row can still route to a column when needed.
+  const scopedTherapists = window.scopeTherapists ? window.scopeTherapists(DATA.therapists || []) : (DATA.therapists || []);
+  const therapists = scopedTherapists.filter(t => t.active !== false);
   const doctors    = (DATA.doctors || []).filter(d => d.active !== false);
   const therapistCols = React.useMemo(() => therapists.map(t => ({
     key:       t.staff_id || t.id || t.name,
@@ -3176,7 +3188,10 @@ function BookingFlow({ onDone }) {
   const steps = ["المريض","القسم","الطبيب","الأخصائي","التاريخ","الوقت"];
   const LAST = steps.length;
   const update = (patch) => setPicks(p => ({ ...p, ...patch }));
-  const therapists = window.scopeTherapists ? window.scopeTherapists(DATA.therapists) : DATA.therapists;
+  // Only offer active specialists for new assignments; historical
+  // appointments keep their original therapist_id untouched.
+  const therapists = (window.scopeTherapists ? window.scopeTherapists(DATA.therapists) : DATA.therapists)
+    .filter(t => t.active !== false);
 
   // Validate the patient step before advancing.
   function patientStepValid() {

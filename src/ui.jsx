@@ -208,12 +208,12 @@ function AddBranchModal({ onClose, editing }) {
 
 function Sidebar({ active, onNav, role, user, isOpen }) {
   // ── Live clinic + custom sections (re-render on updates) ──────
-  const [clinic, setClinic] = React.useState(window.CLINIC || { name:"Kinetic", subtitle:"نظام العيادة", logo:null });
+  const [clinic, setClinic] = React.useState(window.CLINIC || {});
   const [customs, setCustoms] = React.useState(window.CUSTOM_SECTIONS || []);
   // Bump on any data change so patient/appt counts stay live.
   const [, setTick] = React.useState(0);
   React.useEffect(()=>{
-    const c = ()=> setClinic(window.CLINIC || { name:"Kinetic", subtitle:"نظام العيادة", logo:null });
+    const c = ()=> setClinic(window.CLINIC || {});
     const s = ()=> setCustoms(window.CUSTOM_SECTIONS || []);
     const d = ()=> setTick(t=>t+1);
     window.addEventListener("kinetic:clinic-updated", c);
@@ -290,8 +290,8 @@ function Sidebar({ active, onNav, role, user, isOpen }) {
           ? <img src={clinic.logo} alt="clinic logo" style={{width:30,height:30,borderRadius:9,objectFit:"cover",background:"var(--blue-50)"}}/>
           : <I.Logo size={30}/>}
         <div style={{display:"flex",flexDirection:"column",lineHeight:1.1}}>
-          <span style={{fontWeight:600,fontSize:15,letterSpacing:"-.01em"}}>{clinic.name || "Kinetic"}</span>
-          <span style={{fontSize:10.5,color:"var(--ink-500)",letterSpacing:".06em",textTransform:"uppercase"}}>{clinic.subtitle || "نظام العيادة"}</span>
+          <span style={{fontWeight:600,fontSize:15,letterSpacing:"-.01em"}}>{clinic.name || "—"}</span>
+          <span style={{fontSize:10.5,color:"var(--ink-500)",letterSpacing:".06em",textTransform:"uppercase"}}>{clinic.subtitle || ""}</span>
         </div>
       </div>
 
@@ -925,6 +925,14 @@ function isDemoMode() {
 function AuthScreen({ onLogin, onBookAsGuest }) {
   // ── State ──────────────────────────────────────────────────
   const [mode, setMode] = React.useState("login"); // login | forgot | reset
+  // Live clinic branding so the login page picks up name/subtitle/logo
+  // changes without a code deploy. Re-renders on kinetic:clinic-updated.
+  const [clinic, setClinic] = React.useState(window.CLINIC || {});
+  React.useEffect(() => {
+    const on = () => setClinic(window.CLINIC || {});
+    window.addEventListener("kinetic:clinic-updated", on);
+    return () => window.removeEventListener("kinetic:clinic-updated", on);
+  }, []);
   // Prefill a sample account only in demo; production starts blank so no
   // specific account is hardcoded in the UI.
   const [email, setEmail] = React.useState(isDemoMode() ? "amir@kinetic.eg" : "");
@@ -1030,10 +1038,12 @@ function AuthScreen({ onLogin, onBookAsGuest }) {
         </svg>
 
         <div style={{position:"relative",display:"flex",alignItems:"center",gap:12}}>
-          <I.Logo size={36}/>
+          {clinic.logo
+            ? <img src={clinic.logo} alt="clinic logo" style={{width:36,height:36,borderRadius:10,objectFit:"cover",background:"rgba(255,255,255,.6)"}}/>
+            : <I.Logo size={36}/>}
           <div>
-            <div style={{fontWeight:600,fontSize:20,color:"#0F1E2B"}}>Kinetic</div>
-            <div style={{fontSize:11,letterSpacing:".08em",color:"#1E4A6E",textTransform:"uppercase"}}>نظام العيادة</div>
+            <div style={{fontWeight:600,fontSize:20,color:"#0F1E2B"}}>{clinic.name || ""}</div>
+            <div style={{fontSize:11,letterSpacing:".08em",color:"#1E4A6E",textTransform:"uppercase"}}>{clinic.subtitle || ""}</div>
           </div>
         </div>
 
@@ -1067,7 +1077,7 @@ function AuthScreen({ onLogin, onBookAsGuest }) {
         </div>
 
         <div style={{position:"relative",fontSize:12,color:"#1E4A6E",opacity:.8}}>
-          © 2026 Kinetic نظام العيادة · صُنع في القاهرة
+          © {new Date().getFullYear()} {clinic.name || ""} {clinic.subtitle || ""}
         </div>
       </div>
 
