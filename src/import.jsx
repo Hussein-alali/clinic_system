@@ -7,10 +7,18 @@
 // To remove it after the migration: delete this file, its <script> tag in
 // index.html, and the `importMode` guard in App() (src/screens2.jsx).
 //
+// Access: EVERY authenticated staff member (admin, receptionist, doctor,
+// therapist). ImportAuthGate (bottom of this file) verifies the Supabase
+// session and reads the role from the `staff` table in PostgreSQL before
+// rendering — localStorage is never trusted; anonymous users get the
+// login screen. RLS on `patients` / `patient_files` / the storage bucket
+// is the real enforcement.
+//
 // Persistence reuses the existing backend:
 //   • patient  → window.KineticData.upsert("patients", row)
+//                (PostgreSQL first; files only after the row exists)
 //   • files    → window.uploadPatientFile(patient_id, file, onProgress)
-//                (Supabase Storage + patient_files table, LS fallback)
+//                (Supabase Storage + patient_files table)
 
 function HistoricalImportPage() {
   const blankForm = () => ({
@@ -25,7 +33,9 @@ function HistoricalImportPage() {
   const [saving, setSaving] = React.useState(false);
   const [errors, setErrors] = React.useState({});
   const [dragOver, setDragOver] = React.useState(false);
-  const [count, setCount] = React.useState(() => Number(localStorage.getItem("kinetic.import_count") || 0));
+  // Session-only counter (in memory) — the patient workflow keeps nothing
+  // authoritative in localStorage.
+  const [count, setCount] = React.useState(0);
   const [last, setLast] = React.useState(null);   // {name, pid, files}
 
   const nameRef = React.useRef(null);
@@ -76,13 +86,18 @@ function HistoricalImportPage() {
     return Object.keys(e).length === 0;
   }
 
-  // Try to resolve the assigned name to an existing therapist id.
-  function resolveTherapistId(name) {
+  // Try to resolve the assigned name to an existing therapist or doctor id
+  // so the record links to the real care team, not just free text.
+  function resolveAssigned(name) {
     const q = String(name || "").trim().toLowerCase();
-    if (!q) return null;
-    const list = (window.DATA && window.DATA.therapists) || [];
-    const hit = list.find(t => String(t.name || "").trim().toLowerCase() === q);
-    return hit ? (hit.id || hit.therapist_id || null) : null;
+    if (!q) return { therapist_id: null, doctor_id: null };
+    const eq = (x) => String(x || "").trim().toLowerCase() === q;
+    const th = ((window.DATA && window.DATA.therapists) || []).find(t => eq(t.name));
+    const dr = ((window.DATA && window.DATA.doctors) || []).find(d => eq(d.name));
+    return {
+      therapist_id: th ? (th.id || th.therapist_id || null) : null,
+      doctor_id:    dr ? (dr.id || null) : null,
+    };
   }
   function normalizePhone(p) {
     return String(p || "").replace(/[^\d]/g, "");
@@ -101,34 +116,35 @@ function HistoricalImportPage() {
     // ── Preflight: verify auth before we touch the DB. ─────────
     // Without a session, the Supabase client falls back to the anon
     // key, `auth.uid()` in Postgres is null, `public.app_role()`
-    // returns null, and the RLS `admin/reception write patients`
-    // policy rejects the INSERT (code 42501). Fail fast with a
-    // clear message instead of a silent DB reject.
+    // returns null, and the RLS staff policies reject the INSERT
+    // (code 42501). Fail fast with a clear message instead of a
+    // silent DB reject. The role is read from the `staff` table in
+    // PostgreSQL (getAuthStaff) — never from localStorage or
+    // user_metadata — and EVERY staff role may register patients.
     const sb = window.SB;
     if (!sb) {
       console.error("[import] save aborted — Supabase client not configured");
       if (window.showToast) window.showToast("لم يتم تكوين قاعدة البيانات", "error");
       return;
     }
-    let session = null;
-    try { const { data } = await sb.auth.getSession(); session = data && data.session; }
-    catch (e) { console.error("[import] getSession threw", e); }
-    const authUser = session && session.user;
-    const role = authUser && (authUser.user_metadata && authUser.user_metadata.role) || "";
-    const accessToken = session && session.access_token;
-    console.info("[import] auth state before insert", {
-      hasSession:      !!session,
-      hasAccessToken:  !!accessToken,
-      userId:          authUser && authUser.id,
-      email:           authUser && authUser.email,
-      role:            role || "(missing user_metadata.role)",
+    const auth = window.getAuthStaff
+      ? await window.getAuthStaff()
+      : { ok: false, reason: "no-database", error: "getAuthStaff غير متاح" };
+    console.info("[import] verified auth state before insert", {
+      ok:      auth.ok,
+      reason:  auth.reason || null,
+      userId:  auth.user && auth.user.id,
+      email:   auth.user && auth.user.email,
+      dbRole:  auth.role || "(no staff row)",
     });
-    if (!authUser) {
-      if (window.showToast) window.showToast("يجب تسجيل الدخول أولاً — RLS يمنع الحفظ", "error");
-      return;
-    }
-    if (role !== "admin" && role !== "receptionist") {
-      if (window.showToast) window.showToast(`دورك (${role || "غير محدد"}) لا يسمح بالإدخال — يجب أن تكون مدير أو استقبال`, "error");
+    if (!auth.ok) {
+      if (auth.reason === "no-session" || auth.reason === "invalid-session") {
+        if (window.showToast) window.showToast("انتهت الجلسة — سجّل الدخول من جديد", "error");
+        // Kick back to the login screen instead of letting a dead session linger.
+        setTimeout(() => window.location.reload(), 1200);
+      } else {
+        if (window.showToast) window.showToast(auth.error || "تعذّر التحقق من الصلاحيات", "error");
+      }
       return;
     }
 
@@ -149,6 +165,7 @@ function HistoricalImportPage() {
       const ageNum = form.age
         ? Number(form.age)
         : (form.dob ? Math.max(0, new Date().getFullYear() - new Date(form.dob).getFullYear()) : null);
+      const assigned = resolveAssigned(form.assigned);
 
       const row = {
         patient_id: pid, id: pid,
@@ -160,7 +177,8 @@ function HistoricalImportPage() {
         address: form.address.trim() || null,
         diagnosis: form.diagnosis.trim(),
         notes: form.notes.trim(),
-        therapist_id: resolveTherapistId(form.assigned),
+        therapist_id: assigned.therapist_id,
+        doctor_id: assigned.doctor_id,
         status: form.status || null,
         created_at: form.registered ? new Date(form.registered).toISOString() : new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -179,9 +197,14 @@ function HistoricalImportPage() {
         row:     res,
       });
       if (!res || res._ok === false) {
+        // Surface the EXACT PostgreSQL/RLS error and the operation that
+        // failed — never a fake success.
         const msg = (res && res._error) || "تعذّر حفظ المريض في قاعدة البيانات";
-        console.error("[import] patient insert rejected by Postgres", { error: msg, payload: row });
-        if (window.showToast) window.showToast(msg, "error");
+        console.error("[import] patient insert rejected by Postgres", {
+          operation: "UPSERT patients (INSERT ON CONFLICT UPDATE)",
+          error: msg, payload: row,
+        });
+        if (window.showToast) window.showToast(`فشل INSERT في جدول patients — ${msg}`, "error");
         return;
       }
 
@@ -218,17 +241,19 @@ function HistoricalImportPage() {
             uploaded++;
             setFiles(prev => prev.map(x => x.id === item.id ? { ...x, status: "done", progress: 100 } : x));
           } else {
-            setFiles(prev => prev.map(x => x.id === item.id ? { ...x, status: "error", error: res && res.error } : x));
+            const fErr = (res && res.error) || "سبب غير معروف";
+            console.error("[import] file upload rejected", { file: item.file.name, error: fErr });
+            if (window.showToast) window.showToast(`فشل رفع ${item.file.name} — ${fErr}`, "error");
+            setFiles(prev => prev.map(x => x.id === item.id ? { ...x, status: "error", error: fErr } : x));
           }
         } catch (err) {
-          console.warn("file upload failed", err);
+          console.error("[import] file upload threw", { file: item.file.name, error: err });
+          if (window.showToast) window.showToast(`فشل رفع ${item.file.name} — ${err.message || err}`, "error");
           setFiles(prev => prev.map(x => x.id === item.id ? { ...x, status: "error" } : x));
         }
       }
 
-      const n = count + 1;
-      setCount(n);
-      localStorage.setItem("kinetic.import_count", String(n));
+      setCount(n => n + 1);
       setLast({ name: row.name, pid, files: uploaded });
       if (window.showToast) window.showToast(`تم حفظ ${row.name} · ${pid}${uploaded ? ` · ${uploaded} ملف` : ""}`, "success");
 
@@ -440,4 +465,101 @@ function HistoricalImportPage() {
   );
 }
 
+// ══════════════════════════════════════════════════════════════
+// ImportAuthGate — authentication + authorization for ?import=1.
+//
+// Before rendering the page it:
+//   1. verifies a Supabase Auth session exists and is valid server-side,
+//   2. reads the user's role from the `staff` table in PostgreSQL,
+//   3. allows EVERY staff role (admin, receptionist, doctor, therapist).
+// No session → the Login screen. localStorage / sessionStorage /
+// frontend variables are never consulted, so the gate can't be bypassed
+// by forging cached state. (RLS remains the real enforcement layer.)
+// ══════════════════════════════════════════════════════════════
+function ImportAuthGate() {
+  const [gate, setGate] = React.useState({ phase: "checking" });
+
+  const runCheck = React.useCallback(async () => {
+    setGate({ phase: "checking" });
+    if (!window.getAuthStaff) {
+      setGate({ phase: "error", error: "طبقة المصادقة غير محمّلة" });
+      return;
+    }
+    const res = await window.getAuthStaff();
+    console.info("[import] gate check", { ok: res.ok, reason: res.reason || null, role: res.role || null });
+    if (res.ok) {
+      // Expose the VERIFIED identity to data-scoping helpers. save()
+      // re-verifies independently before every insert.
+      window.ME = {
+        id: res.staff.staff_id || res.user.id,
+        name: res.staff.name || res.user.email,
+        email: res.user.email,
+        role: res.role,
+        scope: window.roleScope ? window.roleScope(res.role) : "all",
+      };
+      setGate({ phase: "ok", auth: res });
+      return;
+    }
+    if (res.reason === "no-session" || res.reason === "invalid-session") {
+      setGate({ phase: "login" });
+      return;
+    }
+    if (res.reason === "no-database") {
+      setGate({ phase: "error", error: res.error });
+      return;
+    }
+    // staff-lookup-failed / no-staff-role / role-not-staff
+    setGate({ phase: "denied", error: res.error, role: res.role || null });
+  }, []);
+
+  React.useEffect(() => { runCheck(); }, [runCheck]);
+
+  function exitToApp() {
+    try {
+      const u = new URL(window.location.href);
+      u.searchParams.delete("import");
+      window.location.href = u.pathname + (u.search || "") + u.hash;
+    } catch { window.location.href = "./"; }
+  }
+
+  if (gate.phase === "checking") {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--ink-50)", gap: 10 }}>
+        <span className="spin" style={{ width: 18, height: 18, border: "2px solid var(--blue-500)", borderTopColor: "transparent", borderRadius: "50%" }} />
+        <span className="muted" style={{ fontSize: 13.5 }}>جارٍ التحقق من الجلسة والصلاحيات…</span>
+      </div>
+    );
+  }
+
+  // No valid session → the Login page. On success re-run the DB check
+  // (the Supabase session set by signInEmail is what actually matters).
+  if (gate.phase === "login") {
+    return <AuthScreen onLogin={() => runCheck()} onBookAsGuest={() => {}} />;
+  }
+
+  if (gate.phase === "denied" || gate.phase === "error") {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--ink-50)", padding: 24 }}>
+        <div className="card card-pad" style={{ maxWidth: 460, textAlign: "center" }}>
+          <div style={{ fontSize: 34, marginBottom: 10 }}>🔒</div>
+          <div className="h3" style={{ marginBottom: 6 }}>لا يمكن فتح صفحة الإدخال</div>
+          <div className="muted" style={{ fontSize: 13.5, marginBottom: 8 }}>
+            الصفحة متاحة لكل الموظفين (مدير، استقبال، طبيب، أخصائي) بعد التحقق من الدور في قاعدة البيانات.
+          </div>
+          <div style={{ fontSize: 12.5, color: "var(--red)", marginBottom: 16, direction: "rtl" }}>
+            {gate.error || "سبب غير معروف"}{gate.role ? ` — الدور الحالي: ${gate.role}` : ""}
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+            <button className="btn btn-secondary" onClick={() => runCheck()}>إعادة المحاولة</button>
+            <button className="btn btn-blue" onClick={exitToApp}>عودة للتطبيق</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return <HistoricalImportPage />;
+}
+
 window.HistoricalImportPage = HistoricalImportPage;
+window.ImportAuthGate = ImportAuthGate;
