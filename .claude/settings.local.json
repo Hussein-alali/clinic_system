@@ -62,7 +62,11 @@
       "Bash(python -m http.server 8000)",
       "Read(//c/Users/bdalr/.claude/skills/ui-ux-pro-max/**)",
       "Bash(python scripts/search.py \"healthcare clinic dashboard list table minimal professional Arabic RTL\" --design-system -p \"Kinetic Clinic\")",
-      "Bash(python scripts/search.py \"data table hover row zebra sticky header\" --domain ux -n 8)"
+      "Bash(python scripts/search.py \"data table hover row zebra sticky header\" --domain ux -n 8)",
+      "Bash(awk -F: '$1<=4770 && $1>=4550')",
+      "Bash(awk -F: '$1<=5083 && $1>=4900')",
+      "Bash(sed 's/ \\(.*//')",
+      "Bash(python3 *)"
     ]
   }
 }

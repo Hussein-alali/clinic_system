@@ -34,54 +34,224 @@ function activeBranchName() {
   return (b && b.name) || "عيادتك";
 }
 const invoiceDateOf = (p) => String(p.date || p.created_at || "").slice(0, 10);
+
+// ── Dashboard time filter ─────────────────────────────────────
+// Given a range preset (اليوم / هذا الأسبوع / الشهر / الربع), returns
+// the [from, to] window (YYYY-MM-DD, inclusive) plus a `bucket` telling
+// widgets whether to group by hour, day, or month. The clinic week
+// starts on Saturday to match the Calendar module.
+function __dashPad(n){ return String(n).padStart(2,"0"); }
+function __dashIso(d){ return `${d.getFullYear()}-${__dashPad(d.getMonth()+1)}-${__dashPad(d.getDate())}`; }
+function __dashStartOfWeek(d){
+  const day = d.getDay();
+  const diff = (day + 1) % 7; // days since Saturday
+  const out = new Date(d); out.setDate(d.getDate() - diff); out.setHours(0,0,0,0);
+  return out;
+}
+function dashboardPeriod(range) {
+  const now = new Date(); now.setHours(0,0,0,0);
+  const y = now.getFullYear(), m = now.getMonth();
+  switch (range) {
+    case "اليوم":
+      return { from: __dashIso(now), to: __dashIso(now), bucket: "hour", label: "اليوم" };
+    case "هذا الأسبوع": {
+      const s = __dashStartOfWeek(now);
+      const e = new Date(s); e.setDate(s.getDate()+6);
+      return { from: __dashIso(s), to: __dashIso(e), bucket: "day", label: "هذا الأسبوع" };
+    }
+    case "الشهر": {
+      const s = new Date(y, m, 1), e = new Date(y, m+1, 0);
+      return { from: __dashIso(s), to: __dashIso(e), bucket: "day", label: "الشهر" };
+    }
+    case "الربع": {
+      const q = Math.floor(m/3);            // 0-3
+      const s = new Date(y, q*3, 1), e = new Date(y, q*3+3, 0);
+      return { from: __dashIso(s), to: __dashIso(e), bucket: "month", label: "الربع" };
+    }
+    default:
+      return { from: __dashIso(now), to: __dashIso(now), bucket: "hour", label: range };
+  }
+}
+function inPeriod(dateStr, from, to) {
+  if (!dateStr) return false;
+  const d = String(dateStr).slice(0, 10);
+  return d >= from && d <= to;
+}
+// Read the appointment's canonical date, treating a missing date as today
+// (bookings without a scheduled date usually get filed as "today").
+function apptDayOf(a){
+  const d = a && (a.date || a.created_at);
+  return d ? String(d).slice(0,10) : new Date().toISOString().slice(0,10);
+}
+function apptHourOf(a){
+  const t = String(a && a.time || "").match(/^(\d{1,2}):/);
+  return t ? Math.max(0, Math.min(23, parseInt(t[1], 10))) : null;
+}
+// Enumerate day/month labels covering [from, to] so charts stay stable
+// even for periods with no data.
+function enumerateDays(from, to){
+  const out = [];
+  const s = new Date(from), e = new Date(to);
+  s.setHours(0,0,0,0); e.setHours(0,0,0,0);
+  const cur = new Date(s);
+  while (cur <= e) { out.push(__dashIso(cur)); cur.setDate(cur.getDate()+1); }
+  return out;
+}
+function enumerateMonths(from, to){
+  const out = [];
+  const s = new Date(from), e = new Date(to);
+  s.setDate(1); e.setDate(1);
+  const cur = new Date(s);
+  while (cur <= e) { out.push(`${cur.getFullYear()}-${__dashPad(cur.getMonth()+1)}`); cur.setMonth(cur.getMonth()+1); }
+  return out;
+}
 const fmtEGP = (v) => v >= 1000 ? `EGP ${(v/1000).toFixed(1)}K` : `EGP ${(v||0).toLocaleString()}`;
 
 function Dashboard({ go }) {
-  const [range, setRange] = React.useState("هذا الأسبوع");
+  window.useDataVersion && window.useDataVersion();
+  const LS_RANGE = "kinetic.dashRange";
+  // Preserve the selected range across navigations. Falls back to a sane
+  // default the first time the dashboard is opened.
+  const [range, setRangeState] = React.useState(() => {
+    try { return localStorage.getItem(LS_RANGE) || "هذا الأسبوع"; }
+    catch { return "هذا الأسبوع"; }
+  });
+  const setRange = React.useCallback((r) => {
+    setRangeState(r);
+    try { localStorage.setItem(LS_RANGE, r); } catch {}
+  }, []);
+  const [quickPayOpen, setQuickPayOpen] = React.useState(false);
+
   const patients = DATA.patients, appts = DATA.appts, payments = DATA.payments;
   const today = new Date().toISOString().slice(0,10);
-  const month = today.slice(0,7);
 
-  // Revenue per day — the latest 7 dates that actually have invoices.
-  const revByDate = {};
-  payments.forEach(p => { const d = invoiceDateOf(p); if (d) revByDate[d] = (revByDate[d]||0) + (p.paid||0); });
-  const revenueData = Object.keys(revByDate).sort().slice(-7).map(d => ({ label:d.slice(5), v:revByDate[d] }));
+  const period = React.useMemo(() => dashboardPeriod(range), [range]);
+  const periodAppts    = React.useMemo(
+    () => appts.filter(a => inPeriod(apptDayOf(a), period.from, period.to)),
+    [appts, period.from, period.to]
+  );
+  const periodPayments = React.useMemo(
+    () => payments.filter(p => inPeriod(invoiceDateOf(p), period.from, period.to)),
+    [payments, period.from, period.to]
+  );
+  const periodPatients = React.useMemo(
+    () => patients.filter(p => inPeriod(String(p.registered||"").slice(0,10), period.from, period.to)),
+    [patients, period.from, period.to]
+  );
 
-  // Appointment volume per day (bookings without a date count as today).
-  const apptByDate = {};
-  appts.forEach(a => { const d = String(a.date || today).slice(0,10); apptByDate[d] = (apptByDate[d]||0)+1; });
-  const apptData = Object.keys(apptByDate).sort().slice(-7).map(d => ({ label:d.slice(5), v:apptByDate[d] }));
+  // Revenue chart — labels/values match the period bucket.
+  // hour: 24 buckets 0-23; day: one bucket per calendar day; month: one per month.
+  const revenueData = React.useMemo(() => {
+    if (period.bucket === "hour") {
+      const buckets = Array(24).fill(0);
+      periodPayments.forEach(p => {
+        const t = String(p.created_at || "");
+        const h = t ? (new Date(t)).getHours() : 0;
+        if (Number.isFinite(h)) buckets[h] += (p.paid || 0);
+      });
+      return buckets.map((v,i) => ({ label: `${i}:00`, v }));
+    }
+    if (period.bucket === "day") {
+      const days = enumerateDays(period.from, period.to);
+      const map = {};
+      periodPayments.forEach(p => { const d = invoiceDateOf(p); if (d) map[d] = (map[d]||0)+(p.paid||0); });
+      return days.map(d => ({ label: d.slice(5), v: map[d] || 0 }));
+    }
+    const months = enumerateMonths(period.from, period.to);
+    const map = {};
+    periodPayments.forEach(p => { const d = invoiceDateOf(p).slice(0,7); if (d) map[d] = (map[d]||0)+(p.paid||0); });
+    return months.map(m => ({ label: m.slice(5), v: map[m] || 0 }));
+  }, [periodPayments, period.bucket, period.from, period.to]);
 
-  // Session-type mix from actual bookings.
-  const typeCounts = {};
-  appts.forEach(a => { if (a.type) typeCounts[a.type] = (typeCounts[a.type]||0)+1; });
-  const methodsData = Object.entries(typeCounts).sort((a,b)=>b[1]-a[1]).slice(0,4)
-    .map(([label, v], i) => ({ label, v, color: CHART_COLORS[i] }));
+  // Appointment volume — same bucketing as revenue.
+  const apptData = React.useMemo(() => {
+    if (period.bucket === "hour") {
+      const buckets = Array(24).fill(0);
+      periodAppts.forEach(a => {
+        const h = apptHourOf(a);
+        if (h != null) buckets[h] += 1;
+      });
+      return buckets.map((v,i) => ({ label: `${i}:00`, v }));
+    }
+    if (period.bucket === "day") {
+      const days = enumerateDays(period.from, period.to);
+      const map = {};
+      periodAppts.forEach(a => { const d = apptDayOf(a); map[d] = (map[d]||0)+1; });
+      return days.map(d => ({ label: d.slice(5), v: map[d] || 0 }));
+    }
+    const months = enumerateMonths(period.from, period.to);
+    const map = {};
+    periodAppts.forEach(a => { const m = apptDayOf(a).slice(0,7); map[m] = (map[m]||0)+1; });
+    return months.map(m => ({ label: m.slice(5), v: map[m] || 0 }));
+  }, [periodAppts, period.bucket, period.from, period.to]);
 
-  // Package uptake from the packages table.
+  // Session-type mix — recomputed from period appointments only.
+  const methodsData = React.useMemo(() => {
+    const typeCounts = {};
+    periodAppts.forEach(a => { if (a.type) typeCounts[a.type] = (typeCounts[a.type]||0)+1; });
+    return Object.entries(typeCounts).sort((a,b)=>b[1]-a[1]).slice(0,4)
+      .map(([label, v], i) => ({ label, v, color: CHART_COLORS[i] }));
+  }, [periodAppts]);
+  const methodsTotal = methodsData.reduce((s,d)=>s+d.v, 0);
+
+  // Package uptake from the packages table (stays global — not date-scoped).
   const packageData = DATA.packages.filter(p => p.active !== false).slice(0,5)
     .map((p, i) => ({ label:p.name, v:p.sold||0, color: CHART_COLORS[i % CHART_COLORS.length] }));
 
-  const booked = appts.filter(a => a.status !== "متاح");
-  const confirmed = booked.filter(a => a.status !== "معلّق" && a.status !== "ملغي");
-  const todaysPatients = new Set(booked.map(a => a.patient).filter(Boolean)).size;
-  const todaysRevenue = payments.filter(p => invoiceDateOf(p) === today).reduce((s,p)=>s+(p.paid||0),0);
-  const monthRevenue = payments.filter(p => invoiceDateOf(p).startsWith(month)).reduce((s,p)=>s+(p.paid||0),0);
-  const outstanding = payments.reduce((s,p)=>s+Math.max(0,(p.amount||0)-(p.paid||0)),0);
-  const remainTotal = patients.reduce((s,p)=>s+(p.remain||0),0);
-  const weekAgo = new Date(Date.now()-7*864e5).toISOString().slice(0,10);
-  const newThisWeek = patients.filter(p => (p.registered||"") >= weekAgo).length;
-  const pendingPayments = payments.filter(p => p.status !== "مدفوع");
+  // Period-scoped stats — every card refreshes when `range` changes.
+  const booked          = periodAppts.filter(a => a.status !== "متاح");
+  const confirmed       = booked.filter(a => a.status !== "معلّق" && a.status !== "ملغي");
+  const uniquePatients  = new Set(booked.map(a => a.patient).filter(Boolean)).size;
+  const periodRevenue   = periodPayments.reduce((s,p)=>s+(p.paid||0),0);
+  const monthRevenue    = payments.filter(p => invoiceDateOf(p).startsWith(today.slice(0,7)))
+                                  .reduce((s,p)=>s+(p.paid||0),0);
+  const outstanding     = periodPayments.reduce((s,p)=>s+Math.max(0,(p.amount||0)-(p.paid||0)),0);
+  const remainTotal     = patients.reduce((s,p)=>s+(p.remain||0),0);
+  const newPatients     = periodPatients.length;
+  const pendingPayments = periodPayments.filter(p => p.status !== "مدفوع");
+
+  // Card labels adapt to the selected period so nothing reads "اليوم" when
+  // the user picked "الشهر". We keep the visual layout untouched.
+  const labels = React.useMemo(() => {
+    switch (range) {
+      case "اليوم":       return { patients:"مرضى اليوم",   appts:"مواعيد اليوم",   rev:"إيرادات اليوم",   patRange:"اليوم" };
+      case "هذا الأسبوع": return { patients:"مرضى الأسبوع", appts:"مواعيد الأسبوع", rev:"إيرادات الأسبوع", patRange:"هذا الأسبوع" };
+      case "الشهر":       return { patients:"مرضى الشهر",   appts:"مواعيد الشهر",   rev:"إيرادات الشهر",   patRange:"هذا الشهر" };
+      case "الربع":       return { patients:"مرضى الربع",   appts:"مواعيد الربع",   rev:"إيرادات الربع",   patRange:"هذا الربع" };
+      default:            return { patients:"المرضى",       appts:"المواعيد",       rev:"الإيرادات",       patRange:range };
+    }
+  }, [range]);
+
+  // Therapist workload — count of period appts assigned to each therapist.
+  const workloadByTh = React.useMemo(() => {
+    const map = {};
+    periodAppts.forEach(a => {
+      const key = a.therapist_id || a.th || "";
+      if (!key) return;
+      map[key] = (map[key] || 0) + 1;
+    });
+    return map;
+  }, [periodAppts]);
+
+  // Schedule list — sorted chronologically inside the period.
+  const scheduleList = React.useMemo(() => {
+    return periodAppts.slice().sort((a,b) => {
+      const da = `${apptDayOf(a)} ${a.time || ""}`;
+      const db = `${apptDayOf(b)} ${b.time || ""}`;
+      return da.localeCompare(db);
+    }).slice(0, 6);
+  }, [periodAppts]);
 
   // ── Handlers ──
   function handleExportCsv() {
     const rows = [
-      "البيان,القيمة",
-      `مرضى اليوم,${todaysPatients}`,
-      `مواعيد اليوم,${booked.length}/${appts.length}`,
-      `إيرادات اليوم,${todaysRevenue}`,
+      `البيان,القيمة (الفترة: ${period.label})`,
+      `${labels.patients},${uniquePatients}`,
+      `${labels.appts},${booked.length}/${periodAppts.length}`,
+      `${labels.rev},${periodRevenue}`,
       `الإيرادات الشهرية,${monthRevenue}`,
       `مستحقات معلقة,${outstanding}`,
+      `مرضى جدد,${newPatients}`,
     ];
     downloadCsv(rows, "dashboard.csv");
     if (window.showToast) window.showToast("تم تصدير البيانات", "success");
@@ -102,17 +272,18 @@ function Dashboard({ go }) {
             ))}
           </div>
           <button className="btn btn-secondary" onClick={handleExportCsv}><I.Download size={14}/> تصدير</button>
+          <button className="btn btn-secondary" onClick={()=>setQuickPayOpen(true)}><I.CreditCard size={14}/> دفع سريع</button>
           <button className="btn btn-blue" onClick={()=>go("appointments")}><I.Plus size={14}/> موعد جديد</button>
         </div>
       </div>
 
       {/* stat row */}
       <div className="grid-stats" style={{marginBottom:18}}>
-        <StatCard label="مرضى اليوم"    value={String(todaysPatients)} accent="#7BBDE8" icon={<I.Users size={15}/>}/>
-        <StatCard label="مواعيد اليوم" value={`${booked.length}/${appts.length}`} accent="#3A7FB5" icon={<I.Calendar size={15}/>}/>
-        <StatCard label="إيرادات اليوم"   value={fmtEGP(todaysRevenue)} accent="#3FA984" icon={<I.Dollar size={15}/>}/>
+        <StatCard label={labels.patients}    value={String(uniquePatients)} accent="#7BBDE8" icon={<I.Users size={15}/>}/>
+        <StatCard label={labels.appts} value={`${booked.length}/${periodAppts.length}`} accent="#3A7FB5" icon={<I.Calendar size={15}/>}/>
+        <StatCard label={labels.rev}   value={fmtEGP(periodRevenue)} accent="#3FA984" icon={<I.Dollar size={15}/>}/>
         <StatCard label="الإيرادات الشهرية"   value={fmtEGP(monthRevenue)} accent="#7E6BD3" icon={<I.Chart size={15}/>}/>
-        <StatCard label="الأخصائيون النشطون" value={`${DATA.therapists.length}/${DATA.therapists.length}`} accent="#D49044" icon={<I.Stethoscope size={15}/>}/>
+        <StatCard label="الأخصائيون النشطون" value={`${(DATA.therapists||[]).filter(t=>t.active!==false).length}/${(DATA.therapists||[]).length}`} accent="#D49044" icon={<I.Stethoscope size={15}/>}/>
         <StatCard label="الجلسات المتبقية" value={remainTotal.toLocaleString()} accent="#D8665A" icon={<I.Activity size={15}/>}/>
       </div>
 
@@ -123,11 +294,13 @@ function Dashboard({ go }) {
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18}}>
             <div>
               <div className="h2">اتجاه الإيرادات</div>
-              <div className="muted" style={{fontSize:12.5,marginTop:2}}>آخر 7 أيام · ج.م</div>
+              <div className="muted" style={{fontSize:12.5,marginTop:2}}>
+                {period.bucket==="hour" ? "الساعات · ج.م" : period.bucket==="month" ? "الأشهر · ج.م" : "الأيام · ج.م"} — {period.label}
+              </div>
             </div>
             <div style={{display:"flex",gap:14,fontSize:12}}>
-              <span style={{display:"flex",alignItems:"center",gap:6}}><span style={{width:9,height:9,borderRadius:3,background:"#7BBDE8"}}></span>نقدي + بطاقة</span>
-              <span style={{display:"flex",alignItems:"center",gap:6,color:"var(--ink-500)"}}><span style={{width:9,height:9,borderRadius:3,background:"#BDD8E9"}}></span>الأسبوع الماضي</span>
+              <span style={{display:"flex",alignItems:"center",gap:6}}><span style={{width:9,height:9,borderRadius:3,background:"#7BBDE8"}}></span>مقبوض</span>
+              <span style={{display:"flex",alignItems:"center",gap:6,color:"var(--ink-500)"}} className="mono">{fmtEGP(periodRevenue)}</span>
             </div>
           </div>
           <AreaChart data={revenueData} height={220} formatY={(v)=>v>=1000?`${Math.round(v/1000)}K`:v}/>
@@ -143,8 +316,8 @@ function Dashboard({ go }) {
             <button className="btn btn-ghost" style={{fontSize:12}} onClick={()=>go("appointments")}>عرض التقويم <I.ArrowRight size={12}/></button>
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:268,overflowY:"auto"}}>
-            {DATA.appts.length===0 && <div className="muted" style={{fontSize:13,padding:"24px 0",textAlign:"center"}}>لا مواعيد بعد.</div>}
-            {DATA.appts.slice(0,6).map(a=>(
+            {scheduleList.length===0 && <div className="muted" style={{fontSize:13,padding:"24px 0",textAlign:"center"}}>لا مواعيد ضمن الفترة المحددة.</div>}
+            {scheduleList.map(a=>(
               <div key={a.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",border:"1px solid var(--ink-200)",borderRadius:12,background:a.status==="قيد التنفيذ"?"var(--blue-50)":"#fff"}}>
                 <div style={{textAlign:"center",minWidth:48}}>
                   <div className="mono" style={{fontSize:13,fontWeight:600}}>{a.time}</div>
@@ -153,7 +326,7 @@ function Dashboard({ go }) {
                 <div style={{width:1,height:30,background:"var(--ink-200)"}}/>
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{fontSize:13,fontWeight:500,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{a.patient}</div>
-                  <div style={{fontSize:11.5,color:"var(--ink-500)"}}>{a.th} · {a.type || "—"}</div>
+                  <div style={{fontSize:11.5,color:"var(--ink-500)"}}>{a.th} · {a.type || "—"} · {apptDayOf(a).slice(5)}</div>
                 </div>
                 <ApptBadge s={a.status}/>
               </div>
@@ -167,24 +340,30 @@ function Dashboard({ go }) {
         {/* Appointment trend */}
         <div className="card card-pad">
           <div className="h2" style={{marginBottom:4}}>حجم المواعيد</div>
-          <div className="muted" style={{fontSize:12.5,marginBottom:14}}>جلسات/يوم · آخر 7 أيام</div>
+          <div className="muted" style={{fontSize:12.5,marginBottom:14}}>
+            {period.bucket==="hour" ? "جلسات/ساعة" : period.bucket==="month" ? "جلسات/شهر" : "جلسات/يوم"} · {period.label}
+          </div>
           <BarChart data={apptData} height={170}/>
         </div>
 
         {/* طرق العلاج */}
         <div className="card card-pad">
           <div className="h2" style={{marginBottom:4}}>طرق العلاج</div>
-          <div className="muted" style={{fontSize:12.5,marginBottom:14}}>نسبة الجلسات هذا الشهر</div>
-          <DonutChart data={methodsData} size={150} centerLabel="الجلسات" centerValue="100%"/>
+          <div className="muted" style={{fontSize:12.5,marginBottom:14}}>نسبة الجلسات · {period.label}</div>
+          <DonutChart data={methodsData} size={150} centerLabel="الجلسات" centerValue={String(methodsTotal)}/>
         </div>
 
         {/* حمل الأخصائيين */}
         <div className="card card-pad">
           <div className="h2" style={{marginBottom:4}}>حمل الأخصائيين</div>
-          <div className="muted" style={{fontSize:12.5,marginBottom:14}}>حجوزات اليوم</div>
+          <div className="muted" style={{fontSize:12.5,marginBottom:14}}>حجوزات {period.label}</div>
           <div style={{display:"flex",flexDirection:"column",gap:14}}>
             {DATA.therapists.length===0 && <div className="muted" style={{fontSize:13,padding:"18px 0",textAlign:"center"}}>لا أخصائيين مسجّلين بعد.</div>}
-            {DATA.therapists.map(t=>(
+            {DATA.therapists.map(t=>{
+              const load = (workloadByTh[t.id] || 0) + (workloadByTh[t.name] || 0);
+              const cap = Math.max(t.max || 8, 1);
+              const pct = Math.min(100, (load / cap) * 100);
+              return (
               <div key={t.name}>
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>
@@ -194,13 +373,14 @@ function Dashboard({ go }) {
                       <div style={{fontSize:11,color:"var(--ink-500)"}}>{t.spec}</div>
                     </div>
                   </div>
-                  <span className="mono" style={{fontSize:11.5,color:"var(--ink-700)"}}>{t.load}/{t.max}</span>
+                  <span className="mono" style={{fontSize:11.5,color:"var(--ink-700)"}}>{load}/{cap}</span>
                 </div>
                 <div style={{height:5,background:"var(--ink-100)",borderRadius:999,overflow:"hidden"}}>
-                  <div style={{height:"100%",width:`${t.load/t.max*100}%`,background:t.color,borderRadius:999,transition:"width .3s"}}/>
+                  <div style={{height:"100%",width:`${pct}%`,background:t.color,borderRadius:999,transition:"width .3s"}}/>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 
@@ -209,13 +389,13 @@ function Dashboard({ go }) {
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
             <div>
               <div className="h2">مرضى جدد</div>
-              <div className="muted" style={{fontSize:12.5,marginTop:2}}>مسجّلون هذا الأسبوع</div>
+              <div className="muted" style={{fontSize:12.5,marginTop:2}}>مسجّلون · {labels.patRange}</div>
             </div>
-            <span className="badge b-blue">{newThisWeek} جديد</span>
+            <span className="badge b-blue">{newPatients} جديد</span>
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:10}}>
-            {DATA.patients.length===0 && <div className="muted" style={{fontSize:13,padding:"18px 0",textAlign:"center"}}>لا مرضى مسجّلين بعد.</div>}
-            {DATA.patients.slice(0,4).map(p=>(
+            {periodPatients.length===0 && <div className="muted" style={{fontSize:13,padding:"18px 0",textAlign:"center"}}>لا مرضى مسجّلين ضمن الفترة.</div>}
+            {periodPatients.slice(0,4).map(p=>(
               <div key={p.id} style={{display:"flex",alignItems:"center",gap:10,padding:"6px 0"}}>
                 <div className="av md">{p.name.split(" ").map(x=>x[0]).join("").slice(0,2)}</div>
                 <div style={{flex:1,minWidth:0}}>
@@ -240,7 +420,7 @@ function Dashboard({ go }) {
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
             <div>
               <div className="h2">مدفوعات معلقة</div>
-              <div className="muted" style={{fontSize:12.5,marginTop:2}}>يحتاج متابعة</div>
+              <div className="muted" style={{fontSize:12.5,marginTop:2}}>يحتاج متابعة · {period.label}</div>
             </div>
             <span className="badge b-amber"><span className="dot"></span>{fmtEGP(outstanding)}</span>
           </div>
@@ -261,6 +441,13 @@ function Dashboard({ go }) {
           </div>
         </div>
       </div>
+
+      {quickPayOpen && window.QuickPaymentModal && (
+        <window.QuickPaymentModal
+          onClose={()=>setQuickPayOpen(false)}
+          onDone={()=>setQuickPayOpen(false)}
+        />
+      )}
     </Page>
   );
 }
@@ -297,9 +484,14 @@ Object.assign(window, { Dashboard, ApptBadge, PayBadge, todayLabelAr, activeBran
 // المريض management — list, details, add/edit
 
 function Patients({ go }) {
+  // Subscribe to data-updated events so the list re-renders whenever the
+  // edit modal (or any other mutation) writes back to the DB.
+  window.useDataVersion && window.useDataVersion();
+
   // ── State ──
   const [view, setView] = React.useState("list"); // list | detail | add
   const [selected, setSelected] = React.useState(null);
+  const [editing, setEditing] = React.useState(null); // patient row being edited
   const [search, setSearch] = React.useState("");
   const [statusFilter, setStatusFilter] = React.useState("الكل");
   const [page, setPage] = React.useState(1);
@@ -346,7 +538,6 @@ function Patients({ go }) {
             <button key={s} className={statusFilter===s?"on":""} onClick={()=>setStatusFilter(s)}>{s===INCOMPLETE_STATUS?"غير مكتمل":s}</button>
           ))}
         </div>
-        <button className="btn btn-secondary"><I.Filter size={13}/> 4 مرشحات</button>
         <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:10}}>
           <span className="muted" style={{fontSize:12}}>{filtered.length} نتيجة</span>
           <div className="seg">
@@ -403,7 +594,7 @@ function Patients({ go }) {
                   <td><PayBadge s={p.payment}/></td>
                   <td onClick={e=>e.stopPropagation()}>
                     <button className="btn btn-ghost btn-icon" onClick={()=>{setSelected(p);setView("detail")}}><I.Eye size={14}/></button>
-                    <button className="btn btn-ghost btn-icon" onClick={()=>{setSelected(p);setView("add");}}><I.Edit size={14}/></button>
+                    <button className="btn btn-ghost btn-icon" title="تعديل بيانات المريض" onClick={()=>setEditing(p)}><I.Edit size={14}/></button>
                     <button className="btn btn-ghost btn-icon" onClick={()=>setConfirmDelete(p)} style={{color:"var(--red)"}}><I.Trash size={14}/></button>
                   </td>
                 </tr>
@@ -473,8 +664,405 @@ function Patients({ go }) {
         <p>أنت على وشك حذف <strong>{confirmDelete?.name}</strong> ({confirmDelete?.id}). This will remove all Sessions, invoices and uploads associated مع this patient.</p>
         <p className="muted" style={{fontSize:12.5,marginTop:8}}>لا يمكن التراجع عن هذا الإجراء. فكّر في أرشفة المريض بدلًا من حذفه.</p>
       </Modal>
+
+      {editing && (
+        <PatientEditModal
+          patient={editing}
+          onClose={()=>setEditing(null)}
+          onSaved={()=>setEditing(null)}
+        />
+      )}
     </Page>
   );
+}
+
+// ── PatientEditModal ───────────────────────────────────────────
+// Full edit workflow: re-reads the row from the DB on open (never
+// trusts the cached snapshot the caller passed in), enforces role
+// permissions, validates, persists via KineticData.upsert (which
+// dispatches `kinetic:data-updated` so every subscribed view — the
+// patients list, PatientProfile, PatientDetail, dashboards — refreshes
+// without a page reload), and writes an audit_events row capturing the
+// diff (old vs new per field).
+function PatientEditModal({ patient, onClose, onSaved }) {
+  const role = (window.ME && window.ME.role) || "مدير";
+  const isAdmin       = role === "مدير";
+  const isReception   = role === "موظف استقبال";
+  const isDoctor      = role === "طبيب";
+  const isTherapist   = role === "الأخصائي";
+  // Role-based edit permissions per PRD §8.
+  const canEdit = {
+    demographics: isAdmin || isReception,       // name, phone, id, contact, address
+    medical:      isAdmin || isDoctor,          // diagnosis, allergies, meds, history, insurance
+    therapy:      isAdmin || isDoctor || isTherapist, // therapist assignment, notes, status
+  };
+
+  const pid = patient.patient_id || patient.id;
+  const [form, setForm]   = React.useState(null);
+  const [original, setOrig] = React.useState(null);
+  const [busy, setBusy]   = React.useState(false);
+  const [loading, setLoading] = React.useState(true);
+  const [errors, setErrors] = React.useState({});
+
+  // ── Load fresh from the DB (source of truth). Fall back to the row
+  // passed in only if the network read fails outright, so the modal
+  // still opens in offline/demo mode.
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        let fresh = null;
+        if (window.KineticData && window.KineticData.list) {
+          const rows = await window.KineticData.list("patients");
+          fresh = (rows || []).find(r => (r.patient_id || r.id) === pid) || null;
+        }
+        if (!fresh) fresh = patient;
+        if (!cancelled) {
+          const norm = normalizePatientForForm(fresh);
+          setForm(norm);
+          setOrig(norm);
+          setLoading(false);
+        }
+      } catch (e) {
+        console.warn("patient reload failed", e);
+        if (!cancelled) {
+          const norm = normalizePatientForForm(patient);
+          setForm(norm); setOrig(norm); setLoading(false);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [pid]);
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  // Derived age from DOB (kept in sync so the "Age" input isn't a lie).
+  const derivedAge = React.useMemo(() => {
+    if (!form || !form.date_of_birth) return "";
+    const d = new Date(form.date_of_birth);
+    if (isNaN(d)) return "";
+    const now = new Date();
+    let a = now.getFullYear() - d.getFullYear();
+    const m = now.getMonth() - d.getMonth();
+    if (m < 0 || (m === 0 && now.getDate() < d.getDate())) a--;
+    return a >= 0 && a < 130 ? String(a) : "";
+  }, [form && form.date_of_birth]);
+
+  function validate() {
+    const e = {};
+    if (!form.name || !form.name.trim()) e.name = "الاسم مطلوب";
+    if (!form.phone || !form.phone.trim()) e.phone = "الهاتف مطلوب";
+    else if (!/^[+\d][\d\s\-()]{6,}$/.test(form.phone.trim())) e.phone = "رقم هاتف غير صحيح";
+    if (form.whatsapp && !/^[+\d][\d\s\-()]{6,}$/.test(form.whatsapp.trim())) e.whatsapp = "رقم واتساب غير صحيح";
+    if (form.emergency_phone && !/^[+\d][\d\s\-()]{6,}$/.test(form.emergency_phone.trim())) e.emergency_phone = "رقم طوارئ غير صحيح";
+    if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) e.email = "بريد إلكتروني غير صحيح";
+    // Duplicate-check across the local cache — the DB unique index gives us
+    // the authoritative rejection on save, but this catches it earlier.
+    const others = ((window.DATA && window.DATA.patients) || []).filter(x => (x.patient_id || x.id) !== pid);
+    if (form.national_id && form.national_id.trim() &&
+        others.some(x => (x.national_id || "").trim() === form.national_id.trim())) {
+      e.national_id = "الرقم القومي مستخدم لمريض آخر";
+    }
+    if (form.medical_file_no && form.medical_file_no.trim() &&
+        others.some(x => (x.medical_file_no || "").trim() === form.medical_file_no.trim())) {
+      e.medical_file_no = "رقم الملف مستخدم لمريض آخر";
+    }
+    setErrors(e);
+    return Object.keys(e).length === 0;
+  }
+
+  async function save() {
+    if (!validate()) {
+      if (window.showToast) window.showToast("راجع الحقول المُظللة", "error");
+      return;
+    }
+    setBusy(true);
+    try {
+      // Compute the diff so the audit payload only carries what changed.
+      const changed = {};
+      for (const k of Object.keys(form)) {
+        const a = original[k] == null ? "" : String(original[k]);
+        const b = form[k]     == null ? "" : String(form[k]);
+        if (a !== b) changed[k] = { old: original[k] ?? null, new: form[k] ?? null };
+      }
+      if (Object.keys(changed).length === 0) {
+        if (window.showToast) window.showToast("لا تغييرات للحفظ", "info");
+        setBusy(false); return;
+      }
+
+      // Build the row to persist. Only fields present in the DB whitelist
+      // will actually round-trip to Supabase; UI-only fields are ignored
+      // by KineticData.upsert.
+      const row = {
+        patient_id:      pid,
+        id:              pid,
+        name:            form.name.trim(),
+        phone:           form.phone.trim(),
+        whatsapp:        strOrNull(form.whatsapp),
+        email:           strOrNull(form.email),
+        age:             form.age === "" || form.age == null ? null : Number(form.age),
+        gender:          form.gender || null,
+        date_of_birth:   strOrNull(form.date_of_birth),
+        address:         strOrNull(form.address),
+        occupation:      strOrNull(form.occupation),
+        emergency_name:  strOrNull(form.emergency_name),
+        emergency_phone: strOrNull(form.emergency_phone),
+        doctor_id:       strOrNull(form.doctor_id),
+        therapist_id:    strOrNull(form.therapist_id),
+        diagnosis:       strOrNull(form.diagnosis),
+        medical_history: strOrNull(form.medical_history),
+        allergies:       strOrNull(form.allergies),
+        medications:     strOrNull(form.medications),
+        insurance_info:  strOrNull(form.insurance_info),
+        notes:           strOrNull(form.notes),
+        status:          form.status || "نشط",
+        medical_file_no: strOrNull(form.medical_file_no),
+        national_id:     strOrNull(form.national_id),
+        // Preserve UI-mirrored display fields so cached list rows still render:
+        diag:            strOrNull(form.diagnosis),
+        dr:              form.dr || patient.dr || "",
+        th:              form.th || patient.th || "",
+        updated_at:      new Date().toISOString(),
+      };
+
+      // KineticData.upsert already handles LS + memory + Supabase and
+      // dispatches `kinetic:data-updated`, which every useDataVersion()
+      // consumer (Patients list, PatientProfile, dashboards) listens to.
+      if (window.KineticData) {
+        await window.KineticData.upsert("patients", row);
+      }
+
+      // Audit trail: best-effort. Failing to write the audit row must NOT
+      // roll back the patient update — the patient edit is the primary
+      // action; audit is a secondary observability record.
+      try {
+        if (window.sb || (typeof sb !== "undefined" && sb)) {
+          const client = window.sb || sb;
+          const uid = (window.ME && window.ME.id) || null;
+          await client.from("audit_events").insert({
+            actor_uid:  uid,
+            actor_role: role,
+            action:     "patient.edit",
+            table_name: "patients",
+            row_pk:     pid,
+            payload:    { changed, at: new Date().toISOString() },
+          });
+        }
+      } catch (auditErr) {
+        console.warn("audit write failed (non-fatal)", auditErr);
+      }
+
+      if (window.showToast) window.showToast("تم حفظ بيانات المريض", "success");
+      onSaved && onSaved(row);
+    } catch (e) {
+      console.warn("patient edit failed", e);
+      const msg = (e && e.message) || "تعذّر الحفظ";
+      // Keep the modal open with the user's changes intact so nothing is
+      // lost after a failed save.
+      if (window.showToast) window.showToast(msg, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (loading || !form) {
+    return (
+      <Modal open onClose={onClose} title="تعديل بيانات المريض" width={780}>
+        <div className="muted" style={{padding:20,textAlign:"center"}}>جارٍ تحميل البيانات من قاعدة البيانات…</div>
+      </Modal>
+    );
+  }
+
+  const doctors    = (DATA.doctors    || []).filter(d => d.active !== false);
+  // Inactive specialists stay hidden from the assignment dropdown; the
+  // patient's currently-assigned specialist (form.therapist_id) is kept
+  // in the option list even when inactive, so historical records don't
+  // silently lose their assignment on render.
+  const activeThs = (DATA.therapists || []).filter(t => t.active !== false);
+  const currentT  = (DATA.therapists || []).find(t => (t.staff_id||t.id) === form.therapist_id);
+  const therapists = currentT && currentT.active === false ? [...activeThs, currentT] : activeThs;
+
+  const dis = (allowed) => allowed ? undefined : { disabled: true, style:{background:"var(--ink-50)",cursor:"not-allowed"} };
+  const errStyle = (k) => errors[k] ? { border:"1px solid var(--red)" } : {};
+
+  return (
+    <Modal open onClose={onClose} title={`تعديل بيانات المريض · ${form.name || pid}`} width={860}
+      footer={<>
+        <button className="btn btn-secondary" onClick={onClose} disabled={busy}>إلغاء</button>
+        <button className="btn btn-blue" onClick={save} disabled={busy}>
+          {busy ? "جارٍ الحفظ…" : (<><I.Check size={13}/> حفظ التغييرات</>)}
+        </button>
+      </>}>
+      <div className="muted" style={{fontSize:12,marginBottom:14}}>
+        الدور: <strong>{role}</strong> · الحقول غير المسموح لك بتعديلها معطلة.
+      </div>
+
+      <div className="h3" style={{marginBottom:10,fontSize:13,letterSpacing:".05em",textTransform:"uppercase",color:"var(--ink-500)"}}>معرفات</div>
+      <div className="rgrid c-sm" style={{"--gtc":"repeat(2,1fr)",gap:12,marginBottom:18}}>
+        <Field label="رقم المريض"><input className="input mono" value={pid} readOnly {...dis(false)}/></Field>
+        <Field label="رقم الملف الطبي">
+          <input className="input" value={form.medical_file_no || ""} onChange={e=>set("medical_file_no", e.target.value)}
+                 {...dis(canEdit.demographics)} style={errStyle("medical_file_no")}/>
+          {errors.medical_file_no && <div style={{color:"var(--red)",fontSize:11,marginTop:3}}>{errors.medical_file_no}</div>}
+        </Field>
+        <Field label="الرقم القومي / جواز السفر">
+          <input className="input" value={form.national_id || ""} onChange={e=>set("national_id", e.target.value)}
+                 {...dis(canEdit.demographics)} style={errStyle("national_id")}/>
+          {errors.national_id && <div style={{color:"var(--red)",fontSize:11,marginTop:3}}>{errors.national_id}</div>}
+        </Field>
+        <Field label="الحالة">
+          <select className="input" value={form.status || "نشط"} onChange={e=>set("status", e.target.value)}
+                  {...dis(canEdit.therapy)}>
+            {["نشط","غير نشط","مؤرشف","غير مكتمل"].map(s=><option key={s}>{s}</option>)}
+          </select>
+        </Field>
+      </div>
+
+      <div className="h3" style={{marginBottom:10,fontSize:13,letterSpacing:".05em",textTransform:"uppercase",color:"var(--ink-500)"}}>البيانات الشخصية والاتصال</div>
+      <div className="rgrid c-sm" style={{"--gtc":"repeat(2,1fr)",gap:12,marginBottom:18}}>
+        <Field label="الاسم الكامل" required span={2}>
+          <input className="input" value={form.name || ""} onChange={e=>set("name", e.target.value)}
+                 {...dis(canEdit.demographics)} style={errStyle("name")}/>
+          {errors.name && <div style={{color:"var(--red)",fontSize:11,marginTop:3}}>{errors.name}</div>}
+        </Field>
+        <Field label="الهاتف" required>
+          <input className="input" value={form.phone || ""} onChange={e=>set("phone", e.target.value)}
+                 {...dis(canEdit.demographics)} style={errStyle("phone")}/>
+          {errors.phone && <div style={{color:"var(--red)",fontSize:11,marginTop:3}}>{errors.phone}</div>}
+        </Field>
+        <Field label="واتساب">
+          <input className="input" value={form.whatsapp || ""} onChange={e=>set("whatsapp", e.target.value)}
+                 {...dis(canEdit.demographics)} style={errStyle("whatsapp")}/>
+          {errors.whatsapp && <div style={{color:"var(--red)",fontSize:11,marginTop:3}}>{errors.whatsapp}</div>}
+        </Field>
+        <Field label="البريد الإلكتروني">
+          <input className="input" type="email" value={form.email || ""} onChange={e=>set("email", e.target.value)}
+                 {...dis(canEdit.demographics)} style={errStyle("email")}/>
+          {errors.email && <div style={{color:"var(--red)",fontSize:11,marginTop:3}}>{errors.email}</div>}
+        </Field>
+        <Field label="الجنس">
+          <select className="input" value={form.gender || ""} onChange={e=>set("gender", e.target.value)}
+                  {...dis(canEdit.demographics)}>
+            <option value="">—</option>
+            <option value="F">أنثى</option>
+            <option value="M">ذكر</option>
+          </select>
+        </Field>
+        <Field label="تاريخ الميلاد">
+          <input className="input" type="date" value={form.date_of_birth || ""} onChange={e=>set("date_of_birth", e.target.value)}
+                 {...dis(canEdit.demographics)}/>
+        </Field>
+        <Field label="العمر" hint={derivedAge ? `مشتق من تاريخ الميلاد: ${derivedAge}` : ""}>
+          <input className="input" type="number" value={form.age || ""} onChange={e=>set("age", e.target.value)}
+                 {...dis(canEdit.demographics)}/>
+        </Field>
+        <Field label="المهنة">
+          <input className="input" value={form.occupation || ""} onChange={e=>set("occupation", e.target.value)}
+                 {...dis(canEdit.demographics)}/>
+        </Field>
+        <Field label="العنوان" span={2}>
+          <input className="input" value={form.address || ""} onChange={e=>set("address", e.target.value)}
+                 {...dis(canEdit.demographics)}/>
+        </Field>
+        <Field label="جهة الطوارئ">
+          <input className="input" value={form.emergency_name || ""} onChange={e=>set("emergency_name", e.target.value)}
+                 {...dis(canEdit.demographics)}/>
+        </Field>
+        <Field label="هاتف الطوارئ">
+          <input className="input" value={form.emergency_phone || ""} onChange={e=>set("emergency_phone", e.target.value)}
+                 {...dis(canEdit.demographics)} style={errStyle("emergency_phone")}/>
+          {errors.emergency_phone && <div style={{color:"var(--red)",fontSize:11,marginTop:3}}>{errors.emergency_phone}</div>}
+        </Field>
+      </div>
+
+      <div className="h3" style={{marginBottom:10,fontSize:13,letterSpacing:".05em",textTransform:"uppercase",color:"var(--ink-500)"}}>الطاقم المعالج والتشخيص</div>
+      <div className="rgrid c-sm" style={{"--gtc":"repeat(2,1fr)",gap:12,marginBottom:18}}>
+        <Field label="الطبيب المسؤول">
+          <select className="input" value={form.doctor_id || ""} onChange={e=>{
+            const id = e.target.value;
+            const d = doctors.find(x => x.id === id);
+            set("doctor_id", id); if (d) set("dr", d.name);
+          }} {...dis(canEdit.therapy)}>
+            <option value="">— بدون —</option>
+            {doctors.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </select>
+        </Field>
+        <Field label="الأخصائي المسؤول">
+          <select className="input" value={form.therapist_id || ""} onChange={e=>{
+            const id = e.target.value;
+            const t = therapists.find(x => (x.staff_id || x.id) === id);
+            set("therapist_id", id); if (t) set("th", t.name);
+          }} {...dis(canEdit.therapy)}>
+            <option value="">— بدون —</option>
+            {therapists.map(t => <option key={t.staff_id||t.id} value={t.staff_id||t.id}>{t.name}</option>)}
+          </select>
+        </Field>
+        <Field label="التشخيص" span={2}>
+          <input className="input" value={form.diagnosis || ""} onChange={e=>set("diagnosis", e.target.value)}
+                 {...dis(canEdit.medical)}/>
+        </Field>
+        <Field label="التاريخ المرضي" span={2}>
+          <textarea className="input" style={{minHeight:60,padding:10,resize:"vertical"}}
+                    value={form.medical_history || ""} onChange={e=>set("medical_history", e.target.value)}
+                    {...dis(canEdit.medical)}/>
+        </Field>
+        <Field label="الحساسية">
+          <input className="input" value={form.allergies || ""} onChange={e=>set("allergies", e.target.value)}
+                 {...dis(canEdit.medical)}/>
+        </Field>
+        <Field label="الأدوية الحالية">
+          <input className="input" value={form.medications || ""} onChange={e=>set("medications", e.target.value)}
+                 {...dis(canEdit.medical)}/>
+        </Field>
+        <Field label="التأمين" span={2}>
+          <input className="input" value={form.insurance_info || ""} onChange={e=>set("insurance_info", e.target.value)}
+                 {...dis(canEdit.medical)}/>
+        </Field>
+        <Field label="ملاحظات العلاج / متابعة الجلسات" span={2}>
+          <textarea className="input" style={{minHeight:70,padding:10,resize:"vertical"}}
+                    value={form.notes || ""} onChange={e=>set("notes", e.target.value)}
+                    {...dis(canEdit.therapy)}/>
+        </Field>
+      </div>
+    </Modal>
+  );
+}
+
+function strOrNull(v) {
+  if (v == null) return null;
+  const s = String(v).trim();
+  return s === "" ? null : s;
+}
+// Coerce a DB row into a friendly form shape. Guarantees every field the
+// modal renders has a defined key so React never toggles between
+// controlled/uncontrolled inputs.
+function normalizePatientForForm(p) {
+  return {
+    name:            p.name || "",
+    phone:           p.phone || "",
+    whatsapp:        p.whatsapp || "",
+    email:           p.email || "",
+    age:             p.age != null ? String(p.age) : "",
+    gender:          p.gender || "",
+    date_of_birth:   p.date_of_birth ? String(p.date_of_birth).slice(0,10) : "",
+    address:         p.address || "",
+    occupation:      p.occupation || p.job || "",
+    emergency_name:  p.emergency_name || "",
+    emergency_phone: p.emergency_phone || "",
+    doctor_id:       p.doctor_id || "",
+    therapist_id:    p.therapist_id || "",
+    diagnosis:       p.diagnosis || p.diag || "",
+    medical_history: p.medical_history || "",
+    allergies:       p.allergies || "",
+    medications:     p.medications || p.meds || "",
+    insurance_info:  p.insurance_info || "",
+    notes:           p.notes || "",
+    status:          p.status || "نشط",
+    medical_file_no: p.medical_file_no || "",
+    national_id:     p.national_id || "",
+    dr:              p.dr || "",
+    th:              p.th || "",
+  };
 }
 
 // ── PatientDetail ──────────────────────────────────────────────
@@ -993,37 +1581,55 @@ function PatientFiles({ p }) {
     e.target.value = "";
     if (!list.length || !pid) return;
     setUploading(true);
-    let ok = 0;
+    let ok = 0; let firstErr = null;
     try {
       for (const f of list) {
-        if (window.uploadPatientFile) { await window.uploadPatientFile(pid, f); ok++; }
+        if (!window.uploadPatientFile) break;
+        const res = await window.uploadPatientFile(pid, f);
+        if (res && res.ok) ok++;
+        else if (!firstErr && res && res.error) firstErr = res.error;
       }
-      if (window.showToast) window.showToast(`تم رفع ${ok} ملف`, "success");
-    } catch (err) {
-      console.warn("upload failed", err);
-      if (window.showToast) window.showToast("تعذّر رفع الملف", "error");
+      if (window.showToast) {
+        if (ok) window.showToast(`تم رفع ${ok} ملف`, "success");
+        if (firstErr) window.showToast(firstErr, "error");
+      }
     } finally { setUploading(false); reload(); }
   }
 
-  function openFile(f) {
-    if (f.file_url) { window.open(f.file_url, "_blank"); return; }
+  async function resolveUrl(f) {
+    if (window.getPatientFileUrl) return await window.getPatientFileUrl(f);
+    return f.file_url || "";
+  }
+  async function openFile(f) {
+    const url = await resolveUrl(f);
+    if (url) { window.open(url, "_blank"); return; }
     if (window.showToast) window.showToast("لا يوجد ملف متاح للعرض", "error");
   }
-  function downloadFile(f) {
-    if (!f.file_url) { if (window.showToast) window.showToast("لا يوجد ملف للتنزيل", "error"); return; }
+  async function downloadFile(f) {
+    const url = await resolveUrl(f);
+    if (!url) { if (window.showToast) window.showToast("لا يوجد ملف للتنزيل", "error"); return; }
     const a = document.createElement("a");
-    a.href = f.file_url; a.download = f.file_name || "file"; a.target = "_blank";
+    a.href = url; a.download = f.original_name || f.file_name || "file"; a.target = "_blank";
     a.click();
     if (window.showToast) window.showToast(`تم فتح ${f.file_name}`, "success");
   }
-  const isImage = (f) => (f.file_type || "").startsWith("image/") || /\.(jpe?g|png|webp|gif|bmp)$/i.test(f.file_name || "");
+  const mimeOf = (f) => (f.mime_type || f.file_type || "").toLowerCase();
+  const isImage = (f) => mimeOf(f).startsWith("image/") || /\.(jpe?g|png|webp|gif|bmp)$/i.test(f.file_name || "");
   const kindLabel = (f) => {
     const n = (f.file_name || "").toLowerCase();
-    if ((f.file_type || "").startsWith("image/") || /\.(jpe?g|png|webp|gif|bmp)$/i.test(n)) return "صورة";
-    if (n.endsWith(".pdf") || f.file_type === "application/pdf") return "PDF";
-    if (n.endsWith(".dcm")) return "DICOM";
+    const m = mimeOf(f);
+    if (m.startsWith("image/") || /\.(jpe?g|png|webp|gif|bmp)$/i.test(n)) return "صورة";
+    if (n.endsWith(".pdf") || m === "application/pdf") return "PDF";
+    if (n.endsWith(".dcm") || m === "application/dicom") return "DICOM";
     return "مستند";
   };
+  function fmtSize(n) {
+    const b = Number(n) || 0;
+    if (!b) return "";
+    if (b < 1024) return `${b} B`;
+    if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
+    return `${(b / (1024 * 1024)).toFixed(1)} MB`;
+  }
 
   return (
     <div>
@@ -1082,8 +1688,17 @@ function PatientFiles({ p }) {
                   <I.FileText size={15} />
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{f.file_name}</div>
-                  <div className="muted mono" style={{ fontSize: 11 }}>{kindLabel(f)} · {(f.uploaded_at || "").slice(0, 10)}</div>
+                  <div style={{ fontSize: 12.5, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{f.original_name || f.file_name}</div>
+                  <div className="muted mono" style={{ fontSize: 11 }}>
+                    {kindLabel(f)}
+                    {f.file_size ? ` · ${fmtSize(f.file_size)}` : ""}
+                    {f.uploaded_at ? ` · ${(f.uploaded_at || "").slice(0, 10)}` : ""}
+                  </div>
+                  {f.uploaded_by_name ? (
+                    <div className="muted" style={{ fontSize: 10.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      رفعه: {f.uploaded_by_name}
+                    </div>
+                  ) : null}
                 </div>
                 <button className="btn btn-ghost btn-icon" title="تحميل / فتح" onClick={() => downloadFile(f)}><I.Download size={14} /></button>
                 <RowMenu size={13} items={[
@@ -1091,8 +1706,9 @@ function PatientFiles({ p }) {
                   { label: "تحميل", icon: <I.Download size={13} />, onClick: () => downloadFile(f) },
                   { label: "حذف", icon: <I.Trash size={13} />, danger: true, onClick: async () => {
                     if (!window.confirm(`حذف ${f.file_name}؟`)) return;
-                    try { if (window.removePatientFile) await window.removePatientFile(f.file_id); if (window.showToast) window.showToast("تم حذف الملف", "success"); }
-                    catch (e) { console.warn("remove file failed", e); if (window.showToast) window.showToast("تعذّر الحذف", "error"); }
+                    const res = window.removePatientFile ? await window.removePatientFile(f.file_id) : { ok: false, error: "غير متاح" };
+                    if (res && res.ok) { if (window.showToast) window.showToast("تم حذف الملف", "success"); }
+                    else { if (window.showToast) window.showToast((res && res.error) || "تعذّر الحذف", "error"); }
                   } },
                 ]} />
               </div>
@@ -1600,202 +2216,533 @@ function QuickBookingModal({ onClose, onDone }) {
   );
 }
 
+// ── Calendar helpers ──────────────────────────────────────────
+// Absolute-date helpers so navigation, filtering, and persistence
+// all agree on what "the selected day" means.
+function isoDate(d) {
+  const t = new Date(d);
+  const y = t.getFullYear();
+  const m = String(t.getMonth()+1).padStart(2,"0");
+  const dd = String(t.getDate()).padStart(2,"0");
+  return `${y}-${m}-${dd}`;
+}
+function todayIso() { return isoDate(new Date()); }
+function offsetIso(iso, days) {
+  const t = new Date(iso + "T00:00:00");
+  t.setDate(t.getDate() + days);
+  return isoDate(t);
+}
+// Match a booking row to a calendar day. Rows without an explicit
+// date field (some legacy/demo rows) are treated as today so they
+// still show up somewhere instead of vanishing.
+function apptDateIso(a) {
+  const raw = a && (a.date || a.appointment_date || a.start_date);
+  if (!raw) return todayIso();
+  const s = String(raw).slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : todayIso();
+}
+
 function CalendarView({ dateOffset, setDateOffset }) {
-  const therapists = window.scopeTherapists ? window.scopeTherapists(DATA.therapists) : DATA.therapists;
+  // Subscribe to data-updated events so external mutations (new
+  // booking, quick payment, quick reschedule from another tab) flow
+  // in without a page reload.
+  window.useDataVersion && window.useDataVersion();
+
   const hours = ["08:00","09:00","10:00","11:00","12:00","13:00","14:00","15:00","16:00","17:00","18:00"];
+  // Four tabs: "day" (all appts, chronological list), "therapist"
+  // (therapists-only grid), "doctor" (doctors-only grid), "week"
+  // (7-day summary). Role-restricted users get pinned to their tab.
+  const meScope = (window.ME && window.ME.scope) || "all";
+  const LS_MODE = "kinetic.calMode";
+  const initialMode = React.useMemo(() => {
+    if (meScope === "doctor")    return "doctor";
+    if (meScope === "therapist") return "therapist";
+    try {
+      const v = localStorage.getItem(LS_MODE);
+      if (["day","therapist","doctor","week"].includes(v)) return v;
+    } catch {}
+    return "therapist";
+  }, [meScope]);
+  const [viewMode, setViewModeState] = React.useState(initialMode);
+  const setViewMode = React.useCallback((m) => {
+    if (meScope === "doctor"    && m !== "doctor")    return;
+    if (meScope === "therapist" && m !== "therapist") return;
+    setViewModeState(m);
+    try { localStorage.setItem(LS_MODE, m); } catch {}
+  }, [meScope]);
   const [draggedId, setDraggedId] = React.useState(null);
   const [rescheduleModal, setRescheduleModal] = React.useState(null);
-  const [appts, setAppts] = React.useState(()=> {
-    const src = window.scopeAppts ? window.scopeAppts(DATA.appts) : DATA.appts;
-    return src.map(a => ({
-      ...a,
-      colIndex: therapists.findIndex(t => t.name === a.th)
-    })).filter(a => a.colIndex >= 0);
-  });
+  const [actionsModal, setActionsModal]       = React.useState(null);
+
+  // ── Selected date ──
+  const parentIso   = todayIso();
+  const viewIso     = offsetIso(parentIso, dateOffset || 0);
+  const viewDate    = new Date(viewIso + "T00:00:00");
+  const dm          = viewDate.toLocaleDateString("ar-EG", { day: "numeric", month: "long" });
+  const dateLabel   = dateOffset === 0 ? `اليوم، ${dm}`
+                    : dateOffset === 1 ? `غدًا، ${dm}`
+                    : dateOffset === -1 ? `أمس، ${dm}`
+                    : viewDate.toLocaleDateString("ar-EG", { weekday: "long", day: "numeric", month: "long" });
+
+  // Direct absolute-date picker: convert user's chosen date back into
+  // an offset from today so the parent state stays valid.
+  function onPickDate(iso) {
+    if (!iso) return;
+    const a = new Date(iso + "T00:00:00");
+    const b = new Date(todayIso() + "T00:00:00");
+    const diff = Math.round((a.getTime() - b.getTime()) / 864e5);
+    setDateOffset(diff);
+  }
+
+  // ── Staff columns (therapists + doctors) ──
+  // Inactive rosters are hidden from the calendar grid — historical
+  // appointments still exist in the DB and can be looked up by id, but
+  // an inactive specialist no longer takes up column space in the day/
+  // week view. The columnIndexIn() lookup below falls back to name so a
+  // rendered historical row can still route to a column when needed.
+  const scopedTherapists = window.scopeTherapists ? window.scopeTherapists(DATA.therapists || []) : (DATA.therapists || []);
+  const therapists = scopedTherapists.filter(t => t.active !== false);
+  const doctors    = (DATA.doctors || []).filter(d => d.active !== false);
+  const therapistCols = React.useMemo(() => therapists.map(t => ({
+    key:       t.staff_id || t.id || t.name,
+    name:      t.name,
+    role:      "الأخصائي",
+    subtitle:  t.spec || "",
+    hours:     t.schedule || t.hours || "08:00 - 18:00",
+    load:      (t.load != null && t.max != null) ? `${t.load}/${t.max}` : "",
+    color:     t.color || "#7BBDE8",
+    _row:      t,
+    _kind:     "therapist",
+  })), [therapists]);
+  const doctorCols = React.useMemo(() => doctors.map(d => ({
+    key:       "dr:" + (d.id || d.name),
+    name:      d.name,
+    role:      "طبيب",
+    subtitle:  d.specialization || "",
+    hours:     d.schedule || d.hours || "08:00 - 18:00",
+    load:      "",
+    color:     d.color || "#7E6BD3",
+    _row:      d,
+    _kind:     "doctor",
+  })), [doctors]);
+  // Combined map — used by day/week views to look up which column an
+  // appointment belongs to for color + display.
+  const staffCols = React.useMemo(() => [...therapistCols, ...doctorCols],
+    [therapistCols, doctorCols]);
+  // Visible columns for grid views — filtered to the active role.
+  const visibleStaffCols = viewMode === "therapist" ? therapistCols
+                        : viewMode === "doctor"     ? doctorCols
+                        : staffCols;
+
+  // Route an appointment to the correct column of `cols` (either the
+  // visible grid list or the full staff list). Matches by staff id
+  // first (most reliable), falls back to display name.
+  function columnIndexIn(cols, a) {
+    for (let i = 0; i < cols.length; i++) {
+      const s = cols[i];
+      const r = s._row;
+      if (s._kind === "therapist") {
+        const ids = [r.staff_id, r.id].filter(Boolean);
+        if (a.therapist_id && ids.includes(a.therapist_id)) return i;
+        if (a.th && r.name === a.th) return i;
+      } else {
+        if (a.doctor_id && a.doctor_id === r.id) return i;
+        if (a.dr && r.name === a.dr) return i;
+      }
+    }
+    return -1;
+  }
+  const columnIndexOf = (a) => columnIndexIn(visibleStaffCols, a);
+  // Identify whether an appointment is assigned to a therapist vs doctor.
+  const isTherapistAppt = (a) => Boolean(a.therapist_id || a.th);
+  const isDoctorAppt    = (a) => Boolean(a.doctor_id || a.dr);
+
+  // ── Filter appts to the selected day ──
+  const scoped = window.scopeAppts ? window.scopeAppts(DATA.appts || []) : (DATA.appts || []);
+  // For therapist/doctor grids, drop appts that don't belong to that role.
+  const dayAppts = React.useMemo(() => {
+    return scoped
+      .filter(a => apptDateIso(a) === viewIso)
+      .filter(a => {
+        if (viewMode === "therapist") return isTherapistAppt(a) && !isDoctorAppt(a);
+        if (viewMode === "doctor")    return isDoctorAppt(a);
+        return true;
+      })
+      .map(a => ({ ...a, colIndex: columnIndexOf(a) }));
+  }, [scoped, viewIso, visibleStaffCols, viewMode]);
+
+  // ── Week scaffolding (Saturday-start clinic week) ──
+  const weekStart = React.useMemo(() => {
+    const d = new Date(viewIso + "T00:00:00");
+    const day = d.getDay();
+    const diff = (day + 1) % 7; // days since Saturday
+    d.setDate(d.getDate() - diff);
+    return d;
+  }, [viewIso]);
+  const weekDays = React.useMemo(() => {
+    const out = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(weekStart); d.setDate(weekStart.getDate() + i);
+      out.push({
+        iso:   d.toISOString().slice(0,10),
+        label: d.toLocaleDateString("ar-EG", { weekday: "short", day: "numeric" }),
+      });
+    }
+    return out;
+  }, [weekStart]);
+  const weekAppts = React.useMemo(() => {
+    const isoSet = new Set(weekDays.map(d => d.iso));
+    return scoped.filter(a => isoSet.has(apptDateIso(a)))
+                 .map(a => ({ ...a, colIndex: columnIndexIn(staffCols, a) }));
+  }, [scoped, weekDays, staffCols]);
+
+  // Daily statistics reflect just the selected day.
+  const dayBooked  = dayAppts.filter(a => a.status !== "متاح").length;
+  const dayFree    = dayAppts.filter(a => a.status === "متاح").length;
+  const dayPending = dayAppts.filter(a => a.status === "معلّق").length;
+
   const minutesFromHour = (t) => {
-    // Guard against missing/malformed times so a bad row can't NaN-out the layout.
     const parts = (t || "").split(":").map(Number);
     const h = Number.isFinite(parts[0]) ? parts[0] : 8;
     const m = Number.isFinite(parts[1]) ? parts[1] : 0;
     return (h-8)*60 + m;
   };
-  // Real calendar label driven by the offset (was a hardcoded date list).
-  const viewDate = new Date(Date.now() + dateOffset * 864e5);
-  const dm = viewDate.toLocaleDateString("ar-EG", { day: "numeric", month: "long" });
-  const today = dateOffset === 0 ? `اليوم، ${dm}`
-    : dateOffset === 1 ? `غدًا، ${dm}`
-    : viewDate.toLocaleDateString("ar-EG", { weekday: "long", day: "numeric", month: "long" });
 
-  if (therapists.length === 0) {
-    return <EmptyState icon={<I.Calendar size={22}/>} title="لا أخصائيين بعد"
-      body="أضف الأخصائيين من الإعدادات ليظهر تقويم الحجوزات هنا."/>;
+  // ── Persist a move (drag-drop or reschedule modal) ──
+  async function persistMove(orig, patch) {
+    if (!window.KineticData) return;
+    try {
+      await window.KineticData.upsert("appts", {
+        booking_id: orig.booking_id || orig.id,
+        id:         orig.id,
+        patient_id: orig.patient_id || orig.pid,
+        patient:    orig.patient,
+        therapist_id: patch.therapist_id ?? orig.therapist_id,
+        doctor_id:    patch.doctor_id ?? orig.doctor_id,
+        th:         patch.th ?? orig.th,
+        dr:         patch.dr ?? orig.dr,
+        date:       patch.date || apptDateIso(orig),
+        time:       patch.time ?? orig.time,
+        status:     patch.status ?? orig.status ?? "مؤكد",
+        type:       orig.type,
+        dur:        orig.dur || 30,
+      });
+    } catch (e) {
+      console.warn("appointment persist failed", e);
+      if (window.showToast) window.showToast("تعذّر حفظ التعديل", "error");
+    }
   }
+
+  // Overlap guard: another appointment in the same column at the
+  // same time (ignoring the row we're moving).
+  function hasConflict(colIndex, time, excludeId) {
+    return dayAppts.some(a =>
+      a.colIndex === colIndex
+      && a.id !== excludeId
+      && a.time === time
+      && a.status !== "متاح"
+      && a.status !== "ملغي"
+    );
+  }
+
+  if (staffCols.length === 0) {
+    return <EmptyState icon={<I.Calendar size={22}/>} title="لا أخصائيين بعد"
+      body="أضف الأخصائيين والأطباء من الإعدادات ليظهر تقويم الحجوزات هنا."/>;
+  }
+
+  // Tab visibility follows the current user's role. Reception/admin see
+  // all four tabs; doctor sees only "الدكتور"; therapist sees only "الأخصائي".
+  const canSeeTab = (m) => {
+    if (meScope === "doctor")    return m === "doctor";
+    if (meScope === "therapist") return m === "therapist";
+    return true;
+  };
+
+  // ── Toolbar (shared by all views) ──
+  const toolbar = (
+    <div style={{padding:"14px 18px",display:"flex",alignItems:"center",gap:12,borderBottom:"1px solid var(--ink-200)",flexWrap:"wrap"}}>
+      <button className="btn btn-secondary btn-icon" onClick={()=>setDateOffset(dateOffset-1)} aria-label="السابق"><I.ArrowLeft size={14}/></button>
+      <div className="h3" style={{minWidth:"min(220px, 45vw)"}}>{dateLabel}</div>
+      <button className="btn btn-secondary btn-icon" onClick={()=>setDateOffset(dateOffset+1)} aria-label="التالي"><I.ArrowRight size={14}/></button>
+      <button className="btn btn-ghost" style={{fontSize:12}} onClick={()=>setDateOffset(0)}>اليوم</button>
+      <input
+        type="date"
+        className="input"
+        value={viewIso}
+        onChange={e=>onPickDate(e.target.value)}
+        style={{width:150,padding:"6px 10px",fontSize:12}}
+      />
+      <div className="seg" style={{marginLeft:12}}>
+        {canSeeTab("day")       && <button className={viewMode==="day"       ? "on" : ""} onClick={()=>setViewMode("day")}>اليوم</button>}
+        {canSeeTab("therapist") && <button className={viewMode==="therapist" ? "on" : ""} onClick={()=>setViewMode("therapist")}>الأخصائي</button>}
+        {canSeeTab("doctor")    && <button className={viewMode==="doctor"    ? "on" : ""} onClick={()=>setViewMode("doctor")}>الدكتور</button>}
+        {canSeeTab("week")      && <button className={viewMode==="week"      ? "on" : ""} onClick={()=>setViewMode("week")}>الأسبوع</button>}
+      </div>
+      <div style={{flex:1}}/>
+      <span className="muted" style={{fontSize:12}}>{dayBooked} محجوز · {dayFree} متاح · {dayPending} بانتظار</span>
+    </div>
+  );
 
   return (
     <>
     <div className="card" style={{padding:0,overflow:"hidden"}}>
-      {/* toolbar */}
-      <div style={{padding:"14px 18px",display:"flex",alignItems:"center",gap:12,borderBottom:"1px solid var(--ink-200)",flexWrap:"wrap"}}>
-        <button className="btn btn-secondary btn-icon" onClick={()=>setDateOffset(Math.max(0,dateOffset-1))}><I.ArrowLeft size={14}/></button>
-        <div className="h3" style={{minWidth:"min(220px, 45vw)"}}>{today}</div>
-        <button className="btn btn-secondary btn-icon" onClick={()=>setDateOffset(dateOffset+1)}><I.ArrowRight size={14}/></button>
-        <button className="btn btn-ghost" style={{fontSize:12}} onClick={()=>setDateOffset(0)}>اليوم</button>
-        <div className="seg" style={{marginLeft:12}}>
-          <button>يوم</button>
-          <button className="on">الأخصائي</button>
-          <button>أسبوع</button>
-        </div>
-        <div style={{flex:1}}/>
-        <span className="muted" style={{fontSize:12}}>اسحب المواعيد لإعادة جدولتها</span>
-      </div>
+      {toolbar}
 
-      <div className="tbl-scroll">
-      <div style={{display:"grid",gridTemplateColumns:`80px repeat(${therapists.length},1fr)`,minHeight:660,minWidth:Math.max(320, 80 + therapists.length*160)}}>
-        {/* header */}
-        <div style={{borderRight:"1px solid var(--ink-200)",background:"var(--ink-50)"}}></div>
-        {therapists.map((t,i)=>(
-          <div key={t.name} style={{padding:"12px 14px",borderRight:i<therapists.length-1?"1px solid var(--ink-200)":"none",borderBottom:"1px solid var(--ink-200)",background:"var(--ink-50)"}}>
-            <div style={{display:"flex",alignItems:"center",gap:8}}>
-              <span className="av sm" style={{background:t.color+"33",color:t.color}}>{t.name.split(" ").map(x=>x[0]).join("")}</span>
-              <div>
-                <div style={{fontWeight:600,fontSize:13}}>{t.name}</div>
-                <div className="muted" style={{fontSize:11}}>{t.spec} · {t.load}/{t.max}</div>
+      {(viewMode === "therapist" || viewMode === "doctor") ? (
+        <div className="tbl-scroll">
+        <div style={{display:"grid",gridTemplateColumns:`80px repeat(${visibleStaffCols.length},1fr)`,minHeight:660,minWidth:Math.max(320, 80 + visibleStaffCols.length*160)}}>
+          {/* header */}
+          <div style={{borderRight:"1px solid var(--ink-200)",background:"var(--ink-50)"}}></div>
+          {visibleStaffCols.map((s,i)=>{
+            const cnt = dayAppts.filter(a => a.colIndex === i && a.status !== "متاح").length;
+            return (
+            <div key={s.key} style={{padding:"12px 14px",borderRight:i<visibleStaffCols.length-1?"1px solid var(--ink-200)":"none",borderBottom:"1px solid var(--ink-200)",background:"var(--ink-50)"}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span className="av sm" style={{background:s.color+"33",color:s.color}}>{(s.name||"").split(" ").map(x=>x[0]).join("").slice(0,2)}</span>
+                <div style={{minWidth:0}}>
+                  <div style={{fontWeight:600,fontSize:13,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.name}</div>
+                  <div className="muted" style={{fontSize:11}}>{s.subtitle || s.role}</div>
+                  <div className="muted mono" style={{fontSize:10.5,marginTop:2}}>{s.hours} · {cnt} موعد</div>
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+            );
+          })}
 
-        {/* hours column */}
-        <div style={{borderRight:"1px solid var(--ink-200)",background:"var(--ink-50)",position:"relative"}}>
-          {hours.map((h,i)=>(
-            <div key={h} style={{height:54,padding:"4px 10px",borderTop:i?"1px solid var(--ink-100)":"none",fontSize:11,color:"var(--ink-500)"}} className="mono">{h}</div>
+          {/* hours column */}
+          <div style={{borderRight:"1px solid var(--ink-200)",background:"var(--ink-50)",position:"relative"}}>
+            {hours.map((h,i)=>(
+              <div key={h} style={{height:54,padding:"4px 10px",borderTop:i?"1px solid var(--ink-100)":"none",fontSize:11,color:"var(--ink-500)"}} className="mono">{h}</div>
+            ))}
+          </div>
+
+          {/* staff columns */}
+          {visibleStaffCols.map((s,col)=>(
+            <div key={s.key}
+              onDragOver={e=>e.preventDefault()}
+              onDrop={e=>{
+                e.preventDefault();
+                const rect = e.currentTarget.getBoundingClientRect();
+                const offsetY = e.clientY - rect.top;
+                const totalMin = Math.round(offsetY / 54) * 15;
+                const hh = Math.floor(8 + totalMin/60);
+                const mm = totalMin % 60;
+                const newTime = `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+                const orig = dayAppts.find(x => x.id === draggedId);
+                setDraggedId(null);
+                if (!orig) return;
+                // Cross-role guard: therapist view only moves within therapists;
+                // doctor view only within doctors.
+                if (viewMode === "therapist" && s._kind !== "therapist") return;
+                if (viewMode === "doctor"    && s._kind !== "doctor")    return;
+                if (hasConflict(col, newTime, orig.id)) {
+                  if (window.showToast) window.showToast("يوجد موعد آخر في نفس التوقيت", "error");
+                  return;
+                }
+                const patch = { time: newTime, date: viewIso };
+                if (s._kind === "therapist") {
+                  patch.th = s.name;
+                  patch.therapist_id = s._row.staff_id || s._row.id;
+                  patch.doctor_id = null; patch.dr = null;
+                } else {
+                  patch.dr = s.name;
+                  patch.doctor_id = s._row.id;
+                  patch.therapist_id = null; patch.th = null;
+                }
+                persistMove(orig, patch);
+              }}
+              style={{
+                position:"relative",
+                borderRight:col<visibleStaffCols.length-1?"1px solid var(--ink-200)":"none",
+                background: col%2===0?"#fff":"#FCFDFE",
+                minHeight: hours.length * 54
+              }}>
+              {hours.map((_,i)=>(
+                <div key={i} style={{position:"absolute",top:i*54,left:0,right:0,height:54,borderTop:i?"1px solid var(--ink-100)":"none"}}/>
+              ))}
+              {/* now indicator — only on today's column */}
+              {col===0 && dateOffset===0 && (() => {
+                const now = new Date();
+                const nowMin = (now.getHours()-8)*60 + now.getMinutes();
+                if (nowMin < 0 || nowMin > hours.length*60) return null;
+                return (
+                  <div style={{position:"absolute",top:(nowMin/60)*54-2,left:0,right:0,height:2,background:"var(--red)",zIndex:5}}>
+                    <div style={{position:"absolute",left:-4,top:-4,width:10,height:10,borderRadius:999,background:"var(--red)"}}/>
+                  </div>
+                );
+              })()}
+
+              {dayAppts.filter(a=>a.colIndex===col).map(a=>{
+                const top = (minutesFromHour(a.time)/60)*54;
+                const dur = Number(a.dur) || 30;
+                const h = (dur/60)*54;
+                const isAvail = a.status==="متاح";
+                const c = s.color;
+                const bg = isAvail ? "transparent" : `${c}1A`;
+                const border = isAvail ? `2px dashed ${c}66` : `1px solid ${c}66`;
+                return (
+                  <div key={a.id}
+                    draggable={!isAvail}
+                    onDragStart={(e)=>{e.stopPropagation();setDraggedId(a.id);}}
+                    onClick={()=>{ if(!isAvail) setActionsModal(a); }}
+                    style={{
+                      position:"absolute", left:6, right:6, top, height:h-3,
+                      background:bg, border, borderLeft: isAvail?border:`3px solid ${c}`,
+                      borderRadius:9, padding:"6px 8px",fontSize:11.5,
+                      cursor: isAvail?"pointer":"grab", overflow:"hidden",
+                      transition:"transform .12s",
+                      opacity: draggedId===a.id ? 0.5 : 1
+                    }}
+                    onMouseEnter={e=>e.currentTarget.style.transform="scale(1.01)"}
+                    onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}>
+                    {isAvail ? (
+                      <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100%",color:c,fontWeight:500}}>
+                        <I.Plus size={12} style={{marginRight:4}}/> موعد متاح
+                      </div>
+                    ) : (
+                      <>
+                        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:2}}>
+                          <span style={{fontWeight:600,fontSize:12,color:"var(--ink-900)"}}>{a.patient}</span>
+                          <span className="mono" style={{fontSize:10,color:"var(--ink-500)"}}>{a.time}</span>
+                        </div>
+                        <div style={{fontSize:10.5,color:"var(--ink-500)",whiteSpace:"normal",wordBreak:"break-word"}}>{a.type}</div>
+                        <div style={{display:"flex",alignItems:"center",gap:6,marginTop:4}}>
+                          <ApptBadge s={a.status}/>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           ))}
         </div>
-
-        {/* therapist columns */}
-        {therapists.map((t,col)=>(
-          <div key={t.name}
-            onDragOver={e=>e.preventDefault()}
-            onDrop={e=>{
-              e.preventDefault();
-              const rect = e.currentTarget.getBoundingClientRect();
-              const offsetY = e.clientY - rect.top;
-              const newMin = Math.round(offsetY / 54) * 15;
-              const totalMin = newMin;
-              const hh = Math.floor(8 + totalMin/60);
-              const mm = totalMin % 60;
-              const newTime = `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
-              setAppts(prev => {
-                const next = prev.map(a => a.id===draggedId ? { ...a, time:newTime, th:t.name, colIndex: col } : a);
-                const moved = next.find(a => a.id===draggedId);
-                // Persist reschedule so a refresh keeps the new slot.
-                if (moved && window.KineticData) {
-                  const therapistRow = (DATA.therapists || []).find(x=>x.name===t.name);
-                  window.KineticData.upsert("appts", {
-                    booking_id: moved.booking_id || moved.id,
-                    id: moved.id,
-                    patient_id: moved.patient_id || moved.pid,
-                    therapist_id: (therapistRow && (therapistRow.staff_id || therapistRow.id)) || moved.therapist_id,
-                    date: moved.date || new Date().toISOString().slice(0,10),
-                    time: newTime,
-                    status: moved.status || "مؤكد",
-                  }).catch(e => console.warn("reschedule persist failed", e));
-                }
-                return next;
-              });
-              setDraggedId(null);
-            }}
-            style={{
-              position:"relative",
-              borderRight:col<therapists.length-1?"1px solid var(--ink-200)":"none",
-              background: col%2===0?"#fff":"#FCFDFE",
-              minHeight: hours.length * 54
-            }}>
-            {/* hour grid lines */}
-            {hours.map((_,i)=>(
-              <div key={i} style={{position:"absolute",top:i*54,left:0,right:0,height:54,borderTop:i?"1px solid var(--ink-100)":"none"}}/>
-            ))}
-            {/* now indicator (3rd hour for demo) */}
-            {col===0 && (
-              <div style={{position:"absolute",top:54*3-2,left:0,right:0,height:2,background:"var(--red)",zIndex:5}}>
-                <div style={{position:"absolute",left:-4,top:-4,width:10,height:10,borderRadius:999,background:"var(--red)"}}/>
+        </div>
+      ) : viewMode === "week" ? (
+        // ── Week view: 7-day chronological summary (Saturday-start) ──
+        <div className="tbl-scroll">
+        <div style={{display:"grid",gridTemplateColumns:`repeat(7,1fr)`,minHeight:520,minWidth:Math.max(560, 7*140)}}>
+          {weekDays.map((d, i) => {
+            const dayList = weekAppts
+              .filter(a => apptDateIso(a) === d.iso)
+              .sort((a,b)=>String(a.time).localeCompare(String(b.time)));
+            const isToday = d.iso === todayIso();
+            const isSelected = d.iso === viewIso;
+            return (
+              <div key={d.iso}
+                onClick={()=>onPickDate(d.iso)}
+                style={{
+                  borderRight: i<6 ? "1px solid var(--ink-200)" : "none",
+                  background: isSelected ? "var(--blue-50)" : (i%2===0 ? "#fff" : "#FCFDFE"),
+                  cursor:"pointer",
+                }}>
+                <div style={{padding:"10px 12px",borderBottom:"1px solid var(--ink-200)",background:isToday?"var(--blue-50)":"var(--ink-50)"}}>
+                  <div style={{fontSize:12,fontWeight:600}}>{d.label}</div>
+                  <div className="muted mono" style={{fontSize:10.5}}>{d.iso}</div>
+                  <div className="muted" style={{fontSize:10.5,marginTop:2}}>{dayList.filter(a=>a.status!=="متاح").length} موعد</div>
+                </div>
+                <div style={{padding:"8px",display:"flex",flexDirection:"column",gap:6}}>
+                  {dayList.length === 0 && <div className="muted" style={{fontSize:11,textAlign:"center",padding:"12px 0"}}>—</div>}
+                  {dayList.slice(0, 8).map(a => {
+                    const col   = a.colIndex >= 0 ? staffCols[a.colIndex] : null;
+                    const color = (col && col.color) || "#7BBDE8";
+                    const staffLabel = col ? col.name : (a.th || a.dr || "—");
+                    const isAvail = a.status === "متاح";
+                    return (
+                      <div key={a.id}
+                        onClick={(e)=>{ e.stopPropagation(); if(!isAvail) setActionsModal(a); }}
+                        style={{
+                          borderRight:`3px solid ${color}`,
+                          border:"1px solid var(--ink-200)",
+                          borderRadius:8, padding:"5px 7px",
+                          background: isAvail ? "transparent" : "#fff",
+                          fontSize:11, cursor:isAvail?"default":"pointer",
+                        }}>
+                        <div style={{display:"flex",justifyContent:"space-between",gap:4}}>
+                          <span className="mono" style={{fontWeight:600}}>{a.time || "—"}</span>
+                          <span className="muted" style={{fontSize:10}}>{a.dur||30}m</span>
+                        </div>
+                        <div style={{fontWeight:500,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{a.patient || "—"}</div>
+                        <div className="muted" style={{fontSize:10,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{staffLabel}</div>
+                      </div>
+                    );
+                  })}
+                  {dayList.length > 8 && (
+                    <div className="muted" style={{fontSize:10.5,textAlign:"center"}}>+{dayList.length-8} إضافية</div>
+                  )}
+                </div>
               </div>
-            )}
-
-            {/* appointments */}
-            {appts.filter(a=>a.colIndex===col && a.status!=="متاح").map(a=>{
-              const top = (minutesFromHour(a.time)/60)*54;
-              const h = (a.dur/60)*54;
-              const isAvail = a.status==="متاح";
-              const c = t.color;
-              const bg = isAvail ? "transparent" : `${c}1A`;
-              const border = isAvail ? `2px dashed ${c}66` : `1px solid ${c}66`;
+            );
+          })}
+        </div>
+        </div>
+      ) : (
+        // ── Day view: chronological list for the selected date ──
+        <div style={{padding:"14px 18px"}}>
+          {dayAppts.length === 0 && (
+            <div className="muted" style={{fontSize:13,padding:"32px 0",textAlign:"center"}}>لا مواعيد في هذا اليوم.</div>
+          )}
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {dayAppts.slice().sort((a,b)=>String(a.time).localeCompare(String(b.time))).map(a=>{
+              const col   = a.colIndex >= 0 ? visibleStaffCols[a.colIndex] : null;
+              const color = (col && col.color) || "#7BBDE8";
+              const with_ = col ? `${col.role}: ${col.name}` : (a.th || a.dr || "—");
+              const isAvail = a.status === "متاح";
               return (
                 <div key={a.id}
-                  draggable={!isAvail}
-                  onDragStart={(e)=>{e.stopPropagation();setDraggedId(a.id);}}
-                  onClick={()=>{ if(!isAvail) setRescheduleModal(a); }}
+                  onClick={()=>{ if(!isAvail) setActionsModal(a); }}
                   style={{
-                    position:"absolute", left:6, right:6, top, height:h-3,
-                    background:bg, border, borderLeft: isAvail?border:`3px solid ${c}`,
-                    borderRadius:9, padding:"6px 8px",fontSize:11.5,
-                    cursor: isAvail?"pointer":"grab", overflow:"hidden",
-                    transition:"transform .12s",
-                    opacity: draggedId===a.id ? 0.5 : 1
-                  }}
-                  onMouseEnter={e=>e.currentTarget.style.transform="scale(1.01)"}
-                  onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}>
-                  {isAvail ? (
-                    <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100%",color:c,fontWeight:500}}>
-                      <I.Plus size={12} style={{marginRight:4}}/> موعد متاح
-                    </div>
-                  ) : (
-                    <>
-                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:2}}>
-                        <span style={{fontWeight:600,fontSize:12,color:"var(--ink-900)"}}>{a.patient}</span>
-                        <span className="mono" style={{fontSize:10,color:"var(--ink-500)"}}>{a.time}</span>
-                      </div>
-                      <div style={{fontSize:10.5,color:"var(--ink-500)",whiteSpace:"normal",wordBreak:"break-word"}}>{a.type}</div>
-                      <div style={{display:"flex",alignItems:"center",gap:6,marginTop:4}}>
-                        <ApptBadge s={a.status}/>
-                      </div>
-                    </>
-                  )}
+                    display:"flex",alignItems:"center",gap:12,
+                    padding:"10px 12px",border:"1px solid var(--ink-200)",
+                    borderRight:`3px solid ${color}`,borderRadius:12,
+                    background: a.status==="قيد التنفيذ" ? "var(--blue-50)" : "#fff",
+                    cursor: isAvail ? "default" : "pointer",
+                  }}>
+                  <div style={{textAlign:"center",minWidth:56}}>
+                    <div className="mono" style={{fontSize:13,fontWeight:600}}>{a.time || "—"}</div>
+                    <div className="mono" style={{fontSize:10,color:"var(--ink-400)"}}>{a.dur || 30}m</div>
+                  </div>
+                  <div style={{width:1,height:34,background:"var(--ink-200)"}}/>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:500,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{a.patient || "—"}</div>
+                    <div style={{fontSize:11.5,color:"var(--ink-500)"}}>{with_}{a.type ? ` · ${a.type}` : ""}</div>
+                  </div>
+                  <ApptBadge s={a.status}/>
                 </div>
               );
             })}
           </div>
-        ))}
-      </div>
-      </div>
+        </div>
+      )}
     </div>
+
+    {actionsModal && (
+      <AppointmentActionsModal
+        appt={actionsModal}
+        onClose={()=>setActionsModal(null)}
+        onEdit={()=>{ setRescheduleModal(actionsModal); setActionsModal(null); }}
+        onStatus={async (newStatus) => {
+          await persistMove(actionsModal, { status: newStatus });
+          setActionsModal(null);
+          if (window.showToast) window.showToast("تم تحديث الحالة", "success");
+        }}
+      />
+    )}
+
     {rescheduleModal && (
       <RescheduleModal
         appt={rescheduleModal}
         onClose={()=>setRescheduleModal(null)}
-        onSave={(newTime, newTherapist)=>{
-          setAppts(prev=>{
-            const next = prev.map(a=>a.id===rescheduleModal.id
-              ? {...a, time:newTime, th:newTherapist, colIndex:therapists.findIndex(t=>t.name===newTherapist)}
-              : a
-            );
-            const moved = next.find(a=>a.id===rescheduleModal.id);
-            if (moved && window.KineticData) {
-              const therapistRow = (DATA.therapists || []).find(x=>x.name===newTherapist);
-              window.KineticData.upsert("appts", {
-                booking_id: moved.booking_id || moved.id,
-                id: moved.id,
-                patient_id: moved.patient_id || moved.pid,
-                therapist_id: (therapistRow && (therapistRow.staff_id || therapistRow.id)) || moved.therapist_id,
-                date: moved.date || new Date().toISOString().slice(0,10),
-                time: newTime,
-                status: moved.status || "مؤكد",
-              }).catch(e => console.warn("reschedule persist failed", e));
-            }
-            return next;
-          });
+        onSave={(newTime, newTherapist, newDateIso)=>{
+          const therapistRow = (DATA.therapists || []).find(x=>x.name===newTherapist);
+          const patch = {
+            time: newTime, th: newTherapist,
+            therapist_id: therapistRow ? (therapistRow.staff_id || therapistRow.id) : rescheduleModal.therapist_id,
+            date: newDateIso || apptDateIso(rescheduleModal),
+          };
+          persistMove(rescheduleModal, patch);
           setRescheduleModal(null);
-          if(window.showToast) window.showToast(`تم إعادة جدولة موعد ${rescheduleModal.patient} إلى ${newTime}`, "success");
+          if(window.showToast) window.showToast(`تم إعادة جدولة موعد ${rescheduleModal.patient} إلى ${newDateIso} ${newTime}`, "success");
         }}
         therapists={therapists}
       />
@@ -1804,16 +2751,148 @@ function CalendarView({ dateOffset, setDateOffset }) {
   );
 }
 
+// ── Appointment actions (view details + status change + open patient) ──
+// Small focused modal so click-to-details doesn't drop the user
+// straight into the reschedule form.
+function AppointmentActionsModal({ appt, onClose, onEdit, onStatus }) {
+  const patient = (DATA.patients || []).find(p =>
+    (p.patient_id || p.id) === (appt.patient_id || appt.pid)
+    || p.name === appt.patient);
+  return (
+    <Modal open onClose={onClose} width={520} title="تفاصيل الموعد">
+      <div style={{display:"grid",gap:10,fontSize:13}}>
+        <Row k="المريض"  v={appt.patient || "—"}/>
+        {patient && patient.phone && <Row k="الهاتف" v={patient.phone}/>}
+        <Row k="المسؤول" v={appt.th || appt.dr || "—"}/>
+        <Row k="التاريخ" v={apptDateIso(appt)}/>
+        <Row k="الوقت"   v={`${appt.time || "—"} · ${appt.dur || 30} دقيقة`}/>
+        <Row k="النوع"   v={appt.type || "—"}/>
+        <Row k="الحالة"  v={<ApptBadge s={appt.status}/>}/>
+        {appt.payment && <Row k="الدفع" v={<PayBadge s={appt.payment}/>}/>}
+        {appt.notes && <Row k="ملاحظات" v={appt.notes}/>}
+      </div>
+      <div style={{display:"flex",flexWrap:"wrap",gap:8,marginTop:16,justifyContent:"flex-end"}}>
+        {patient && (
+          <button className="btn btn-ghost" onClick={()=>{
+            if (window.__goToPatient) window.__goToPatient(patient);
+            else if (window.showToast) window.showToast("افتح صفحة المرضى لعرض الملف", "info");
+            onClose();
+          }}><I.User size={13}/> ملف المريض</button>
+        )}
+        <button className="btn btn-secondary" onClick={()=>onStatus("ملغي")}><I.X size={13}/> إلغاء</button>
+        <button className="btn btn-secondary" onClick={()=>onStatus("مكتمل")}><I.Check size={13}/> إنهاء</button>
+        <button className="btn btn-blue" onClick={onEdit}><I.Edit size={13}/> نقل / تعديل</button>
+      </div>
+    </Modal>
+  );
+}
+function Row({ k, v }) {
+  return (
+    <div style={{display:"flex",gap:12,alignItems:"center"}}>
+      <span className="muted" style={{fontSize:12,minWidth:64}}>{k}</span>
+      <span style={{flex:1}}>{v}</span>
+    </div>
+  );
+}
+
 function RescheduleModal({ appt, onClose, onSave, therapists }) {
+  // Live-tick every minute so past-time gating remains accurate even
+  // if the modal sits open across the top of the hour or midnight.
+  const [nowTick, setNowTick] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+  // Re-render whenever another tab/module writes a booking so slot
+  // availability stays fresh without a page reload.
+  window.useDataVersion && window.useDataVersion();
+
+  const AR_WEEKDAYS = ["الأحد","الإثنين","الثلاثاء","الأربعاء","الخميس","الجمعة","السبت"];
+  const AR_MONTHS   = ["يناير","فبراير","مارس","أبريل","مايو","يونيو","يوليو","أغسطس","سبتمبر","أكتوبر","نوفمبر","ديسمبر"];
   const timeSlots = [
     "08:00","08:30","09:00","09:30","10:00","10:30","11:00","11:30",
     "12:00","12:30","13:00","13:30","14:00","14:30","15:00","15:30",
     "16:00","16:30","17:00","17:30","18:00"
   ];
-  const [newTime, setNewTime] = React.useState(appt.time);
+
+  // Real "today" derived from the runtime clock — never hardcoded.
+  const now       = new Date(nowTick);
+  const todayIsoR = isoDate(now);
+  const nowHM     = `${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;
+
+  // Build 7 rolling calendar days starting today. Each card carries
+  // its own ISO so downstream logic never re-parses Arabic labels.
+  const days = React.useMemo(() => {
+    const out = [];
+    const base = new Date(todayIsoR + "T00:00:00");
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(base); d.setDate(base.getDate() + i);
+      const iso = isoDate(d);
+      const wd  = AR_WEEKDAYS[d.getDay()];
+      const mo  = AR_MONTHS[d.getMonth()];
+      const short = i === 0 ? `اليوم، ${d.getDate()} ${mo}`
+                  : i === 1 ? `غدًا، ${d.getDate()} ${mo}`
+                  : `${wd}، ${d.getDate()} ${mo}`;
+      out.push({ iso, weekday: wd, day: d.getDate(), month: mo, label: short });
+    }
+    return out;
+  }, [todayIsoR]);
+
+  // Bookings from the live source (DB-backed via KineticData → DATA).
+  const allAppts = (window.scopeAppts ? window.scopeAppts(DATA.appts || []) : (DATA.appts || []));
+
+  // Available count per day = working slots − bookings for that day
+  // that aren't cancelled and aren't the appointment being rescheduled.
+  function availableCount(iso) {
+    const taken = allAppts.filter(a =>
+      apptDateIso(a) === iso &&
+      a.status !== "ملغي" && a.status !== "متاح" &&
+      (a.booking_id || a.id) !== (appt.booking_id || appt.id)
+    ).length;
+    let total = timeSlots.length;
+    if (iso === todayIsoR) {
+      // Slots already in the past today can't be booked either.
+      total = timeSlots.filter(t => t > nowHM).length;
+    }
+    return Math.max(0, total - taken);
+  }
+
+  // Default selection: keep the appt's current date if it's still in
+  // the visible window and not in the past; otherwise fall back to today.
+  const initialIso = React.useMemo(() => {
+    const cur = apptDateIso(appt);
+    if (cur >= todayIsoR && days.some(d => d.iso === cur)) return cur;
+    return todayIsoR;
+  }, [appt, todayIsoR, days]);
+
+  const [newTime, setNewTime]           = React.useState(appt.time);
   const [newTherapist, setNewTherapist] = React.useState(appt.th);
-  const [newDate, setNewDate] = React.useState("اليوم، 24 مايو");
-  const dates = ["اليوم، 24 مايو","غدًا، 25 مايو","الثلاثاء، 26 مايو","الأربعاء، 27 مايو","الخميس، 28 مايو","الجمعة، 29 مايو"];
+  const [newDateIso, setNewDateIso]     = React.useState(initialIso);
+
+  // Times taken by other appointments on the chosen day for the chosen therapist.
+  const takenTimes = React.useMemo(() => {
+    return new Set(
+      allAppts
+        .filter(a =>
+          apptDateIso(a) === newDateIso &&
+          a.status !== "ملغي" && a.status !== "متاح" &&
+          (a.th === newTherapist) &&
+          (a.booking_id || a.id) !== (appt.booking_id || appt.id)
+        )
+        .map(a => a.time)
+    );
+  }, [allAppts, newDateIso, newTherapist, appt]);
+
+  const selectedDay = days.find(d => d.iso === newDateIso) || days[0];
+  const selectedLabel = selectedDay
+    ? `${selectedDay.weekday}، ${selectedDay.day} ${selectedDay.month}`
+    : newDateIso;
+
+  const canSave =
+    !!newDateIso && !!newTime && !!newTherapist &&
+    newDateIso >= todayIsoR &&
+    !(newDateIso === todayIsoR && newTime <= nowHM) &&
+    !takenTimes.has(newTime);
 
   const sectionLabel = (text) => (
     <div style={{
@@ -1864,29 +2943,40 @@ function RescheduleModal({ appt, onClose, onSave, therapists }) {
           <span style={{fontSize:13,color:"var(--ink-700)",whiteSpace:"nowrap"}}>{appt.th}</span>
         </div>
 
-        {/* ── Date picker ── */}
+        {/* ── Date picker (rolling 7 days from real system time) ── */}
         <div style={{marginBottom:22}}>
           {sectionLabel("اليوم الجديد")}
-          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-            {dates.map(d => {
-              const active = newDate === d;
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(120px, 1fr))",gap:8}}>
+            {days.map(d => {
+              const active = newDateIso === d.iso;
+              const avail  = availableCount(d.iso);
+              const full   = avail === 0;
               return (
                 <button
-                  key={d}
-                  onClick={()=>setNewDate(d)}
+                  key={d.iso}
+                  onClick={()=> !full && setNewDateIso(d.iso)}
+                  disabled={full}
+                  title={full ? "لا تتوفر مواعيد" : `${avail} موعد متاح`}
                   style={{
-                    display:"inline-flex",alignItems:"center",justifyContent:"center",
-                    whiteSpace:"nowrap",
-                    padding:"8px 16px",
-                    borderRadius:10,border:"none",cursor:"pointer",
-                    fontSize:13,fontWeight: active?600:500,
-                    background: active?"var(--blue-500)":"var(--ink-100)",
-                    color: active?"#fff":"var(--ink-700)",
-                    boxShadow: active?"0 2px 8px rgba(59,130,246,.3)":"none",
+                    display:"flex",flexDirection:"column",alignItems:"center",gap:2,
+                    padding:"10px 12px",borderRadius:12,
+                    border: active ? "none" : "1px solid var(--ink-200)",
+                    cursor: full ? "not-allowed" : "pointer",
+                    background: active ? "var(--blue-500)" : full ? "var(--ink-50)" : "#fff",
+                    color: active ? "#fff" : full ? "var(--ink-300)" : "var(--ink-900)",
+                    boxShadow: active ? "0 2px 8px rgba(59,130,246,.3)" : "none",
                     transition:"all .12s",
-                    minWidth:0,
+                    opacity: full ? .55 : 1,
                   }}
-                >{d}</button>
+                >
+                  <span style={{fontSize:11.5,fontWeight:500,opacity:.85}}>{d.weekday}</span>
+                  <span style={{fontSize:15,fontWeight:600,fontFamily:"var(--mono, monospace)"}}>
+                    {d.day} {d.month}
+                  </span>
+                  <span style={{fontSize:11,opacity:.85}}>
+                    {full ? "محجوز بالكامل" : `${avail} متاح`}
+                  </span>
+                </button>
               );
             })}
           </div>
@@ -1902,18 +2992,24 @@ function RescheduleModal({ appt, onClose, onSave, therapists }) {
           }}>
             {timeSlots.map(t => {
               const active = newTime === t;
+              const isPast = newDateIso === todayIsoR && t <= nowHM;
+              const isTaken = takenTimes.has(t);
+              const disabled = isPast || isTaken;
               return (
                 <button
                   key={t}
-                  onClick={()=>setNewTime(t)}
+                  disabled={disabled}
+                  onClick={()=> !disabled && setNewTime(t)}
+                  title={isPast ? "وقت سابق" : isTaken ? "محجوز" : ""}
                   style={{
                     display:"flex",alignItems:"center",justifyContent:"center",
-                    padding:"8px 4px",borderRadius:9,border:"none",cursor:"pointer",
+                    padding:"8px 4px",borderRadius:9,cursor:disabled?"not-allowed":"pointer",
                     fontSize:13,fontWeight: active?600:400,fontFamily:"var(--mono, monospace)",
-                    background: active?"var(--blue-500)":"var(--ink-50)",
-                    color: active?"#fff":"var(--ink-700)",
+                    background: active?"var(--blue-500)":disabled?"var(--ink-100)":"var(--ink-50)",
+                    color: active?"#fff":disabled?"var(--ink-300)":"var(--ink-700)",
                     boxShadow: active?"0 2px 8px rgba(59,130,246,.3)":"none",
                     border: active?"none":"1px solid var(--ink-200)",
+                    textDecoration: isTaken ? "line-through" : "none",
                     transition:"all .12s",
                     whiteSpace:"nowrap",
                   }}
@@ -1967,14 +3063,15 @@ function RescheduleModal({ appt, onClose, onSave, therapists }) {
         }}>
           <div style={{fontSize:12.5,color:"var(--ink-500)",whiteSpace:"nowrap"}}>
             <I.Calendar size={12} style={{marginLeft:4,verticalAlign:"middle"}}/>
-            {newDate} · {newTime}
+            {selectedLabel} · {newTime || "—"}
           </div>
           <div style={{display:"flex",gap:8,flexShrink:0}}>
             <button className="btn btn-ghost" onClick={onClose} style={{whiteSpace:"nowrap"}}>إلغاء</button>
             <button
               className="btn btn-blue"
-              onClick={()=>onSave(newTime, newTherapist)}
-              style={{whiteSpace:"nowrap"}}
+              disabled={!canSave}
+              onClick={()=> canSave && onSave(newTime, newTherapist, newDateIso)}
+              style={{whiteSpace:"nowrap",opacity:canSave?1:.55,cursor:canSave?"pointer":"not-allowed"}}
             >
               <I.Check size={13}/> تأكيد إعادة الجدولة
             </button>
@@ -2091,7 +3188,10 @@ function BookingFlow({ onDone }) {
   const steps = ["المريض","القسم","الطبيب","الأخصائي","التاريخ","الوقت"];
   const LAST = steps.length;
   const update = (patch) => setPicks(p => ({ ...p, ...patch }));
-  const therapists = window.scopeTherapists ? window.scopeTherapists(DATA.therapists) : DATA.therapists;
+  // Only offer active specialists for new assignments; historical
+  // appointments keep their original therapist_id untouched.
+  const therapists = (window.scopeTherapists ? window.scopeTherapists(DATA.therapists) : DATA.therapists)
+    .filter(t => t.active !== false);
 
   // Validate the patient step before advancing.
   function patientStepValid() {

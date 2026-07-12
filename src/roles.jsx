@@ -19,7 +19,7 @@ const ROLE_PROFILES = {
 const ROLE_ROUTES = {
   "مدير":          ["dashboard","patients","appointments","treatments","sessions","payments","packages","campaigns","reports","settings"],
   "موظف استقبال":  ["dashboard","appointments","patients","payments","reports"],
-  "طبيب":          ["dashboard","patients","appointments","treatments","sessions","reports"],
+  "طبيب":          ["dashboard","patients","appointments","treatments","sessions","reports","settings"],
   "الأخصائي":       ["dashboard","appointments","sessions","patients"],
 };
 
@@ -155,6 +155,8 @@ function ApptRow({ a, right }){
 // RECEPTIONIST — front desk: today's flow, check-ins, daily cash
 // ════════════════════════════════════════════════════════════════
 function ReceptionDashboard({ go, user }){
+  window.useDataVersion && window.useDataVersion();
+  const [quickPayOpen, setQuickPayOpen] = React.useState(false);
   const appts   = DATA.appts;
   const booked  = appts.filter(a=>a.status!=="متاح");
   const free    = appts.filter(a=>a.status==="متاح");
@@ -179,6 +181,7 @@ function ReceptionDashboard({ go, user }){
         sub={`${todayLabelAr()} — حركة مكتب الاستقبال اليوم في ${activeBranchName()}.`}
         right={<>
           <button className="btn btn-secondary" onClick={()=>go("patients")}><I.Plus size={14}/> مريض جديد</button>
+          <button className="btn btn-secondary" onClick={()=>setQuickPayOpen(true)}><I.CreditCard size={14}/> دفع سريع</button>
           <button className="btn btn-blue" onClick={()=>go("appointments")}><I.Plus size={14}/> حجز موعد</button>
         </>}
       />
@@ -243,6 +246,13 @@ function ReceptionDashboard({ go, user }){
           </div>
         </div>
       </div>
+
+      {quickPayOpen && window.QuickPaymentModal && (
+        <window.QuickPaymentModal
+          onClose={()=>setQuickPayOpen(false)}
+          onDone={()=>setQuickPayOpen(false)}
+        />
+      )}
     </Page>
   );
 }

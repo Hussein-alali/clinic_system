@@ -4,17 +4,17 @@
 -- Run this ONCE in the Supabase SQL editor, AFTER running
 -- supabase-schema.sql.
 --
---   Email:    amir@kinetic.eg
---   Password: Amir@2026!     ←  CHANGE THIS after first login
+--   Email:    amr@clinic.eg
+--   Password: Amr@2026!     ←  CHANGE THIS after first login
 --                                (Supabase Dashboard → Authentication →
---                                 Users → amir@kinetic.eg → Reset password)
+--                                 Users → amr@clinic.eg → Reset password)
 --
 -- What it does:
---   1. Creates the Supabase Auth user with role "admin" in
---      user_metadata (this is what the app's RLS policies and the
---      login screen read).
+--   1. Creates the Supabase Auth user (role "admin" is kept in
+--      user_metadata for display, but permissions come from staff).
 --   2. Creates the matching row in the `staff` table, linked via
---      auth_uid, so the app can resolve the display name and role.
+--      auth_uid. This row is what public.app_role() and the app read
+--      to authorize the user — it MUST exist for the account to work.
 --
 -- Safe to re-run: it skips the auth user if the email already exists
 -- and upserts the staff row.
@@ -26,7 +26,7 @@ do $$
 declare
   uid uuid;
 begin
-  select id into uid from auth.users where email = 'amir@kinetic.eg';
+  select id into uid from auth.users where email = 'amr@clinic.eg';
 
   if uid is null then
     uid := gen_random_uuid();
@@ -53,7 +53,12 @@ begin
       now(),
       '{"provider":"email","providers":["email"]}'::jsonb,
       '{"role":"admin","name":"أمير"}'::jsonb,
-      now(), now()
+      now(), now(),
+      '', '',
+      '', '', '',
+      '', '',
+      '',
+      false
     );
 
     insert into auth.identities (
@@ -84,7 +89,7 @@ begin
     email_confirmed_at         = coalesce(email_confirmed_at, now()),
     raw_user_meta_data         = coalesce(raw_user_meta_data, '{}'::jsonb)
                                    || '{"role":"admin","name":"أمير"}'::jsonb
-  where email = 'amir@kinetic.eg';
+  where email = 'amr@clinic.eg';
 
   insert into staff (staff_id, name, role, email, auth_uid)
   values ('ST-AMR', 'عمرو', 'admin', 'amr@clinic.eg', uid)

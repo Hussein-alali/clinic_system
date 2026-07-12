@@ -78,118 +78,20 @@ window.Icon = Icon;
 
 
 // ===== src/data.jsx =====
-// Mock data fixtures — realistic enough to fill the UI
+// Domain data lives in PostgreSQL (Supabase). window.DATA is the
+// in-memory mirror hydrated on boot by hydrateDomainTables(); every
+// CRUD path goes through KineticData.upsert / remove, which writes
+// through to Supabase and republishes the mirror. No seed/mock data.
 
-// ── Seed arrays ────────────────────────────────────────────────
-const seedPatients = [
-  { id:"P-10241", name:"هناء مصطفى",     phone:"+20 100 234 1180", age:34, gender:"F", job:"مهندسة معمارية",       diag:"انزلاق غضروفي L4–L5",        chief:"ألم أسفل الظهر يمتد إلى الساق اليسرى",         dr:"د. ياسمين عادل",     th:"كريم صالح",  pkg:"12 Sessions",  remain:7,  visited:"منذ يومين",   payment:"مدفوع",     status:"نشط",   chronic:["ضغط دم"],  surgeries:["استئصال زائدة 2018"], registered:"2025-09-12" },
-  { id:"P-10242", name:"عمر السيد",    phone:"+20 122 902 4470", age:52, gender:"M", job:"مدير بنك",    diag:"كتف متجمدة (يمين)",          chief:"محدودية حركة الكتف، اضطراب نوم",       dr:"د. مهند رشدي",      th:"لينا فاروق",  pkg:"8 Sessions",   remain:3,  visited:"أمس",    payment:"جزئي",  status:"نشط",   chronic:["سكري نوع 2"],   surgeries:[], registered:"2025-10-02" },
-  { id:"P-10243", name:"آية كريم",       phone:"+20 109 833 0152", age:28, gender:"F", job:"قائدة تسويق",  diag:"متلازمة ألم الرضفة الفخذية", chief:"ألم الركبة عند نزول السلم",              dr:"د. ياسمين عادل",     th:"كريم صالح",  pkg:"10 Sessions",  remain:10, visited:"اليوم",        payment:"مدفوع",     status:"نشط",   chronic:[],                surgeries:[], registered:"2026-04-18" },
-  { id:"P-10244", name:"وليد حسن",     phone:"+20 111 778 6644", age:61, gender:"M", job:"متقاعد",         diag:"خشونة الفقرات العنقية",         chief:"تيبس الرقبة، صداع متقطع",           dr:"د. طارق نور",      th:"منى حلمي",   pkg:"15 Sessions",  remain:11, visited:"منذ 3 أيام",   payment:"معلّق",  status:"نشط",   chronic:["ضغط دم","كوليسترول"], surgeries:["ماء أبيض 2022"], registered:"2026-02-04" },
-  { id:"P-10245", name:"نور عبدالرحمن", phone:"+20 100 445 9912", age:19, gender:"F", job:"طالبة",         diag:"تأهيل بعد جراحة الرباط الصليبي",            chief:"تأهيل ركبة بعد الجراحة",             dr:"د. مهند رشدي",      th:"لينا فاروق",  pkg:"24 Sessions",  remain:18, visited:"اليوم",        payment:"مدفوع",     status:"نشط",   chronic:[],                surgeries:["إعادة بناء رباط صليبي 2026"], registered:"2026-03-22" },
-  { id:"P-10246", name:"تامر إبراهيم",    phone:"+20 128 119 5570", age:45, gender:"M", job:"سائق",          diag:"عرق النسا (يسار)",                 chief:"ألم حاد ينزل بالساق اليسرى",                   dr:"د. ياسمين عادل",     th:"منى حلمي",   pkg:"6 Sessions",   remain:0,  visited:"منذ أسبوعين",  payment:"متأخر",  status:"غير نشط", chronic:[],                surgeries:[], registered:"2025-08-30" },
-  { id:"P-10247", name:"سلمى رضا",       phone:"+20 101 220 3358", age:31, gender:"F", job:"مدرّبة يوغا", diag:"التهاب اللفافة الأخمصية",            chief:"ألم الكعب صباحًا",                          dr:"د. طارق نور",      th:"كريم صالح",  pkg:"8 Sessions",   remain:5,  visited:"منذ 4 أيام",   payment:"مدفوع",     status:"نشط",   chronic:[],                surgeries:[], registered:"2026-01-11" },
-  { id:"P-10248", name:"خالد منصور",   phone:"+20 109 504 2218", age:38, gender:"M", job:"مهندس برمجيات",   diag:"متلازمة النفق الرسغي",       chief:"تنميل في الإبهام والسبابة اليمنى",             dr:"د. مهند رشدي",      th:"لينا فاروق",  pkg:"10 Sessions",  remain:8,  visited:"أمس",    payment:"جزئي",  status:"نشط",   chronic:[],                surgeries:[], registered:"2026-04-30" },
-];
+/* Removed: seed arrays for patients, appointments, therapists, departments,
+   doctors, packages, payments, campaigns, sessions. Production hydrates
+   from PostgreSQL (Supabase) via hydrateDomainTables(). No demo path. */
 
-const seedAppointments = [
-  { id:"A-9901", patient:"هناء مصطفى",     pid:"P-10241", time:"08:30", dur:45, dr:"د. ياسمين عادل", th:"كريم صالح", room:"غرفة 2", status:"مكتمل",  type:"علاج يدوي" },
-  { id:"A-9902", patient:"آية كريم",       pid:"P-10243", time:"09:15", dur:45, dr:"د. ياسمين عادل", th:"كريم صالح", room:"غرفة 2", status:"مكتمل",  type:"تدريبات قوة" },
-  { id:"A-9903", patient:"نور عبدالرحمن", pid:"P-10245", time:"10:00", dur:60, dr:"د. مهند رشدي",  th:"لينا فاروق", room:"غرفة 1", status:"قيد التنفيذ",type:"تأهيل بعد العمليات" },
-  { id:"A-9904", patient:"عمر السيد",    pid:"P-10242", time:"11:15", dur:30, dr:"د. مهند رشدي",  th:"لينا فاروق", room:"غرفة 1", status:"مؤكد",  type:"تحريك مدى الحركة" },
-  { id:"A-9905", patient:"سلمى رضا",       pid:"P-10247", time:"12:00", dur:45, dr:"د. طارق نور",  th:"كريم صالح", room:"غرفة 3", status:"مؤكد",  type:"موجات فوق صوتية therapy" },
-  { id:"A-9906", patient:"وليد حسن",     pid:"P-10244", time:"13:30", dur:45, dr:"د. طارق نور",  th:"منى حلمي",  room:"غرفة 3", status:"معلّق",    type:"شد فقرات عنقية" },
-  { id:"A-9907", patient:"خالد منصور",   pid:"P-10248", time:"14:15", dur:30, dr:"د. مهند رشدي",  th:"لينا فاروق", room:"غرفة 1", status:"مؤكد",  type:"انزلاق عصبي" },
-  { id:"A-9908", patient:"آية كريم",       pid:"P-10243", time:"15:30", dur:60, dr:"د. ياسمين عادل", th:"كريم صالح", room:"غرفة 2", status:"مؤكد",  type:"علاج يدوي" },
-  { id:"A-9909", patient:"—",                pid:null,      time:"16:30", dur:30, dr:"د. ياسمين عادل", th:"كريم صالح", room:"غرفة 2", status:"متاح",  type:"" },
-  { id:"A-9910", patient:"—",                pid:null,      time:"17:15", dur:30, dr:"د. مهند رشدي",  th:"لينا فاروق", room:"غرفة 1", status:"متاح",  type:"" },
-];
-
-const seedTherapists = [
-  { id:"TH-1", name:"كريم صالح",  spec:"علاج يدوي",     load:6, max:8, color:"#7BBDE8" },
-  { id:"TH-2", name:"لينا فاروق",  spec:"تأهيل بعد العمليات",      load:5, max:8, color:"#7E6BD3" },
-  { id:"TH-3", name:"منى حلمي",   spec:"كبار السن / أعصاب",  load:3, max:6, color:"#3FA984" },
-  { id:"TH-4", name:"عادل نصر",    spec:"إصابات رياضية",    load:4, max:7, color:"#D49044" },
-];
-
-// Departments and doctors are DB-backed (departments / doctors tables).
-// These seeds only load in demo mode; production hydrates from Supabase.
-// D-other and D-women intentionally have no doctors to exercise the
-// empty-department / disabled-card path.
-const seedDepartments = [
-  { id:"D-ortho", name_ar:"تأهيل عظام",   name_en:"Orthopedic Rehab", description:"مفاصل، عمود فقري، بعد العمليات", icon:"Stethoscope", color:"#7BBDE8", sort_order:1, active:true },
-  { id:"D-sport", name_ar:"إصابات رياضية", name_en:"Sports Injury",     description:"رباط صليبي، غضروف، عضلات خلفية", icon:"Activity",    color:"#3FA984", sort_order:2, active:true },
-  { id:"D-neuro", name_ar:"أعصاب",         name_en:"Neuro Rehab",       description:"جلطة، باركنسون، تصلب",           icon:"Heart",       color:"#7E6BD3", sort_order:3, active:true },
-  { id:"D-other", name_ar:"أخرى",           name_en:"Other",             description:"حالات وتخصصات أخرى",             icon:"Layers",      color:"#D49044", sort_order:4, active:true },
-  { id:"D-chron", name_ar:"آلام مزمنة",     name_en:"Chronic Pain",      description:"أسفل الظهر، الرقبة، فيبروميالجيا", icon:"Sparkle",     color:"#3A7FB5", sort_order:5, active:true },
-  { id:"D-women", name_ar:"صحة المرأة",     name_en:"Women's Health",    description:"حمل، بعد الولادة، قاع الحوض",     icon:"Heart",       color:"#D8665A", sort_order:6, active:true },
-];
-
-const seedDoctors = [
-  { id:"DR-1", name:"د. ياسمين عادل", department_id:"D-ortho", specialization:"تأهيل عظام",         experience_years:12, photo:"", schedule:"الأحد–الخميس 09:00–17:00", status:"available", color:"#7BBDE8", active:true },
-  { id:"DR-2", name:"د. مهند رشدي",   department_id:"D-ortho", specialization:"تأهيل بعد العمليات",  experience_years:8,  photo:"", schedule:"السبت–الأربعاء 10:00–18:00", status:"busy",      color:"#7E6BD3", active:true },
-  { id:"DR-3", name:"د. طارق نور",   department_id:"D-sport", specialization:"إصابات رياضية",       experience_years:15, photo:"", schedule:"الأحد–الخميس 08:00–16:00", status:"available", color:"#3FA984", active:true },
-  { id:"DR-4", name:"د. سلمى فؤاد",   department_id:"D-neuro", specialization:"إعادة تأهيل عصبي",     experience_years:10, photo:"", schedule:"الإثنين–الجمعة 11:00–19:00", status:"leave",     color:"#D49044", active:true },
-  { id:"DR-5", name:"د. حسام لطفي",   department_id:"D-chron", specialization:"إدارة الألم المزمن",   experience_years:9,  photo:"", schedule:"الأحد–الخميس 09:00–15:00", status:"available", color:"#3A7FB5", active:true },
-];
-
-const seedPackages = [
-  { id:"PKG-1", name:"جلسة واحدة",      sessions:1,  price:850,  active:true,  popular:false, color:"#BDD8E9", sold:48 },
-  { id:"PKG-2", name:"باقة البداية — 6 جلسات",sessions:6,  price:4650, active:true,  popular:false, color:"#7BBDE8", sold:33 },
-  { id:"PKG-3", name:"الباقة الأساسية — 10 جلسات",  sessions:10, price:7250, active:true,  popular:true,  color:"#3A7FB5", sold:62 },
-  { id:"PKG-4", name:"التعافي — 15 جلسة", sessions:15, price:10100,active:true,  popular:false, color:"#1E4A6E", sold:21 },
-  { id:"PKG-5", name:"بعد العمليات — 24 جلسة",  sessions:24, price:15400,active:true,  popular:false, color:"#7E6BD3", sold:14 },
-  { id:"PKG-6", name:"الكلاسيكية — 30 جلسة",   sessions:30, price:18500,active:false, popular:false, color:"#8898A8", sold:0  },
-];
-
-const seedPayments = [
-  { id:"INV-2026-0421", patient:"هناء مصطفى",     amount:7250, paid:7250, method:"فيزا",         date:"2026-05-22", status:"مدفوع" },
-  { id:"INV-2026-0422", patient:"عمر السيد",    amount:5800, paid:2900, method:"نقدي",         date:"2026-05-23", status:"جزئي" },
-  { id:"INV-2026-0423", patient:"آية كريم",       amount:7250, paid:7250, method:"إنستاباي",     date:"2026-05-20", status:"مدفوع" },
-  { id:"INV-2026-0424", patient:"وليد حسن",     amount:10100,paid:0,    method:"—",            date:"2026-05-18", status:"معلّق" },
-  { id:"INV-2026-0425", patient:"نور عبدالرحمن", amount:15400,paid:15400,method:"تحويل بنكي",date:"2026-05-15", status:"مدفوع" },
-  { id:"INV-2026-0426", patient:"تامر إبراهيم",    amount:4650, paid:1200, method:"فودافون كاش",date:"2026-04-26", status:"متأخر" },
-  { id:"INV-2026-0427", patient:"سلمى رضا",       amount:5800, paid:5800, method:"فيزا",         date:"2026-05-19", status:"مدفوع" },
-  { id:"INV-2026-0428", patient:"خالد منصور",   amount:7250, paid:3625, method:"فيزا",         date:"2026-05-21", status:"جزئي" },
-];
-
-const seedCampaigns = [
-  { id:"C-401", name:"استعادة المرضى المنقطعين",   audience:1248, sent:1180, read:842, replied:113, status:"جارٍ",   template:"إعادة تفاعل v3", schedule:"يوميًا 11:00", best:true  },
-  { id:"C-402", name:"تأهيل بعد العمليات check-in",    audience:312,  sent:312,  read:289, replied:74,  status:"مكتمل", template:"بعد العمليات v2",   schedule:"مرة واحدة",    best:false },
-  { id:"C-403", name:"متابعة الرباط الصليبي — الربع الثاني",          audience:88,   sent:88,   read:71,  replied:22,  status:"مكتمل", template:"متابعة الرباط",     schedule:"مرة واحدة",    best:false },
-  { id:"C-404", name:"فحص السكري الدوري",     audience:540,  sent:0,    read:0,   replied:0,   status:"مجدول", template:"فحص",    schedule:"2 يونيو، 09:00",best:false },
-  { id:"C-405", name:"تهاني عيد الميلاد",           audience:31,   sent:31,   read:30,  replied:18,  status:"جارٍ",   template:"عيد ميلاد v1",       schedule:"يوميًا 09:00", best:false },
-];
-
-// Sessions carry BOTH UI-friendly fields (session, pain, notes, mood, goals)
-// AND schema-shaped fields (session_id, patient_id, session_number, pain_score,
-// session_notes) so a round-trip through KineticData.upsert(...) doesn't drop data.
-const seedSessions = [
-  { id:"S-10241-07", session_id:"S-10241-07", patient_id:"P-10241", date:"2026-05-22", session:7, session_number:7, pain:3, pain_score:3, mood:"أفضل",  notes:"الألم in flexion reduced. Increased حمل on TheraBand red. المريض reports sleeping through the night.", session_notes:"الألم in flexion reduced. Increased حمل on TheraBand red.", goals:["ROM +5°","لا ألم at rest"], done:["ROM +5°"] },
-  { id:"S-10241-06", session_id:"S-10241-06", patient_id:"P-10241", date:"2026-05-18", session:6, session_number:6, pain:4, pain_score:4, mood:"كما هو",    notes:"تيبّس مستمر صباحًا. أُضيفت تمارين تثبيت لوح الكتف.", session_notes:"تيبّس مستمر صباحًا. أُضيفت تمارين تثبيت لوح الكتف.", goals:["ROM +5°"], done:[] },
-  { id:"S-10241-05", session_id:"S-10241-05", patient_id:"P-10241", date:"2026-05-15", session:5, session_number:5, pain:4, pain_score:4, mood:"أفضل",  notes:"أول يوم بدون مسكنات. تحمّل الجلسة كاملة دون احتداد.", session_notes:"أول يوم بدون مسكنات.", goals:["إيقاف المسكنات"], done:["إيقاف المسكنات"] },
-  { id:"S-10241-04", session_id:"S-10241-04", patient_id:"P-10241", date:"2026-05-11", session:4, session_number:4, pain:5, pain_score:5, mood:"أسوأ",   notes:"أبلغ عن احتداد بعد البستنة في العطلة. خُفّض البرنامج بنسبة 30%.", session_notes:"احتداد بعد نشاط. خُفّض البرنامج 30%.", goals:[], done:[] },
-  { id:"S-10241-03", session_id:"S-10241-03", patient_id:"P-10241", date:"2026-05-08", session:3, session_number:3, pain:5, pain_score:5, mood:"كما هو",    notes:"تحريك يدوي درجة 3. الالتزام بالتمارين المنزلية: 4/6 أيام.", session_notes:"تحريك يدوي درجة 3.", goals:[], done:[] },
-  { id:"S-10241-02", session_id:"S-10241-02", patient_id:"P-10241", date:"2026-05-04", session:2, session_number:2, pain:6, pain_score:6, mood:"أفضل",  notes:"تسخين + تحفيز كهربي prior to manual work. Less guarding on palpation.", session_notes:"تسخين + تحفيز كهربي.", goals:[], done:[] },
-  { id:"S-10241-01", session_id:"S-10241-01", patient_id:"P-10241", date:"2026-04-30", session:1, session_number:1, pain:7, pain_score:7, mood:"—",       notes:"تقييم أولي. Baseline measurements taken. الخطة: 12 Sessions over 6 weeks.", session_notes:"تقييم أولي. 12 جلسة على 6 أسابيع.", goals:["تحديد خط الأساس"], done:["تحديد خط الأساس"] },
-];
-
-// Demo mode (?demo=1) starts from the seed fixtures above so the UI can be
-// explored without a backend. Production starts EMPTY and hydrates from
-// Supabase (hydrateDomainTables) — no mock data ever reaches a real deploy.
-window.DATA = window.IS_DEMO ? {
-  patients: seedPatients,
-  appts: seedAppointments,
-  therapists: seedTherapists,
-  departments: seedDepartments,
-  doctors: seedDoctors,
-  packages: seedPackages,
-  payments: seedPayments,
-  campaigns: seedCampaigns,
-  sessions: seedSessions,
-} : {
+window.DATA = {
   patients: [], appts: [], therapists: [], departments: [], doctors: [],
+  receptionists: [],
   packages: [], payments: [], campaigns: [], sessions: [],
+  paymentHistory: [], subscriptions: [], treatmentMethods: [],
 };
 
 // ── Reactive data hook ─────────────────────────────────────────
