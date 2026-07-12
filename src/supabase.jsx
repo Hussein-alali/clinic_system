@@ -7,7 +7,7 @@
 // so the app remains fully functional offline / in demo mode.
 
 // ── Config ────────────────────────────────────────────────────
-const SUPABASE_URL = window.SUPABASE_URL || "https://yjtyvtyqyiqnqdctxpyz.supabase.co";
+const SUPABASE_URL = window.SUPABASE_URL || "https://iwqnhajzjudmhseurwmh.supabase.co";
 const SUPABASE_ANON_KEY = window.SUPABASE_ANON_KEY || "sb_publishable_fOuGESwDv4iQSRz0mPs2Bw_Of7zk58R";
 const LS_CLINIC = "kinetic.clinic";
 const LS_SECTIONS = "kinetic.sections";
@@ -17,17 +17,14 @@ const LS_ACTIVE_BRANCH = "kinetic.active_branch";
 // ── Supabase client (nullable) ────────────────────────────────
 // Demo mode (?demo=1) forces the localStorage fallback so the app stays
 // interactive without a live Supabase backend (schema/RLS may not match).
-function __isDemo() {
-  try { return new URLSearchParams(window.location.search).get("demo") === "1"; }
-  catch { return false; }
-}
 let sb = null;
-if (!__isDemo() && SUPABASE_URL && SUPABASE_ANON_KEY && window.supabase && window.supabase.createClient) {
+if (SUPABASE_URL && SUPABASE_ANON_KEY && window.supabase && window.supabase.createClient) {
   sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 }
 window.SB = sb;
-// Demo flag shared with later scripts: seeds/mock fixtures only load when true.
-window.IS_DEMO = __isDemo();
+// Demo mode removed — all data flows through PostgreSQL. IS_DEMO is
+// kept as a stable `false` so any lingering call sites become no-ops.
+window.IS_DEMO = false;
 
 // ── Default clinic branding ───────────────────────────────────
 const DEFAULT_CLINIC = {
@@ -183,12 +180,9 @@ async function removeSection(id) {
   window.dispatchEvent(new CustomEvent("kinetic:sections-updated", { detail: next }));
 }
 
-// ── Branches (multi-branch support, LS-backed) ────────────────
-// Neutral placeholder until the clinic defines its branches in Settings
-// (demo keeps a realistic sample branch).
-const DEFAULT_BRANCHES = __isDemo() ? [
-  { id: "br_heliopolis", name: "فرع مصر الجديدة", therapists: 4, rooms: 5, address: "14 ش صلاح سالم، مصر الجديدة، القاهرة", phone: "+20 2 2638 1100" },
-] : [
+// ── Branches (multi-branch support) ───────────────────────────
+// Neutral placeholder until the clinic defines its branches in Settings.
+const DEFAULT_BRANCHES = [
   { id: "br_main", name: "الفرع الرئيسي", therapists: 0, rooms: 0, address: "", phone: "" },
 ];
 
@@ -502,7 +496,15 @@ async function updateStaffMember(staffId, patch) {
 
 function onAuthChange(cb) {
   if (!sb) return () => {};
-  const sub = sb.auth.onAuthStateChange((_evt, session) => cb(session));
+  const sub = sb.auth.onAuthStateChange((_evt, session) => {
+    try { window.__authSession = session || null; } catch {}
+    cb(session);
+  });
+  // Prime the cache with the current session so window.__authSession is
+  // available before the first onAuthStateChange fires.
+  sb.auth.getSession().then(({ data }) => {
+    try { window.__authSession = (data && data.session) || null; } catch {}
+  }).catch(() => {});
   return () => sub.data.subscription.unsubscribe();
 }
 
@@ -1494,25 +1496,17 @@ function __receiptValid(file) {
   return null;
 }
 
-// Upload one receipt file → Storage. Returns { storage_path, file_url }
-// or falls back to a data-URL row when Storage is unavailable.
+// Upload one receipt file → Supabase Storage. Returns
+// { storage_path, file_url } on success, or throws with a clear message.
 async function __uploadReceiptFile(patientId, receiptId, file) {
+  if (!sb) throw new Error("لم يتم تكوين قاعدة البيانات");
   const safe = sanitizeFileName(file.name);
   const path = `receipts/${patientId}/${receiptId}-${safe}`;
-  if (sb) {
-    try {
-      const { error: upErr } = await sb.storage.from(PATIENT_FILES_BUCKET)
-        .upload(path, file, { cacheControl: "3600", upsert: false });
-      if (!upErr) {
-        const { data: pub } = sb.storage.from(PATIENT_FILES_BUCKET).getPublicUrl(path);
-        return { storage_path: path, file_url: (pub && pub.publicUrl) || "" };
-      }
-      console.warn("upload receipt storage failed", upErr.message || upErr);
-    } catch (e) { console.warn("upload receipt storage failed", e); }
-  }
-  // Fallback: inline as data URL so demo/offline still keeps the receipt.
-  const dataUrl = await readInlineFile(file);
-  return { storage_path: "", file_url: dataUrl || "" };
+  const { error: upErr } = await sb.storage.from(PATIENT_FILES_BUCKET)
+    .upload(path, file, { cacheControl: "3600", upsert: false, contentType: file.type || undefined });
+  if (upErr) throw new Error(upErr.message || "تعذّر رفع الإيصال");
+  const { data: pub } = sb.storage.from(PATIENT_FILES_BUCKET).getPublicUrl(path);
+  return { storage_path: path, file_url: (pub && pub.publicUrl) || "" };
 }
 
 async function __removeReceiptFile(storage_path) {
@@ -1744,15 +1738,30 @@ const PaymentReceipts = {
 window.PaymentReceipts = PaymentReceipts;
 
 // ══════════════════════════════════════════════════════════════
-// Patient files (normalized) — `patient_files` table + Supabase
-// Storage bucket "patient-files". The patients table stays PII-only.
-// Demo / offline mode keeps a metadata index (and small files as data
-// URLs) in localStorage so the profile can still list, view, download.
-// `file_type` is free text so new document kinds need no schema change.
+// Patient files — `patient_files` table (metadata) + Supabase
+// Storage bucket "patient-files" (binary). PostgreSQL never stores
+// file bytes; only path/URL and audit fields.
+//
+// Upload contract:  validate → put object → insert metadata row.
+//   If the DB insert fails we delete the just-uploaded object to
+//   keep both systems in sync (compensating rollback).
+// Delete contract:  delete DB row → delete object.
+//   If the object delete fails we log it; the DB row is already
+//   gone so the UI is consistent.
 // ══════════════════════════════════════════════════════════════
-const LS_PATIENT_FILES = "kinetic.patient_files";
-const PATIENT_FILES_BUCKET = "patient-files";
-const MAX_INLINE_BYTES = 3 * 1024 * 1024; // demo: inline files up to 3MB as data URLs
+const PATIENT_FILES_BUCKET   = "patient-files";
+const MAX_FILE_BYTES         = 25 * 1024 * 1024; // 25 MB per file
+const ALLOWED_MIME_PREFIXES  = ["image/"];
+const ALLOWED_MIME_EXACT     = new Set([
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/dicom",
+  "text/plain",
+]);
+const ALLOWED_EXT_RE = /\.(jpe?g|png|gif|webp|bmp|pdf|docx?|xlsx?|dcm|txt)$/i;
 
 function nextFileId() {
   return "pf_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -1760,97 +1769,136 @@ function nextFileId() {
 function sanitizeFileName(name) {
   return String(name || "file").replace(/[^\w.\-؀-ۿ]+/g, "_").slice(0, 120);
 }
-function readInlineFile(file) {
-  return new Promise((resolve) => {
-    try {
-      if (!file || file.size > MAX_INLINE_BYTES) return resolve("");
-      const r = new FileReader();
-      r.onload = () => resolve(r.result || "");
-      r.onerror = () => resolve("");
-      r.readAsDataURL(file);
-    } catch { resolve(""); }
-  });
+function validatePatientFile(file) {
+  if (!file || typeof file.size !== "number") return "ملف غير صالح";
+  if (file.size <= 0) return "الملف فارغ";
+  if (file.size > MAX_FILE_BYTES) return `حجم الملف يتجاوز ${Math.round(MAX_FILE_BYTES / (1024*1024))} ميغابايت`;
+  const mime = String(file.type || "").toLowerCase();
+  const okMime = mime && (ALLOWED_MIME_EXACT.has(mime) || ALLOWED_MIME_PREFIXES.some(p => mime.startsWith(p)));
+  const okExt  = ALLOWED_EXT_RE.test(file.name || "");
+  if (!okMime && !okExt) return "نوع الملف غير مسموح";
+  return null;
+}
+function currentUploader() {
+  try {
+    const s = (typeof window !== "undefined" && window.__authSession) || null;
+    const u = s && s.user;
+    if (!u) return { id: null, name: "" };
+    const md = u.user_metadata || {};
+    return { id: u.id || null, name: md.name || md.full_name || u.email || "" };
+  } catch { return { id: null, name: "" }; }
 }
 
-// Upload one file for a patient. Saves to Storage + patient_files when
-// Supabase is configured; always mirrors metadata to localStorage so the
-// UI has an immediate, offline-safe source of truth. Returns the row.
+// Upload one file for a patient. Requires Supabase. Persists metadata
+// only; the binary lives in Storage. Rolls the Storage upload back if
+// the DB insert fails. Returns { ok, row?, error? }.
 async function uploadPatientFile(patientId, file, onProgress) {
+  if (!sb) return { ok: false, error: "لم يتم تكوين قاعدة البيانات" };
+  if (!patientId) return { ok: false, error: "معرّف المريض غير محدد" };
+  const bad = validatePatientFile(file);
+  if (bad) { try { window.showToast && window.showToast(bad, "error"); } catch {} return { ok: false, error: bad }; }
+
   const fileId = nextFileId();
-  const meta = {
-    file_id: fileId,
-    patient_id: patientId,
-    file_name: file.name,
-    file_type: file.type || "",
-    file_url: "",
-    uploaded_at: new Date().toISOString(),
-  };
+  const path   = `${patientId}/${fileId}-${sanitizeFileName(file.name)}`;
+  const uploader = currentUploader();
   try { onProgress && onProgress(5); } catch {}
-  if (sb) {
-    const path = `${patientId}/${fileId}-${sanitizeFileName(file.name)}`;
-    try {
-      const { error: upErr } = await sb.storage.from(PATIENT_FILES_BUCKET)
-        .upload(path, file, { cacheControl: "3600", upsert: false });
-      if (upErr) {
-        console.warn("uploadPatientFile storage failed", upErr.message || upErr);
-      } else {
-        const { data: pub } = sb.storage.from(PATIENT_FILES_BUCKET).getPublicUrl(path);
-        meta.file_url = (pub && pub.publicUrl) || "";
-        meta.storage_path = path;
-        const { error: insErr } = await sb.from("patient_files").insert({
-          file_id: fileId, patient_id: patientId,
-          file_name: file.name, file_type: meta.file_type, file_url: meta.file_url,
-        });
-        if (insErr) console.warn("uploadPatientFile insert failed", insErr.message || insErr);
-      }
-    } catch (e) { console.warn("uploadPatientFile failed", e); }
+
+  const { error: upErr } = await sb.storage.from(PATIENT_FILES_BUCKET)
+    .upload(path, file, { cacheControl: "3600", upsert: false, contentType: file.type || undefined });
+  if (upErr) {
+    const msg = upErr.message || "تعذّر رفع الملف إلى التخزين";
+    console.warn("uploadPatientFile storage failed", msg);
+    return { ok: false, error: msg };
   }
-  // If storage produced no URL (demo/offline/failure), inline small files so
-  // the profile can still preview/download them.
-  if (!meta.file_url) meta.file_url = await readInlineFile(file);
+
+  const { data: pub } = sb.storage.from(PATIENT_FILES_BUCKET).getPublicUrl(path);
+  const publicUrl = (pub && pub.publicUrl) || "";
+  const row = {
+    file_id:          fileId,
+    patient_id:       patientId,
+    file_name:        file.name,
+    original_name:    file.name,
+    storage_path:     path,
+    file_url:         publicUrl,
+    file_type:        file.type || "",
+    mime_type:        file.type || "",
+    file_size:        file.size,
+    uploaded_by:      uploader.id,
+    uploaded_by_name: uploader.name,
+    uploaded_at:      new Date().toISOString(),
+  };
+
+  const { data: inserted, error: insErr } = await sb.from("patient_files").insert(row).select().single();
+  if (insErr) {
+    // Compensating rollback — delete the storage object we just uploaded.
+    try { await sb.storage.from(PATIENT_FILES_BUCKET).remove([path]); }
+    catch (e) { console.warn("uploadPatientFile rollback failed", e); }
+    const msg = insErr.message || "تعذّر حفظ بيانات الملف";
+    console.warn("uploadPatientFile insert failed", msg);
+    return { ok: false, error: msg };
+  }
+
   try { onProgress && onProgress(100); } catch {}
-  const idx = readLS(LS_PATIENT_FILES, []);
-  idx.push(meta);
-  writeLS(LS_PATIENT_FILES, idx);
+  console.info("patient file uploaded", { file_id: fileId, patient_id: patientId, size: file.size });
   window.dispatchEvent(new CustomEvent("kinetic:patient-files-updated", { detail: { patientId } }));
-  return meta;
+  return { ok: true, row: inserted || row };
 }
 
-// List a patient's files (server when available, else local mirror).
+// List a patient's files from PostgreSQL. Newest first.
 async function listPatientFiles(patientId) {
   if (!patientId) return [];
-  if (sb) {
-    try {
-      const { data, error } = await sb.from("patient_files")
-        .select("*").eq("patient_id", patientId).order("uploaded_at", { ascending: false });
-      if (!error && Array.isArray(data)) {
-        // Merge any demo/offline rows that never reached the server.
-        const local = readLS(LS_PATIENT_FILES, []).filter(f => f.patient_id === patientId);
-        const seen = new Set(data.map(d => d.file_id));
-        return [...data, ...local.filter(l => !seen.has(l.file_id))];
-      }
-      if (error) console.warn("listPatientFiles failed", error.message || error);
-    } catch (e) { console.warn("listPatientFiles failed", e); }
+  if (!sb) return [];
+  const { data, error } = await sb.from("patient_files")
+    .select("*").eq("patient_id", patientId)
+    .order("uploaded_at", { ascending: false });
+  if (error) {
+    console.warn("listPatientFiles failed", error.message || error);
+    return [];
   }
-  return readLS(LS_PATIENT_FILES, [])
-    .filter(f => f.patient_id === patientId)
-    .sort((a, b) => (b.uploaded_at || "").localeCompare(a.uploaded_at || ""));
+  return Array.isArray(data) ? data : [];
 }
 
+// Delete a file: DB row first, then Storage object. If the object delete
+// fails we surface a warning but keep the DB delete (UI stays consistent).
 async function removePatientFile(fileId) {
-  const idx = readLS(LS_PATIENT_FILES, []);
-  const row = idx.find(f => f.file_id === fileId);
-  writeLS(LS_PATIENT_FILES, idx.filter(f => f.file_id !== fileId));
-  if (sb) {
-    try {
-      if (row && row.storage_path) {
-        await sb.storage.from(PATIENT_FILES_BUCKET).remove([row.storage_path]);
-      }
-      const { error } = await sb.from("patient_files").delete().eq("file_id", fileId);
-      if (error) console.warn("removePatientFile failed", error.message || error);
-    } catch (e) { console.warn("removePatientFile failed", e); }
+  if (!sb) return { ok: false, error: "لم يتم تكوين قاعدة البيانات" };
+  if (!fileId) return { ok: false, error: "معرّف الملف غير محدد" };
+
+  const { data: existing, error: readErr } = await sb.from("patient_files")
+    .select("storage_path,file_url,patient_id").eq("file_id", fileId).maybeSingle();
+  if (readErr) {
+    console.warn("removePatientFile lookup failed", readErr.message || readErr);
+    return { ok: false, error: readErr.message || "تعذّر قراءة بيانات الملف" };
   }
-  window.dispatchEvent(new CustomEvent("kinetic:patient-files-updated", { detail: {} }));
+
+  const { error: delErr } = await sb.from("patient_files").delete().eq("file_id", fileId);
+  if (delErr) {
+    console.warn("removePatientFile db delete failed", delErr.message || delErr);
+    return { ok: false, error: delErr.message || "تعذّر حذف السجل" };
+  }
+
+  const path = existing && existing.storage_path;
+  if (path) {
+    const { error: sErr } = await sb.storage.from(PATIENT_FILES_BUCKET).remove([path]);
+    if (sErr) console.warn("removePatientFile storage delete failed", sErr.message || sErr);
+  }
+
+  console.info("patient file deleted", { file_id: fileId });
+  window.dispatchEvent(new CustomEvent("kinetic:patient-files-updated", { detail: { patientId: existing && existing.patient_id } }));
+  return { ok: true };
+}
+
+// Signed URL for private buckets (falls back to whatever file_url already
+// holds, which is a public URL when the bucket is public).
+async function getPatientFileUrl(row, expiresSeconds = 3600) {
+  if (!row) return "";
+  if (!sb || !row.storage_path) return row.file_url || "";
+  try {
+    const { data, error } = await sb.storage.from(PATIENT_FILES_BUCKET)
+      .createSignedUrl(row.storage_path, expiresSeconds);
+    if (error) { console.warn("createSignedUrl failed", error.message || error); return row.file_url || ""; }
+    return (data && data.signedUrl) || row.file_url || "";
+  } catch (e) { console.warn("createSignedUrl failed", e); return row.file_url || ""; }
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -2308,5 +2356,5 @@ Object.assign(window, {
   adminCreateUser, sendPasswordReset, updateOwnPassword, updateOwnProfile, updateStaffMember,
   startDictation, printHTML, escHtml,
   KineticData, QuickPay, TxMethods, InvoicesAPI, PaymentReceipts, Templates, TplCategories,
-  uploadPatientFile, listPatientFiles, removePatientFile,
+  uploadPatientFile, listPatientFiles, removePatientFile, getPatientFileUrl,
 });

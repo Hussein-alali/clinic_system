@@ -1575,37 +1575,55 @@ function PatientFiles({ p }) {
     e.target.value = "";
     if (!list.length || !pid) return;
     setUploading(true);
-    let ok = 0;
+    let ok = 0; let firstErr = null;
     try {
       for (const f of list) {
-        if (window.uploadPatientFile) { await window.uploadPatientFile(pid, f); ok++; }
+        if (!window.uploadPatientFile) break;
+        const res = await window.uploadPatientFile(pid, f);
+        if (res && res.ok) ok++;
+        else if (!firstErr && res && res.error) firstErr = res.error;
       }
-      if (window.showToast) window.showToast(`تم رفع ${ok} ملف`, "success");
-    } catch (err) {
-      console.warn("upload failed", err);
-      if (window.showToast) window.showToast("تعذّر رفع الملف", "error");
+      if (window.showToast) {
+        if (ok) window.showToast(`تم رفع ${ok} ملف`, "success");
+        if (firstErr) window.showToast(firstErr, "error");
+      }
     } finally { setUploading(false); reload(); }
   }
 
-  function openFile(f) {
-    if (f.file_url) { window.open(f.file_url, "_blank"); return; }
+  async function resolveUrl(f) {
+    if (window.getPatientFileUrl) return await window.getPatientFileUrl(f);
+    return f.file_url || "";
+  }
+  async function openFile(f) {
+    const url = await resolveUrl(f);
+    if (url) { window.open(url, "_blank"); return; }
     if (window.showToast) window.showToast("لا يوجد ملف متاح للعرض", "error");
   }
-  function downloadFile(f) {
-    if (!f.file_url) { if (window.showToast) window.showToast("لا يوجد ملف للتنزيل", "error"); return; }
+  async function downloadFile(f) {
+    const url = await resolveUrl(f);
+    if (!url) { if (window.showToast) window.showToast("لا يوجد ملف للتنزيل", "error"); return; }
     const a = document.createElement("a");
-    a.href = f.file_url; a.download = f.file_name || "file"; a.target = "_blank";
+    a.href = url; a.download = f.original_name || f.file_name || "file"; a.target = "_blank";
     a.click();
     if (window.showToast) window.showToast(`تم فتح ${f.file_name}`, "success");
   }
-  const isImage = (f) => (f.file_type || "").startsWith("image/") || /\.(jpe?g|png|webp|gif|bmp)$/i.test(f.file_name || "");
+  const mimeOf = (f) => (f.mime_type || f.file_type || "").toLowerCase();
+  const isImage = (f) => mimeOf(f).startsWith("image/") || /\.(jpe?g|png|webp|gif|bmp)$/i.test(f.file_name || "");
   const kindLabel = (f) => {
     const n = (f.file_name || "").toLowerCase();
-    if ((f.file_type || "").startsWith("image/") || /\.(jpe?g|png|webp|gif|bmp)$/i.test(n)) return "صورة";
-    if (n.endsWith(".pdf") || f.file_type === "application/pdf") return "PDF";
-    if (n.endsWith(".dcm")) return "DICOM";
+    const m = mimeOf(f);
+    if (m.startsWith("image/") || /\.(jpe?g|png|webp|gif|bmp)$/i.test(n)) return "صورة";
+    if (n.endsWith(".pdf") || m === "application/pdf") return "PDF";
+    if (n.endsWith(".dcm") || m === "application/dicom") return "DICOM";
     return "مستند";
   };
+  function fmtSize(n) {
+    const b = Number(n) || 0;
+    if (!b) return "";
+    if (b < 1024) return `${b} B`;
+    if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
+    return `${(b / (1024 * 1024)).toFixed(1)} MB`;
+  }
 
   return (
     <div>
@@ -1664,8 +1682,17 @@ function PatientFiles({ p }) {
                   <I.FileText size={15} />
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{f.file_name}</div>
-                  <div className="muted mono" style={{ fontSize: 11 }}>{kindLabel(f)} · {(f.uploaded_at || "").slice(0, 10)}</div>
+                  <div style={{ fontSize: 12.5, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{f.original_name || f.file_name}</div>
+                  <div className="muted mono" style={{ fontSize: 11 }}>
+                    {kindLabel(f)}
+                    {f.file_size ? ` · ${fmtSize(f.file_size)}` : ""}
+                    {f.uploaded_at ? ` · ${(f.uploaded_at || "").slice(0, 10)}` : ""}
+                  </div>
+                  {f.uploaded_by_name ? (
+                    <div className="muted" style={{ fontSize: 10.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      رفعه: {f.uploaded_by_name}
+                    </div>
+                  ) : null}
                 </div>
                 <button className="btn btn-ghost btn-icon" title="تحميل / فتح" onClick={() => downloadFile(f)}><I.Download size={14} /></button>
                 <RowMenu size={13} items={[
@@ -1673,8 +1700,9 @@ function PatientFiles({ p }) {
                   { label: "تحميل", icon: <I.Download size={13} />, onClick: () => downloadFile(f) },
                   { label: "حذف", icon: <I.Trash size={13} />, danger: true, onClick: async () => {
                     if (!window.confirm(`حذف ${f.file_name}؟`)) return;
-                    try { if (window.removePatientFile) await window.removePatientFile(f.file_id); if (window.showToast) window.showToast("تم حذف الملف", "success"); }
-                    catch (e) { console.warn("remove file failed", e); if (window.showToast) window.showToast("تعذّر الحذف", "error"); }
+                    const res = window.removePatientFile ? await window.removePatientFile(f.file_id) : { ok: false, error: "غير متاح" };
+                    if (res && res.ok) { if (window.showToast) window.showToast("تم حذف الملف", "success"); }
+                    else { if (window.showToast) window.showToast((res && res.error) || "تعذّر الحذف", "error"); }
                   } },
                 ]} />
               </div>

@@ -5077,7 +5077,7 @@ function PublicBookingScreen({ onBack, onDone }) {
         <div style={{display:"flex",alignItems:"center",gap:10}}>
           <I.Logo size={30}/>
           <div style={{display:"flex",flexDirection:"column",lineHeight:1.1}}>
-            <span style={{fontWeight:600,fontSize:15,letterSpacing:"-.01em"}}>Kinetic</span>
+            <span style={{fontWeight:600,fontSize:15,letterSpacing:"-.01em"}}>BeActive</span>
             <span style={{fontSize:10,color:"var(--ink-500)",letterSpacing:".06em",textTransform:"uppercase"}}>العلاج الطبيعي</span>
           </div>
         </div>
@@ -5369,7 +5369,7 @@ function PublicBookingScreen({ onBack, onDone }) {
                       </div>
                       <div>
                         <div className="muted" style={{fontSize:11}}>المكان</div>
-                        <div style={{fontWeight:500}}>Kinetic مصر الجديدة · غرفة 2</div>
+                        <div style={{fontWeight:500}}>BeActive مصر الجديدة · غرفة 2</div>
                       </div>
                       <div>
                         <div className="muted" style={{fontSize:11}}>التكلفة</div>

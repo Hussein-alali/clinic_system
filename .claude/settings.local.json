@@ -65,7 +65,8 @@
       "Bash(python scripts/search.py \"data table hover row zebra sticky header\" --domain ux -n 8)",
       "Bash(awk -F: '$1<=4770 && $1>=4550')",
       "Bash(awk -F: '$1<=5083 && $1>=4900')",
-      "Bash(sed 's/ \\(.*//')"
+      "Bash(sed 's/ \\(.*//')",
+      "Bash(python3 *)"
     ]
   }
 }

@@ -117,12 +117,16 @@ function HistoricalImportPage() {
       for (const item of files) {
         setFiles(prev => prev.map(x => x.id === item.id ? { ...x, status: "uploading" } : x));
         try {
-          if (window.uploadPatientFile) {
-            await window.uploadPatientFile(pid, item.file, (p) =>
-              setFiles(prev => prev.map(x => x.id === item.id ? { ...x, progress: p } : x)));
+          const res = window.uploadPatientFile
+            ? await window.uploadPatientFile(pid, item.file, (p) =>
+                setFiles(prev => prev.map(x => x.id === item.id ? { ...x, progress: p } : x)))
+            : { ok: false, error: "unavailable" };
+          if (res && res.ok) {
+            uploaded++;
+            setFiles(prev => prev.map(x => x.id === item.id ? { ...x, status: "done", progress: 100 } : x));
+          } else {
+            setFiles(prev => prev.map(x => x.id === item.id ? { ...x, status: "error", error: res && res.error } : x));
           }
-          uploaded++;
-          setFiles(prev => prev.map(x => x.id === item.id ? { ...x, status: "done", progress: 100 } : x));
         } catch (err) {
           console.warn("file upload failed", err);
           setFiles(prev => prev.map(x => x.id === item.id ? { ...x, status: "error" } : x));
