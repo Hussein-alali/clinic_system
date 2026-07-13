@@ -2969,14 +2969,14 @@ function SettingsPage({ go }) {
     ? [
         { id:"clinic",    l:"بيانات العيادة",       ic:<I.MapPin size={14}/> },
         { id:"branding",  l:"الهوية البصرية",       ic:<I.Image size={14}/> },
-        { id:"sections",  l:"أقسام مخصصة",          ic:<I.Layers size={14}/> },
+        // { id:"sections",  l:"أقسام مخصصة",          ic:<I.Layers size={14}/> },
         { id:"depts",     l:"الأقسام والفريق",       ic:<I.Stethoscope size={14}/> },
         { id:"users",     l:"المستخدمون والأدوار",    ic:<I.Users size={14}/> },
         { id:"templates", l:"قوالب خطط العلاج",      ic:<I.FileText size={14}/> },
-        { id:"billing",   l:"الفوترة",              ic:<I.CreditCard size={14}/> },
-        { id:"notifs",    l:"الإشعارات",             ic:<I.Bell size={14}/> },
-        { id:"integ",     l:"التكاملات",             ic:<I.Layers size={14}/> },
-        { id:"sec",       l:"الأمان",                ic:<I.Lock size={14}/> },
+        // { id:"billing",   l:"الفوترة",              ic:<I.CreditCard size={14}/> },
+        // { id:"notifs",    l:"الإشعارات",             ic:<I.Bell size={14}/> },
+        // { id:"integ",     l:"التكاملات",             ic:<I.Layers size={14}/> },
+        // { id:"sec",       l:"الأمان",                ic:<I.Lock size={14}/> },
       ]
     : [
         { id:"templates", l:"قوالب خطط العلاج", ic:<I.FileText size={14}/> },
