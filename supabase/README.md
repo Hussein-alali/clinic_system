@@ -16,10 +16,14 @@ supabase/
     │                                        # ledger, subscriptions, treatment
     │                                        # methods/templates, patient fields,
     │                                        # files, staff roles, treatments
-    └── 20260713000000_appointment_scheduling.sql
-                                             # recurring patient schedules,
-                                             # optional doctor / required
-                                             # therapist, calendar indexes
+    ├── 20260713000000_appointment_scheduling.sql
+    │                                        # recurring patient schedules,
+    │                                        # optional doctor / required
+    │                                        # therapist, calendar indexes
+    └── 20260713010000_staff_roster_columns.sql
+                                             # auth_uid/contact columns on
+                                             # doctors + therapists, and the
+                                             # receptionists table (PGRST204 fix)
 ```
 
 Every statement is **idempotent** (`create ... if not exists`,
