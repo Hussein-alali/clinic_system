@@ -10,7 +10,16 @@ supabase/
 ├── config.toml                              # CLI project config
 ├── seed.sql                                 # (admin bootstrap note)
 └── migrations/
-    └── 20260101000000_baseline_schema.sql   # full schema (idempotent)
+    ├── 20260101000000_baseline_schema.sql   # full schema (idempotent)
+    ├── 20260712000000_payments_templates_patients_treatments.sql
+    │                                        # catch-up: Quick Payment, payments
+    │                                        # ledger, subscriptions, treatment
+    │                                        # methods/templates, patient fields,
+    │                                        # files, staff roles, treatments
+    └── 20260713000000_appointment_scheduling.sql
+                                             # recurring patient schedules,
+                                             # optional doctor / required
+                                             # therapist, calendar indexes
 ```
 
 Every statement is **idempotent** (`create ... if not exists`,
