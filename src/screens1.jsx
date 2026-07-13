@@ -1068,6 +1068,7 @@ function normalizePatientForForm(p) {
 // ── PatientDetail ──────────────────────────────────────────────
 function PatientDetail({ p: pIn, onBack, go, onEdit }) {
   const [tab, setTab] = React.useState("نظرة عامة");
+  const [schedOpen, setSchedOpen] = React.useState(false);
   // Resolve the live record from DATA so edits (therapist, profile, …) reflect
   // across every section immediately; fall back to the passed snapshot.
   const pid = pIn.patient_id || pIn.id;
@@ -1119,6 +1120,7 @@ function PatientDetail({ p: pIn, onBack, go, onEdit }) {
             <div style={{display:"flex",gap:8,position:"relative",flexWrap:"wrap"}}>
               <button className="btn btn-secondary" onClick={()=>window.open(buildTelUrl(p.phone))}><I.Phone size={13}/> اتصال</button>
               <button className="btn btn-secondary" onClick={()=>window.open(buildWhatsAppUrl(p.phone, `مرحبًا+${p.name}`),"_blank")}><I.WhatsApp size={13}/> واتساب</button>
+              <button className="btn btn-secondary" onClick={()=>setSchedOpen(true)}><I.Calendar size={13}/> الجدول الثابت</button>
               <button className="btn btn-blue" onClick={()=>go("appointments")}><I.Plus size={13}/> حجز</button>
               <RowMenu size={15} items={[
                 { label:"طباعة الملف", icon:<I.Print size={13}/>, onClick:()=>window.print() },
@@ -1217,6 +1219,8 @@ function PatientDetail({ p: pIn, onBack, go, onEdit }) {
           </div>
         </div>
       </div>
+
+      {schedOpen && <RecurringScheduleModal patient={p} onClose={()=>setSchedOpen(false)}/>}
     </Page>
   );
 }
@@ -2041,11 +2045,6 @@ function activeDepartments() {
 function doctorsInDept(deptId) {
   return (DATA.doctors || []).filter(d => d.active !== false && d.department_id === deptId);
 }
-// Resolve a department's icon name to an icon element (falls back to Layers).
-function deptIcon(name, size = 18) {
-  const Ic = (window.I && window.I[name]) || window.I.Layers;
-  return <Ic size={size}/>;
-}
 // Digits-only phone comparison so "+20 100…" matches "0100…" etc.
 function normalizePhone(p) {
   return String(p || "").replace(/\D/g, "").replace(/^0+/, "");
@@ -2098,37 +2097,48 @@ function Appointments({ go }) {
 
 // ── Quick Booking (حجز سريع) ───────────────────────────────────
 // For phone/WhatsApp bookings where the receptionist has minimal info.
-// Only name, phone, department, doctor, date, time (+ optional notes).
+// Only name, phone, therapist, date, time (+ optional doctor and notes).
+// The therapist appointment is the default and required booking; a doctor
+// is attached only when the receptionist explicitly selects one.
 // Links to an existing patient by phone, or creates one flagged as
 // "ملف غير مكتمل" so it can be completed later without touching bookings.
 function QuickBookingModal({ onClose, onDone }) {
-  const depts = activeDepartments();
+  const therapists = ((window.scopeTherapists ? window.scopeTherapists(DATA.therapists || []) : (DATA.therapists || [])))
+    .filter(t => t.active !== false);
+  const doctors = (DATA.doctors || []).filter(d => d.active !== false);
   const [form, setForm] = React.useState({
-    name: "", phone: "", deptId: "", doctorId: "",
+    name: "", phone: "", therapistId: "", doctorId: "",
     date: new Date().toISOString().slice(0, 10), time: "", notes: "",
+    allowConsecutive: false,
   });
   const [busy, setBusy] = React.useState(false);
-  const set = (k, v) => setForm(f => {
-    const next = { ...f, [k]: v };
-    if (k === "deptId") next.doctorId = ""; // reset doctor when dept changes
-    return next;
-  });
-  const deptDoctors = form.deptId ? doctorsInDept(form.deptId) : [];
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
   async function save() {
     const name = form.name.trim();
     const phone = form.phone.trim();
     if (!name)  return window.showToast && window.showToast("أدخل اسم المريض", "error");
     if (!phone) return window.showToast && window.showToast("أدخل رقم الهاتف", "error");
-    if (!form.deptId)   return window.showToast && window.showToast("اختر القسم", "error");
-    if (!form.doctorId) return window.showToast && window.showToast("اختر الطبيب", "error");
+    if (!form.therapistId) return window.showToast && window.showToast("اختر الأخصائي", "error");
     if (!form.date)     return window.showToast && window.showToast("اختر التاريخ", "error");
     if (!form.time)     return window.showToast && window.showToast("اختر الوقت", "error");
+
+    // Default rule: at least one free day between the patient's sessions.
+    // The receptionist can override intentionally (consecutive-day plan).
+    const known = findPatientByPhone(phone);
+    if (known && !form.allowConsecutive) {
+      const clash = violatesFreeDayRule(known.patient_id || known.id, form.date);
+      if (clash) {
+        return window.showToast && window.showToast(
+          `للمريض موعد في ${apptDateIso(clash)} — القاعدة تتطلب يوم راحة بين الجلسات. فعّل «السماح بأيام متتالية» للتجاوز.`,
+          "error");
+      }
+    }
 
     setBusy(true);
     try {
       // 1. Resolve or create the patient (by phone).
-      let patient = findPatientByPhone(phone);
+      let patient = known;
       let createdNew = false;
       if (!patient) {
         const pid = "P-" + Date.now().toString().slice(-8);
@@ -2143,22 +2153,26 @@ function QuickBookingModal({ onClose, onDone }) {
       }
       const patientId = patient.patient_id || patient.id;
 
-      // 2. Create the appointment linked to that patient.
-      const doctor = (DATA.doctors || []).find(d => d.id === form.doctorId);
-      const dept = depts.find(d => d.id === form.deptId);
+      // 2. Create the appointment linked to that patient — therapist
+      // required, doctor attached only when explicitly selected.
+      const therapist = therapists.find(t => t.id === form.therapistId);
+      const doctor = form.doctorId ? doctors.find(d => d.id === form.doctorId) : null;
+      const dept = doctor ? (DATA.departments || []).find(d => d.id === doctor.department_id) : null;
       const bid = "A-" + Date.now().toString().slice(-8);
       await window.KineticData.upsert("appts", {
         booking_id: bid,
         patient_id: patientId,
         patient: patient.name || name,
-        doctor_id: form.doctorId,
-        department_id: form.deptId,
+        therapist_id: therapist ? (therapist.staff_id || therapist.id) : form.therapistId,
+        th: therapist ? therapist.name : "",
+        doctor_id: doctor ? doctor.id : null,
+        department_id: dept ? dept.id : null,
         dr: doctor ? doctor.name : "",
         dept: dept ? dept.name_ar : "",
         date: form.date,
         time: form.time,
         status: "مؤكد",
-        type: dept ? dept.name_ar : "",
+        type: doctor ? `جلسة + استشارة ${dept ? dept.name_ar : "طبيب"}` : "جلسة علاج طبيعي",
         notes: form.notes.trim(),
         dur: 30,
         created_at: new Date().toISOString(),
@@ -2178,6 +2192,21 @@ function QuickBookingModal({ onClose, onDone }) {
   }
 
   const existing = findPatientByPhone(form.phone);
+  const existingSchedule = existing ? scheduleForPatient(existing.patient_id || existing.id) : null;
+
+  // One-click reuse of the saved recurring schedule: jump the form to the
+  // next matching day at the preferred time.
+  function usePreferred() {
+    if (!existingSchedule) return;
+    const days = scheduleDays(existingSchedule);
+    const [nextIso] = nextScheduleDates(days, offsetIso(todayIso(), 1), 1);
+    setForm(f => ({
+      ...f,
+      therapistId: existingSchedule.therapist_id || f.therapistId,
+      date: nextIso || f.date,
+      time: existingSchedule.time || f.time,
+    }));
+  }
 
   return (
     <Modal title="حجز سريع" onClose={onClose} width={560}
@@ -2203,21 +2232,27 @@ function QuickBookingModal({ onClose, onDone }) {
           <I.Check size={12}/> رقم معروف — سيُربط الحجز بملف <strong>{existing.name}</strong>
         </div>
       )}
+      {existingSchedule && (
+        <div style={{display:"flex",alignItems:"center",gap:8,fontSize:12,margin:"2px 0 10px",padding:"8px 10px",background:"var(--blue-50)",border:"1px solid var(--blue-100)",borderRadius:8}}>
+          <I.Clock size={12} style={{color:"var(--blue-700)",flexShrink:0}}/>
+          <span style={{flex:1}}>جدول ثابت: {scheduleDaysLabel(existingSchedule)} · <span className="mono">{existingSchedule.time}</span></span>
+          <button className="btn btn-ghost" style={{fontSize:11.5,padding:"3px 8px"}} onClick={usePreferred}>استخدام الجدول</button>
+        </div>
+      )}
       <div style={{height:2}}/>
       <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
-        <Field label="القسم" required>
-          <select className="input" value={form.deptId} onChange={e=>set("deptId", e.target.value)}>
-            <option value="">اختر القسم…</option>
-            {depts.map(d=>{
-              const n = doctorsInDept(d.id).length;
-              return <option key={d.id} value={d.id} disabled={n===0}>{d.name_ar}{n===0?" (لا أطباء)":""}</option>;
-            })}
+        <Field label="الأخصائي" required>
+          <select className="input" value={form.therapistId} onChange={e=>set("therapistId", e.target.value)}>
+            <option value="">اختر الأخصائي…</option>
+            {therapists.map(t=>(
+              <option key={t.id} value={t.id}>{t.name}{t.spec?` — ${t.spec}`:""}</option>
+            ))}
           </select>
         </Field>
-        <Field label="الطبيب" required>
-          <select className="input" value={form.doctorId} onChange={e=>set("doctorId", e.target.value)} disabled={!form.deptId}>
-            <option value="">{form.deptId ? "اختر الطبيب…" : "اختر القسم أولاً"}</option>
-            {deptDoctors.map(d=>(
+        <Field label="الطبيب (اختياري)">
+          <select className="input" value={form.doctorId} onChange={e=>set("doctorId", e.target.value)}>
+            <option value="">بدون طبيب</option>
+            {doctors.map(d=>(
               <option key={d.id} value={d.id}>{d.name}{d.specialization?` — ${d.specialization}`:""}</option>
             ))}
           </select>
@@ -2234,6 +2269,10 @@ function QuickBookingModal({ onClose, onDone }) {
       <Field label="ملاحظات (اختياري)">
         <textarea className="input" rows={2} style={{padding:10,resize:"vertical"}} value={form.notes} onChange={e=>set("notes", e.target.value)} placeholder="سبب الزيارة، تفضيلات الموعد…"/>
       </Field>
+      <label style={{display:"flex",alignItems:"center",gap:8,fontSize:12.5,marginTop:8,cursor:"pointer"}}>
+        <input type="checkbox" checked={form.allowConsecutive} onChange={e=>set("allowConsecutive", e.target.checked)}/>
+        السماح بأيام متتالية (تجاوز قاعدة يوم الراحة — بقرار الأخصائي)
+      </label>
     </Modal>
   );
 }
@@ -2263,6 +2302,256 @@ function apptDateIso(a) {
   const s = String(raw).slice(0, 10);
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : todayIso();
 }
+// Cancelled bookings stay in the DB for history/reporting, but they must
+// never occupy calendar space. Covers both Arabic spellings plus the raw
+// DB value in case a row renders before normalization.
+const CANCELLED_APPT_STATUSES = new Set(["ملغي", "ملغى", "cancelled"]);
+function isCancelledAppt(a) {
+  return Boolean(a && CANCELLED_APPT_STATUSES.has(a.status));
+}
+
+// ── Recurring schedule (الجدول الثابت) helpers ─────────────────
+// A patient can carry one active recurring pattern (weekdays + fixed time
+// + therapist) in patient_schedules. Future bookings are suggested and
+// generated from it; editing it only affects appointments created later.
+const WEEKDAYS_AR = ["الأحد","الإثنين","الثلاثاء","الأربعاء","الخميس","الجمعة","السبت"];
+function scheduleForPatient(patientId) {
+  if (!patientId) return null;
+  return (DATA.schedules || []).find(s => s.patient_id === patientId && s.active !== false) || null;
+}
+// The days field is jsonb in the DB but may round-trip as a JSON string.
+function scheduleDays(s) {
+  if (!s) return [];
+  let d = s.days;
+  if (typeof d === "string") { try { d = JSON.parse(d); } catch { d = []; } }
+  return Array.isArray(d)
+    ? d.map(Number).filter(n => Number.isInteger(n) && n >= 0 && n <= 6).sort((a, b) => a - b)
+    : [];
+}
+function scheduleDaysLabel(s) {
+  return scheduleDays(s).map(d => WEEKDAYS_AR[d]).join("، ");
+}
+// Default rule: at least one free day between sessions, so the chosen
+// weekday set must not contain (cyclically) adjacent days — Saturday and
+// Sunday count as adjacent.
+function daysHaveConsecutive(days) {
+  const set = new Set(days);
+  return days.some(d => set.has((d + 1) % 7));
+}
+// The next `count` ISO dates matching the recurring weekdays, starting at
+// startIso (inclusive).
+function nextScheduleDates(days, startIso, count) {
+  const out = [];
+  if (!days.length || !count) return out;
+  const d = new Date(startIso + "T00:00:00");
+  for (let i = 0; out.length < count && i < 370; i++) {
+    if (days.includes(d.getDay())) out.push(isoDate(d));
+    d.setDate(d.getDate() + 1);
+  }
+  return out;
+}
+// Free-day rule against existing bookings: the patient must not already
+// hold an active (non-cancelled) appointment on the same or an adjacent
+// day. Returns the conflicting row, or null when the date is fine.
+function violatesFreeDayRule(patientId, dateIso, excludeId) {
+  if (!patientId || !dateIso) return null;
+  const target = new Date(dateIso + "T00:00:00").getTime();
+  return (DATA.appts || []).find(a => {
+    if ((a.patient_id || a.pid) !== patientId) return false;
+    if (excludeId && (a.booking_id || a.id) === excludeId) return false;
+    if (isCancelledAppt(a) || a.status === "متاح") return false;
+    const diff = Math.abs(new Date(apptDateIso(a) + "T00:00:00").getTime() - target);
+    return diff <= 864e5;
+  }) || null;
+}
+// Is the therapist already booked at date+time (any patient)?
+function therapistBusyAt(therapistName, therapistId, dateIso, time) {
+  return (DATA.appts || []).some(a =>
+    apptDateIso(a) === dateIso && a.time === time &&
+    !isCancelledAppt(a) && a.status !== "متاح" &&
+    ((therapistId && a.therapist_id === therapistId) || (therapistName && a.th === therapistName)));
+}
+// Create future bookings from the saved recurring pattern: same therapist,
+// same time, following the saved weekdays. Skips dates where the therapist
+// slot is taken or the patient already has an appointment that day, so the
+// generator is safe to re-run. Returns the created rows.
+async function generateFromSchedule(patient, schedule, { startIso, sessions } = {}) {
+  const days = scheduleDays(schedule);
+  const time = schedule.time || "14:00";
+  const count = sessions || Math.max(days.length, 1) * 4; // ≈ four weeks
+  const start = startIso || offsetIso(todayIso(), 1);
+  const therapistRow = (DATA.therapists || []).find(t =>
+    t.id === schedule.therapist_id || t.staff_id === schedule.therapist_id);
+  const thName = therapistRow ? therapistRow.name : "";
+  const patientId = patient.patient_id || patient.id;
+  const created = [];
+  const stamp = Date.now().toString().slice(-8);
+  for (const dateIso of nextScheduleDates(days, start, count)) {
+    if (therapistBusyAt(thName, schedule.therapist_id, dateIso, time)) continue;
+    const clash = (DATA.appts || []).some(a =>
+      (a.patient_id || a.pid) === patientId && !isCancelledAppt(a) &&
+      a.status !== "متاح" && apptDateIso(a) === dateIso);
+    if (clash) continue;
+    const row = await window.KineticData.upsert("appts", {
+      booking_id: `A-${stamp}-${created.length + 1}`,
+      patient_id: patientId,
+      patient: patient.name || "",
+      therapist_id: schedule.therapist_id || null,
+      th: thName,
+      doctor_id: null, dr: "",
+      date: dateIso, time,
+      status: "مؤكد",
+      type: "جلسة علاج طبيعي",
+      notes: "موعد مُنشأ من الجدول الثابت",
+      dur: 45,
+      created_at: new Date().toISOString(),
+    });
+    created.push(row);
+  }
+  return created;
+}
+
+// ── Recurring schedule editor ──────────────────────────────────
+// The therapist (or receptionist) fixes the patient's weekly pattern here:
+// preferred time, treatment weekdays, and the consecutive-day override.
+// Saving only touches patient_schedules — past and already-created
+// appointments stay untouched; optional generation creates future rows.
+function RecurringScheduleModal({ patient, onClose }) {
+  window.useDataVersion && window.useDataVersion();
+  const pid = patient.patient_id || patient.id;
+  const existing = scheduleForPatient(pid);
+  const therapists = ((window.scopeTherapists ? window.scopeTherapists(DATA.therapists || []) : (DATA.therapists || [])))
+    .filter(t => t.active !== false);
+  const [days, setDays] = React.useState(() => scheduleDays(existing));
+  const [time, setTime] = React.useState((existing && existing.time) || "14:00");
+  const [therapistId, setTherapistId] = React.useState(
+    (existing && existing.therapist_id) || patient.therapist_id || "");
+  const [allowConsecutive, setAllowConsecutive] = React.useState(Boolean(existing && existing.allow_consecutive));
+  const [startIso, setStartIso] = React.useState(offsetIso(todayIso(), 1));
+  const [sessions, setSessions] = React.useState(12);
+  const [busy, setBusy] = React.useState(false);
+
+  const toggleDay = (d) => setDays(prev =>
+    prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d].sort((a, b) => a - b));
+  const consecutive = daysHaveConsecutive(days);
+
+  async function save(generate) {
+    if (!therapistId)  return window.showToast && window.showToast("اختر الأخصائي", "error");
+    if (!days.length)  return window.showToast && window.showToast("اختر يومًا واحدًا على الأقل", "error");
+    if (!time)         return window.showToast && window.showToast("اختر الوقت الثابت", "error");
+    if (consecutive && !allowConsecutive)
+      return window.showToast && window.showToast("الأيام المختارة متتالية — القاعدة تتطلب يوم راحة بين الجلسات. فعّل التجاوز أو غيّر الأيام.", "error");
+    setBusy(true);
+    try {
+      const row = await window.KineticData.upsert("schedules", {
+        schedule_id: existing ? (existing.schedule_id || existing.id) : "SCH-" + Date.now().toString().slice(-8),
+        patient_id: pid,
+        therapist_id: therapistId,
+        days,
+        time,
+        sessions_per_week: days.length,
+        allow_consecutive: allowConsecutive,
+        active: true,
+        created_at: (existing && existing.created_at) || new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+      let msg = "تم حفظ الجدول الثابت — يسري على المواعيد المستقبلية فقط";
+      if (generate) {
+        const made = await generateFromSchedule(patient, row, { startIso, sessions: Number(sessions) || 0 });
+        msg = made.length
+          ? `تم حفظ الجدول وإنشاء ${made.length} موعدًا قادمًا`
+          : "تم حفظ الجدول — لا مواعيد جديدة (الأيام المطلوبة محجوزة بالفعل)";
+      }
+      window.showToast && window.showToast(msg, "success");
+      onClose && onClose();
+    } catch (e) {
+      console.warn("save schedule failed", e);
+      window.showToast && window.showToast("تعذّر حفظ الجدول", "error");
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <Modal title={`الجدول الثابت — ${patient.name || ""}`} onClose={onClose} width={600}
+      footer={<>
+        <button className="btn btn-ghost" onClick={onClose}>إغلاق</button>
+        <button className="btn btn-secondary" disabled={busy} onClick={()=>save(false)}>
+          <I.Check size={13}/> حفظ الجدول فقط
+        </button>
+        <button className="btn btn-blue" disabled={busy} onClick={()=>save(true)}>
+          {busy ? <span className="spin" style={{width:14,height:14,border:"2px solid #fff",borderTopColor:"transparent",borderRadius:"50%"}}/>
+                : <><I.Calendar size={13}/> حفظ وإنشاء المواعيد</>}
+        </button>
+      </>}>
+      <div className="muted" style={{fontSize:12.5,marginBottom:16,lineHeight:1.6,padding:"10px 12px",background:"var(--blue-50)",border:"1px solid var(--blue-100)",borderRadius:8}}>
+        يحدد الأخصائي نمطًا أسبوعيًا ثابتًا (أيام + وقت). تُقترح المواعيد القادمة تلقائيًا من هذا النمط،
+        وأي تعديل لاحق يسري على المواعيد المستقبلية فقط — المواعيد السابقة لا تتغير.
+      </div>
+
+      <Field label="أيام العلاج الأسبوعية" required>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          {WEEKDAYS_AR.map((label, d) => {
+            const on = days.includes(d);
+            return (
+              <button key={d} type="button" onClick={()=>toggleDay(d)}
+                style={{
+                  padding:"8px 12px",borderRadius:10,fontSize:12.5,cursor:"pointer",
+                  border: on ? "1px solid var(--blue-500)" : "1px solid var(--ink-200)",
+                  background: on ? "var(--blue-500)" : "#fff",
+                  color: on ? "#fff" : "var(--ink-700)",
+                  fontWeight: on ? 600 : 500, transition:"all .12s",
+                }}>{label}</button>
+            );
+          })}
+        </div>
+      </Field>
+      {consecutive && (
+        <div style={{fontSize:12,color: allowConsecutive ? "var(--ink-500)" : "var(--red)",margin:"2px 0 10px"}}>
+          {allowConsecutive
+            ? "أيام متتالية مسموحة بقرار الأخصائي (تجاوز مفعّل)."
+            : "تنبيه: توجد أيام متتالية — القاعدة الافتراضية تتطلب يوم راحة بين كل جلستين."}
+        </div>
+      )}
+
+      <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
+        <Field label="الوقت الثابت" required>
+          <input className="input" type="time" value={time} onChange={e=>setTime(e.target.value)}/>
+        </Field>
+        <Field label="الأخصائي" required>
+          <select className="input" value={therapistId} onChange={e=>setTherapistId(e.target.value)}>
+            <option value="">اختر الأخصائي…</option>
+            {therapists.map(t=>(
+              <option key={t.id} value={t.id}>{t.name}{t.spec?` — ${t.spec}`:""}</option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      <div className="muted" style={{fontSize:12,marginBottom:10}}>
+        عدد الجلسات في الأسبوع: <strong>{days.length}</strong>
+      </div>
+      <label style={{display:"flex",alignItems:"center",gap:8,fontSize:12.5,marginBottom:16,cursor:"pointer"}}>
+        <input type="checkbox" checked={allowConsecutive} onChange={e=>setAllowConsecutive(e.target.checked)}/>
+        السماح بأيام متتالية (تجاوز قاعدة يوم الراحة — قرار مقصود من الأخصائي)
+      </label>
+
+      <div style={{borderTop:"1px solid var(--ink-100)",paddingTop:14}}>
+        <div className="label" style={{marginBottom:8}}>إنشاء المواعيد القادمة تلقائيًا</div>
+        <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
+          <Field label="تاريخ البداية">
+            <input className="input" type="date" value={startIso} min={todayIso()} onChange={e=>setStartIso(e.target.value)}/>
+          </Field>
+          <Field label="عدد الجلسات">
+            <input className="input" type="number" min={1} max={60} value={sessions} onChange={e=>setSessions(e.target.value)}/>
+          </Field>
+        </div>
+        <div className="muted" style={{fontSize:12}}>
+          «حفظ وإنشاء المواعيد» يولّد الجلسات القادمة على نفس الأخصائي والوقت حسب الأيام المختارة،
+          ويتخطى الأيام المحجوزة مسبقًا.
+        </div>
+      </div>
+    </Modal>
+  );
+}
+window.RecurringScheduleModal = RecurringScheduleModal;
 
 function CalendarView({ dateOffset, setDateOffset }) {
   // Subscribe to data-updated events so external mutations (new
@@ -2380,7 +2669,10 @@ function CalendarView({ dateOffset, setDateOffset }) {
   const isDoctorAppt    = (a) => Boolean(a.doctor_id || a.dr);
 
   // ── Filter appts to the selected day ──
-  const scoped = window.scopeAppts ? window.scopeAppts(DATA.appts || []) : (DATA.appts || []);
+  // Cancelled appointments are excluded from every calendar view (day,
+  // therapist, doctor, week) — they remain in the DB and in the list tab.
+  const scopedAll = window.scopeAppts ? window.scopeAppts(DATA.appts || []) : (DATA.appts || []);
+  const scoped = scopedAll.filter(a => !isCancelledAppt(a));
   // For therapist/doctor grids, drop appts that don't belong to that role.
   const dayAppts = React.useMemo(() => {
     return scoped
@@ -2777,9 +3069,13 @@ function CalendarView({ dateOffset, setDateOffset }) {
 // Small focused modal so click-to-details doesn't drop the user
 // straight into the reschedule form.
 function AppointmentActionsModal({ appt, onClose, onEdit, onStatus }) {
+  const [schedOpen, setSchedOpen] = React.useState(false);
   const patient = (DATA.patients || []).find(p =>
     (p.patient_id || p.id) === (appt.patient_id || appt.pid)
     || p.name === appt.patient);
+  if (schedOpen && patient) {
+    return <RecurringScheduleModal patient={patient} onClose={onClose}/>;
+  }
   return (
     <Modal open onClose={onClose} width={520} title="تفاصيل الموعد">
       <div style={{display:"grid",gap:10,fontSize:13}}>
@@ -2800,6 +3096,9 @@ function AppointmentActionsModal({ appt, onClose, onEdit, onStatus }) {
             else if (window.showToast) window.showToast("افتح صفحة المرضى لعرض الملف", "info");
             onClose();
           }}><I.User size={13}/> ملف المريض</button>
+        )}
+        {patient && (
+          <button className="btn btn-ghost" onClick={()=>setSchedOpen(true)}><I.Clock size={13}/> الجدول الثابت</button>
         )}
         <button className="btn btn-secondary" onClick={()=>onStatus("ملغي")}><I.X size={13}/> إلغاء</button>
         <button className="btn btn-secondary" onClick={()=>onStatus("مكتمل")}><I.Check size={13}/> إنهاء</button>
@@ -3197,6 +3496,9 @@ function nextAvailableLabel(doctorId) {
 }
 
 // ── BookingFlow — 5 steps, all DB-driven, persists on confirm ──
+// The therapist appointment is the default and required booking; the
+// doctor step is optional and only fills in when the receptionist
+// explicitly assigns one (new patients book directly with a therapist).
 function BookingFlow({ onDone }) {
   const [step, setStep] = React.useState(1);
   const [picks, setPicks] = React.useState({
@@ -3205,11 +3507,21 @@ function BookingFlow({ onDone }) {
     patientId: null,
     newName: "", newPhone: "",
     deptId:null, doctorId:null, therapist:null, date:null, slot:null, notes:"",
+    allowConsecutive: false,           // therapist override of the free-day rule
+    updatePreferredTime: false,        // persist the chosen slot as the new fixed time
   });
   const [busy, setBusy] = React.useState(false);
-  const steps = ["المريض","القسم","الطبيب","الأخصائي","التاريخ","الوقت"];
+  const steps = ["المريض","الأخصائي","الطبيب (اختياري)","التاريخ","الوقت"];
   const LAST = steps.length;
   const update = (patch) => setPicks(p => ({ ...p, ...patch }));
+  // The saved recurring schedule for the selected (existing) patient — used
+  // to suggest the fixed days/time in the date and time steps.
+  const selectedPatient = picks.patientMode === "existing" && picks.patientId
+    ? (DATA.patients || []).find(p => (p.patient_id || p.id) === picks.patientId) || null
+    : null;
+  const patientSchedule = selectedPatient
+    ? scheduleForPatient(selectedPatient.patient_id || selectedPatient.id)
+    : null;
   // Only offer active specialists for new assignments; historical
   // appointments keep their original therapist_id untouched.
   const therapists = (window.scopeTherapists ? window.scopeTherapists(DATA.therapists) : DATA.therapists)
@@ -3246,23 +3558,38 @@ function BookingFlow({ onDone }) {
   }
 
   async function confirm() {
+    if (!picks.therapist) return window.showToast && window.showToast("اختر الأخصائي", "error");
     if (!picks.date) return window.showToast && window.showToast("اختر التاريخ", "error");
     if (!picks.slot) return window.showToast && window.showToast("اختر الوقت", "error");
     if (!patientStepValid()) return;
+    // Default rule: one free day between the patient's sessions unless the
+    // therapist explicitly overrides (checkbox in the time step).
+    if (selectedPatient && !picks.allowConsecutive) {
+      const clash = violatesFreeDayRule(selectedPatient.patient_id || selectedPatient.id, picks.date);
+      if (clash) {
+        return window.showToast && window.showToast(
+          `للمريض موعد في ${apptDateIso(clash)} — القاعدة تتطلب يوم راحة بين الجلسات. فعّل «السماح بأيام متتالية» للتجاوز.`,
+          "error");
+      }
+    }
     setBusy(true);
     try {
       const patient = await resolvePatient();
       if (!patient) throw new Error("patient-missing");
       const patientId = patient.patient_id || patient.id;
-      const doctor = (DATA.doctors || []).find(d => d.id === picks.doctorId);
-      const dept = (DATA.departments || []).find(d => d.id === picks.deptId);
+      // The doctor (and their department) is attached only when the
+      // receptionist explicitly picked one in the optional step.
+      const doctor = picks.doctorId ? (DATA.doctors || []).find(d => d.id === picks.doctorId) : null;
+      const dept = doctor
+        ? (DATA.departments || []).find(d => d.id === (picks.deptId || doctor.department_id))
+        : null;
       const therapistRow = (DATA.therapists || []).find(t => t.name === picks.therapist);
       await window.KineticData.upsert("appts", {
         booking_id: "A-" + Date.now().toString().slice(-8),
         patient_id: patientId,
         patient: patient.name || "",
-        doctor_id: picks.doctorId || null,
-        department_id: picks.deptId || null,
+        doctor_id: doctor ? doctor.id : null,
+        department_id: dept ? dept.id : null,
         therapist_id: therapistRow ? therapistRow.id : null,
         dr: doctor ? doctor.name : "",
         th: picks.therapist || "",
@@ -3270,11 +3597,21 @@ function BookingFlow({ onDone }) {
         date: picks.date,
         time: picks.slot,
         status: "مؤكد",
-        type: dept ? dept.name_ar : "",
+        type: doctor ? `جلسة + استشارة ${dept ? dept.name_ar : "طبيب"}` : "جلسة علاج طبيعي",
         notes: picks.notes || "",
         dur: 45,
         created_at: new Date().toISOString(),
       });
+      // "Update Preferred Time": only rewrite the saved fixed time when the
+      // receptionist explicitly asked — one-time changes leave it alone.
+      if (picks.updatePreferredTime && patientSchedule && picks.slot !== patientSchedule.time) {
+        await window.KineticData.upsert("schedules", {
+          ...patientSchedule,
+          schedule_id: patientSchedule.schedule_id || patientSchedule.id,
+          time: picks.slot,
+          updated_at: new Date().toISOString(),
+        });
+      }
       window.showToast && window.showToast("تم تأكيد الحجز", "success");
       onDone && onDone();
     } catch (e) {
@@ -3285,6 +3622,10 @@ function BookingFlow({ onDone }) {
 
   function next() {
     if (step === 1 && !patientStepValid()) return;
+    if (step === 2 && !picks.therapist) {
+      window.showToast && window.showToast("اختر الأخصائي — الموعد مع الأخصائي إلزامي", "error");
+      return;
+    }
     if (step < LAST) setStep(step + 1); else confirm();
   }
 
@@ -3312,16 +3653,15 @@ function BookingFlow({ onDone }) {
 
       <div className="card card-pad" style={{minHeight:420,marginBottom:18}}>
         {step===1 && <PatientStep picks={picks} update={update}/>}
-        {step===2 && <DepartmentPick selected={picks.deptId} onPick={id=>{ update({deptId:id, doctorId:null}); next(); }}/>}
-        {step===3 && <DoctorPick deptId={picks.deptId} selected={picks.doctorId} onPick={id=>{ update({doctorId:id}); next(); }} onBack={()=>setStep(2)}/>}
-        {step===4 && (therapists.length ? <PickGrid title="اختر أخصائيًا"
+        {step===2 && (therapists.length ? <PickGrid title="اختر أخصائيًا — الموعد مع الأخصائي إلزامي"
           items={therapists.map(t=>({ id:t.name, l:t.name, sub:`${t.spec} · حمل ${t.load}/${t.max}`, ic:t.name.split(" ").map(x=>x[0]).join(""), color:t.color, count:`${t.max-t.load} فترة متاحة` }))}
           avatar
           onPick={v=>{ update({therapist:v}); next();}}
           selected={picks.therapist}
         /> : <EmptyState icon={<I.Users size={22}/>} title="لا أخصائيين بعد" body="أضف الأخصائيين من الإعدادات."/>)}
-        {step===5 && <DatePick value={picks.date} onPick={v=>{ update({date:v}); next();}}/>}
-        {step===6 && <SlotPick picks={picks} update={update}/>}
+        {step===3 && <OptionalDoctorStep picks={picks} update={update} onSkip={()=>{ update({doctorId:null, deptId:null}); setStep(4); }} onPicked={()=>setStep(4)}/>}
+        {step===4 && <DatePick value={picks.date} onPick={v=>{ update({date:v}); next();}} schedule={patientSchedule} patient={selectedPatient} onGenerated={onDone}/>}
+        {step===5 && <SlotPick picks={picks} update={update} schedule={patientSchedule}/>}
       </div>
 
       <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
@@ -3398,64 +3738,46 @@ function PatientStep({ picks, update }) {
   );
 }
 
-// Step 1 — departments from the DB with live active-doctor counts.
-function DepartmentPick({ selected, onPick }) {
-  const depts = activeDepartments();
-  if (depts.length === 0) {
-    return <EmptyState icon={<I.Layers size={22}/>} title="لا أقسام بعد" body="تُضاف الأقسام من قاعدة البيانات ثم تظهر هنا تلقائيًا."/>;
-  }
+// Step 3 — OPTIONAL doctor consultation. The default path is therapist-only
+// treatment; a doctor appointment is created only when the receptionist
+// deliberately assigns one here. Skipping is the primary action.
+function OptionalDoctorStep({ picks, update, onSkip, onPicked }) {
+  const depts = activeDepartments().filter(d => doctorsInDept(d.id).length > 0);
+  const deptId = picks.deptId || "";
+  const doctors = deptId ? doctorsInDept(deptId) : (DATA.doctors || []).filter(d => d.active !== false);
   return (
     <div>
-      <div className="h2" style={{marginBottom:18}}>اختر القسم</div>
-      <div className="grid-3" style={{gap:14}}>
-        {depts.map(d=>{
-          const n = doctorsInDept(d.id).length;
-          const disabled = n === 0;
-          const isSel = selected === d.id;
-          return (
-            <button key={d.id} disabled={disabled} onClick={()=>onPick(d.id)}
-              style={{
-                padding:18,textAlign:"left",cursor:disabled?"not-allowed":"pointer",opacity:disabled?.55:1,
-                border:`1px solid ${isSel?"var(--blue-500)":"var(--ink-200)"}`,
-                borderRadius:14,background: isSel?"var(--blue-50)":"#fff",
-                display:"flex",flexDirection:"column",gap:10, transition:"all .15s"
-              }}>
-              <div className="av lg" style={{background:(d.color||"#7BBDE8")+"22",color:d.color||"var(--blue-700)"}}>{deptIcon(d.icon)}</div>
-              <div>
-                <div style={{fontWeight:600,fontSize:14.5}}>{d.name_ar}</div>
-                <div className="muted" style={{fontSize:12,marginTop:3}}>{d.description}</div>
-              </div>
-              {disabled && <div style={{marginTop:"auto",fontSize:11.5,color:"var(--ink-400)"}}>غير متاح حاليًا</div>}
-            </button>
-          );
-        })}
+      <div className="h2" style={{marginBottom:6}}>استشارة طبيب (اختياري)</div>
+      <div className="muted" style={{fontSize:13,marginBottom:14,lineHeight:1.6}}>
+        العلاج يبدأ مع الأخصائي مباشرةً — لا يُشترط موعد طبيب. أضف طبيبًا فقط إذا قررتَ أن المريض يحتاج استشارة.
       </div>
-    </div>
-  );
-}
-
-// Step 2 — active doctors in the chosen department, rich cards + empty state.
-function DoctorPick({ deptId, selected, onPick, onBack }) {
-  const doctors = deptId ? doctorsInDept(deptId) : [];
-  if (doctors.length === 0) {
-    return (
-      <div>
-        <div className="h2" style={{marginBottom:8}}>اختر طبيبًا</div>
-        <EmptyState icon={<I.Stethoscope size={22}/>} title="لا أطباء في هذا القسم"
-          body="اختر قسمًا آخر أو عُد للخطوة السابقة."
-          action={<button className="btn btn-secondary" onClick={onBack}><I.ArrowLeft size={13}/> رجوع للأقسام</button>}/>
+      <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",marginBottom:18}}>
+        <button className="btn btn-blue" onClick={onSkip}>
+          <I.ArrowRight size={13}/> متابعة بدون طبيب
+        </button>
+        {depts.length > 0 && (
+          <select className="input" style={{maxWidth:240}} value={deptId}
+            onChange={e=>update({ deptId: e.target.value || null, doctorId: null })}>
+            <option value="">كل الأقسام</option>
+            {depts.map(d=>(<option key={d.id} value={d.id}>{d.name_ar}</option>))}
+          </select>
+        )}
+        {picks.doctorId && (
+          <button className="btn btn-ghost" style={{fontSize:12}} onClick={()=>update({doctorId:null})}>
+            <I.X size={12}/> إزالة الطبيب المحدد
+          </button>
+        )}
       </div>
-    );
-  }
-  return (
-    <div>
-      <div className="h2" style={{marginBottom:18}}>اختر طبيبًا</div>
+      {doctors.length === 0 ? (
+        <EmptyState icon={<I.Stethoscope size={22}/>} title="لا أطباء متاحون"
+          body="تابع بدون طبيب — يمكن إنشاء موعد طبيب لاحقًا عند الحاجة."/>
+      ) : (
       <div className="grid-3" style={{gap:14}}>
         {doctors.map(d=>{
           const st = DOCTOR_STATUS[d.status] || DOCTOR_STATUS.available;
-          const isSel = selected === d.id;
+          const isSel = picks.doctorId === d.id;
           return (
-            <button key={d.id} onClick={()=>onPick(d.id)}
+            <button key={d.id} onClick={()=>{ update({ doctorId: d.id, deptId: d.department_id || deptId || null }); onPicked && onPicked(); }}
               style={{
                 padding:16,textAlign:"left",cursor:"pointer",
                 border:`1px solid ${isSel?"var(--blue-500)":"var(--ink-200)"}`,
@@ -3481,6 +3803,7 @@ function DoctorPick({ deptId, selected, onPick, onBack }) {
           );
         })}
       </div>
+      )}
     </div>
   );
 }
@@ -3520,8 +3843,9 @@ function PickGrid({ title, items, onPick, selected, avatar }) {
   );
 }
 
-function DatePick({ value, onPick }) {
+function DatePick({ value, onPick, schedule, patient, onGenerated }) {
   const [viewMonth, setViewMonth] = React.useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
+  const [genBusy, setGenBusy] = React.useState(false);
   const days = ["أحد","إثن","ثلا","أرب","خمي","جمع","سبت"];
   const y = viewMonth.getFullYear(), m = viewMonth.getMonth();
   const startDow = new Date(y, m, 1).getDay();
@@ -3534,9 +3858,39 @@ function DatePick({ value, onPick }) {
     { l:"غدًا", d: new Date(Date.now()+864e5).toISOString().slice(0,10) },
     { l:"بعد غد", d: new Date(Date.now()+2*864e5).toISOString().slice(0,10) },
   ];
+  // Saved recurring pattern: highlight its weekdays on the calendar and
+  // offer one-click generation of the upcoming sessions.
+  const schedDays = schedule ? scheduleDays(schedule) : [];
+  async function generateUpcoming() {
+    if (!schedule || !patient) return;
+    setGenBusy(true);
+    try {
+      const made = await generateFromSchedule(patient, schedule);
+      window.showToast && window.showToast(
+        made.length ? `أُنشئ ${made.length} موعدًا حسب الجدول الثابت` : "لا مواعيد جديدة — الأيام القادمة محجوزة بالفعل",
+        made.length ? "success" : "info");
+      if (made.length && onGenerated) onGenerated();
+    } catch (e) {
+      console.warn("generate from schedule failed", e);
+      window.showToast && window.showToast("تعذّر إنشاء المواعيد", "error");
+    } finally { setGenBusy(false); }
+  }
   return (
     <div>
       <div className="h2" style={{marginBottom:18}}>اختر تاريخًا</div>
+      {schedule && (
+        <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",padding:"12px 16px",marginBottom:16,
+          background:"var(--blue-50)",border:"1px solid var(--blue-100)",borderRadius:12}}>
+          <I.Calendar size={15} style={{color:"var(--blue-700)",flexShrink:0}}/>
+          <div style={{flex:1,minWidth:220,fontSize:13}}>
+            <strong>الجدول الثابت للمريض:</strong> {scheduleDaysLabel(schedule)} · <span className="mono">{schedule.time}</span>
+            <div className="muted" style={{fontSize:11.5,marginTop:2}}>الأيام المطابقة مميزة في التقويم — أو أنشئ كل المواعيد القادمة بضغطة واحدة.</div>
+          </div>
+          <button className="btn btn-blue" disabled={genBusy} onClick={generateUpcoming} style={{whiteSpace:"nowrap"}}>
+            {genBusy ? "جارٍ الإنشاء…" : "إنشاء المواعيد القادمة"}
+          </button>
+        </div>
+      )}
       <div className="rgrid c-lg" style={{"--gtc":"1.4fr 1fr",gap:24}}>
         <div className="card" style={{padding:18,boxShadow:"none"}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
@@ -3551,12 +3905,14 @@ function DatePick({ value, onPick }) {
               const dIso = iso(n);
               const isPast = dIso < todayIso;
               const isSel = value === dIso;
+              const isSched = !isPast && schedDays.includes(new Date(dIso + "T00:00:00").getDay());
               return (
                 <button key={n} disabled={isPast} onClick={()=>onPick(dIso)}
+                  title={isSched ? "يوم من الجدول الثابت" : undefined}
                   style={{
                     height:38,borderRadius:9,cursor:isPast?"default":"pointer",
-                    border:isSel?"1px solid var(--blue-500)":"1px solid transparent",
-                    background: isSel?"var(--blue-500)":"transparent",
+                    border:isSel?"1px solid var(--blue-500)":isSched?"1px dashed var(--blue-500)":"1px solid transparent",
+                    background: isSel?"var(--blue-500)":isSched?"var(--blue-50)":"transparent",
                     color: isSel?"#fff":isPast?"var(--ink-300)":"var(--ink-900)",
                     fontWeight:isSel?600:500,fontSize:13
                   }} className="mono">{n}</button>
@@ -3574,7 +3930,7 @@ function DatePick({ value, onPick }) {
             ))}
           </div>
           <div style={{padding:14,background:"var(--blue-50)",border:"1px solid var(--blue-100)",borderRadius:12,marginTop:18,fontSize:12.5}}>
-            اختيار التاريخ يعرض الأوقات المتاحة فعليًا للطبيب المحدد فقط.
+            اختيار التاريخ يعرض الأوقات المتاحة فعليًا للأخصائي المحدد فقط.
           </div>
         </div>
       </div>
@@ -3582,15 +3938,20 @@ function DatePick({ value, onPick }) {
   );
 }
 
-function SlotPick({ picks, update }) {
+function SlotPick({ picks, update, schedule }) {
   const ALL = ["08:30","09:00","09:30","10:00","10:30","11:00","11:30","12:00","13:00","13:30","14:00","14:30","15:00","15:30","16:00","16:30","17:00"];
   const morning = ALL.filter(t => t < "12:00");
   const afternoon = ALL.filter(t => t >= "12:00");
-  const doctor = (DATA.doctors || []).find(d => d.id === picks.doctorId);
-  const dept = (DATA.departments || []).find(d => d.id === picks.deptId);
-  // Slots already taken for this doctor on the chosen date (real bookings).
+  const doctor = picks.doctorId ? (DATA.doctors || []).find(d => d.id === picks.doctorId) : null;
+  const dept = doctor ? (DATA.departments || []).find(d => d.id === (picks.deptId || doctor.department_id)) : null;
+  // Slots already taken for this THERAPIST on the chosen date — the
+  // therapist session is the required booking, so conflicts follow them.
+  const therapistRow = (DATA.therapists || []).find(t => t.name === picks.therapist);
   const booked = new Set((DATA.appts || [])
-    .filter(a => a.doctor_id === picks.doctorId && a.date === picks.date && a.status !== "ملغي" && a.status !== "متاح")
+    .filter(a =>
+      apptDateIso(a) === picks.date && !isCancelledAppt(a) && a.status !== "متاح" &&
+      ((picks.therapist && a.th === picks.therapist) ||
+       (therapistRow && a.therapist_id && (a.therapist_id === therapistRow.id || a.therapist_id === therapistRow.staff_id))))
     .map(a => a.time));
   // Patient was resolved in step 1 (existing record or new initial info).
   const existing = (DATA.patients || []).find(p => (p.patient_id || p.id) === picks.patientId);
@@ -3598,18 +3959,30 @@ function SlotPick({ picks, update }) {
     ? (findPatientByPhone(picks.newPhone) || { name: picks.newName }).name
     : (existing && existing.name);
 
+  // Preferred fixed time: pre-select it automatically when free so the
+  // receptionist only confirms.
+  const preferredTime = schedule ? schedule.time : null;
+  React.useEffect(() => {
+    if (preferredTime && !picks.slot && ALL.includes(preferredTime) && !booked.has(preferredTime)) {
+      update({ slot: preferredTime });
+    }
+  }, []);
+
   const SlotBtn = ({ t }) => {
     const u = booked.has(t);
     const sel = picks.slot === t;
+    const pref = t === preferredTime;
     return (
       <button disabled={u} onClick={()=>update({ slot: t })} className="mono"
+        title={pref ? "الوقت المفضل للمريض" : undefined}
         style={{
-          padding:"10px 16px",borderRadius:10,border:"1px solid var(--ink-200)",
-          background: sel?"var(--blue-500)":u?"var(--ink-100)":"#fff",
+          padding:"10px 16px",borderRadius:10,
+          border: pref && !sel ? "1px dashed var(--blue-500)" : "1px solid var(--ink-200)",
+          background: sel?"var(--blue-500)":u?"var(--ink-100)":pref?"var(--blue-50)":"#fff",
           color: sel?"#fff":u?"var(--ink-300)":"var(--ink-900)",
           textDecoration:u?"line-through":"none",
-          cursor:u?"not-allowed":"pointer", fontSize:13, fontWeight:500
-        }}>{t}</button>
+          cursor:u?"not-allowed":"pointer", fontSize:13, fontWeight: pref&&!sel?600:500
+        }}>{t}{pref ? " ★" : ""}</button>
     );
   };
 
@@ -3617,8 +3990,14 @@ function SlotPick({ picks, update }) {
     <div>
       <div className="h2" style={{marginBottom:6}}>اختر الوقت</div>
       <div className="muted" style={{marginBottom:18,fontSize:13}}>
-        {doctor ? `المتاح لـ${doctor.name}` : "المتاح"} · {picks.date || "—"} · جلسات 45 دقيقة
+        {picks.therapist ? `المتاح لـ${picks.therapist}` : "المتاح"} · {picks.date || "—"} · جلسات 45 دقيقة
       </div>
+      {preferredTime && (
+        <div style={{display:"flex",alignItems:"center",gap:8,fontSize:12.5,marginBottom:14,padding:"8px 12px",background:"var(--blue-50)",border:"1px solid var(--blue-100)",borderRadius:8}}>
+          <I.Clock size={13} style={{color:"var(--blue-700)"}}/>
+          الوقت المفضل المحفوظ لهذا المريض: <strong className="mono">{preferredTime}</strong> — محدد تلقائيًا إن كان متاحًا.
+        </div>
+      )}
 
       <div className="label">الصباح</div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:18}}>{morning.map(t=><SlotBtn key={t} t={t}/>)}</div>
@@ -3629,12 +4008,23 @@ function SlotPick({ picks, update }) {
       <div className="label">ملاحظات (اختياري)</div>
       <textarea className="input" rows={2} style={{padding:10,resize:"vertical",marginBottom:8}} value={picks.notes || ""} onChange={e=>update({ notes: e.target.value })} placeholder="سبب الزيارة…"/>
 
+      {schedule && picks.slot && picks.slot !== preferredTime && (
+        <label style={{display:"flex",alignItems:"center",gap:8,fontSize:12.5,marginBottom:6,cursor:"pointer"}}>
+          <input type="checkbox" checked={Boolean(picks.updatePreferredTime)} onChange={e=>update({ updatePreferredTime: e.target.checked })}/>
+          تحديث الوقت المفضل الدائم إلى <span className="mono">{picks.slot}</span> (وإلا فهذا تغيير لمرة واحدة فقط)
+        </label>
+      )}
+      <label style={{display:"flex",alignItems:"center",gap:8,fontSize:12.5,marginBottom:8,cursor:"pointer"}}>
+        <input type="checkbox" checked={Boolean(picks.allowConsecutive)} onChange={e=>update({ allowConsecutive: e.target.checked })}/>
+        السماح بأيام متتالية (تجاوز قاعدة يوم الراحة — بقرار الأخصائي)
+      </label>
+
       <div style={{padding:18,background:"var(--ink-50)",borderRadius:12,marginTop:8}}>
         <div className="h3" style={{marginBottom:10}}>ملخّص الحجز</div>
         <div className="grid-4" style={{fontSize:12.5}}>
-          <div><div className="muted">القسم</div><div>{dept?dept.name_ar:"—"}</div></div>
-          <div><div className="muted">الطبيب</div><div>{doctor?doctor.name:"—"}</div></div>
           <div><div className="muted">الأخصائي</div><div>{picks.therapist||"—"}</div></div>
+          <div><div className="muted">الطبيب</div><div>{doctor?doctor.name:"بدون طبيب"}</div></div>
+          <div><div className="muted">القسم</div><div>{dept?dept.name_ar:"—"}</div></div>
           <div><div className="muted">الوقت</div><div className="mono">{picks.date||"—"} {picks.slot||""}</div></div>
         </div>
         <div style={{marginTop:8,fontSize:12.5}}><span className="muted">المريض: </span>{patientName || "—"}</div>

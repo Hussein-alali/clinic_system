@@ -704,6 +704,9 @@ const DATA_TABLES = {
                        "insurance_info","status","updated_at"] },
   appts:      { key: "bookings",   pk: "booking_id",  ls: "kinetic.bookings",
                 cols: ["booking_id","patient_id","therapist_id","doctor_id","department_id","date","time","status","notes","created_at"] },
+  schedules:  { key: "patient_schedules", pk: "schedule_id", ls: "kinetic.patient_schedules",
+                cols: ["schedule_id","patient_id","therapist_id","days","time","sessions_per_week",
+                       "allow_consecutive","active","notes","created_at","updated_at"] },
   sessions:   { key: "sessions",   pk: "session_id",  ls: "kinetic.sessions",
                 cols: ["session_id","patient_id","therapist_id","date","pain_score","session_notes","session_number","created_at"] },
   payments:   { key: "invoices",   pk: "invoice_id",  ls: "kinetic.invoices",
@@ -743,6 +746,7 @@ const DATA_TABLES = {
 // else matches. Used by signOut cache clear.
 function friendlyName(key) {
   if (key === "bookings") return "appts";
+  if (key === "patient_schedules") return "schedules";
   if (key === "invoices") return "payments";
   if (key === "payments") return "paymentHistory";
   if (key === "patient_subscriptions") return "subscriptions";
@@ -888,6 +892,15 @@ function normalizeDomainData(D) {
     time: a.time ?? "", dur: a.dur ?? 30,
     room: a.room ?? "", type: a.type ?? "",
     status: BOOKING_STATUS_AR[a.status] ?? a.status ?? "معلّق",
+  }));
+  D.schedules = (D.schedules || []).map(s => ({
+    ...s,
+    id: s.schedule_id ?? s.id,
+    // jsonb may round-trip as a string via LS/older drivers.
+    days: Array.isArray(s.days) ? s.days
+        : (typeof s.days === "string"
+            ? (function(){ try { return JSON.parse(s.days); } catch { return []; } })()
+            : []),
   }));
   D.sessions = (D.sessions || []).map(s => ({
     ...s,
