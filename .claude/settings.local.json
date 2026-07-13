@@ -66,7 +66,8 @@
       "Bash(awk -F: '$1<=4770 && $1>=4550')",
       "Bash(awk -F: '$1<=5083 && $1>=4900')",
       "Bash(sed 's/ \\(.*//')",
-      "Bash(python3 *)"
+      "Bash(python3 *)",
+      "Bash(grep -n \"state\\\\\\\\.name.*state\\\\\\\\.category\\\\|setTreatment\\\\|createTreatment\" /c/Users/bdalr/Desktop/clinksys/src/screens2.jsx)"
     ]
   }
 }

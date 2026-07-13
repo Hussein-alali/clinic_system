@@ -169,46 +169,88 @@ function TreatmentPlanDetail({ plan, onBack, onEdit }) {
 function TreatmentPlanCreate({ onCancel, onSave, template }) {
   window.useDataVersion && window.useDataVersion();
   // `template` may be a plain diagnosis string (legacy) or a full DB
-  // template object (from the new library). Every template field is
-  // hydrated into the form state — visible fields are editable below,
-  // and the rest (exercises, home instructions, warnings…) ride along
-  // untouched so the saved treatment is a complete copy of the قالب.
+  // template object. EVERY template field is hydrated into editable
+  // state — the therapist reviews and optionally edits every value
+  // before saving. Only patient + therapist stay blank.
   const tplObj = (template && typeof template === "object") ? template : null;
-  const tplName = tplObj ? tplObj.name : (typeof template === "string" ? template : "");
+  const [tplName, setTplName] = React.useState(
+    tplObj ? (tplObj.name || "") : (typeof template === "string" ? template : "")
+  );
+  const [category, setCategory] = React.useState((tplObj && tplObj.category) || "");
+  const [bodyPart, setBodyPart] = React.useState((tplObj && tplObj.body_part) || "");
   const [diag, setDiag] = React.useState(
     (tplObj && tplObj.diagnosis) || (typeof template === "string" ? template : "")
   );
   const [goalsText, setGoalsText] = React.useState(() =>
     (tplObj && Array.isArray(tplObj.goals)) ? tplObj.goals.join("\n") : ""
   );
+  const [exercises, setExercises] = React.useState(() =>
+    (tplObj && Array.isArray(tplObj.exercises))
+      ? tplObj.exercises.map(e => ({
+          name: e.name || '', description: e.description || '',
+          sets: e.sets || '', reps: e.reps || '', duration: e.duration || '',
+          hold_time: e.hold_time || '', rest_time: e.rest_time || '',
+          equipment: e.equipment || '', notes: e.notes || '',
+        }))
+      : []
+  );
+  const [methods, setMethods] = React.useState(() =>
+    (tplObj && Array.isArray(tplObj.methods))
+      ? tplObj.methods.map(m => (m && (m.name || m)) || '').filter(Boolean)
+      : []
+  );
+  const [homeInstr, setHomeInstr] = React.useState((tplObj && tplObj.home_instructions) || "");
   const [notes, setNotes] = React.useState((tplObj && tplObj.notes) || "");
+  const [warnings, setWarnings] = React.useState((tplObj && tplObj.warnings) || "");
+  const [followupInstr, setFollowupInstr] = React.useState((tplObj && tplObj.followup_instructions) || "");
   const [totalSessions, setTotalSessions] = React.useState(
     tplObj && tplObj.estimated_sessions != null ? String(tplObj.estimated_sessions) : "10"
   );
   const [frequency, setFrequency] = React.useState(
     tplObj && tplObj.weekly_frequency != null ? String(tplObj.weekly_frequency) : "2"
   );
+  const [expectedRecoveryDays, setExpectedRecoveryDays] = React.useState(
+    tplObj && tplObj.expected_recovery_days != null ? String(tplObj.expected_recovery_days) : ""
+  );
   const [startDate, setStartDate] = React.useState(() => new Date().toISOString().slice(0, 10));
-  const [modalities, setModalities] = React.useState(() => {
-    if (!tplObj) return [];
-    const fromMethods    = Array.isArray(tplObj.methods)    ? tplObj.methods.map(m => m.name || m) : [];
-    const fromModalities = Array.isArray(tplObj.modalities) ? tplObj.modalities : [];
-    return Array.from(new Set([...fromMethods, ...fromModalities]));
-  });
   const [saving, setSaving] = React.useState(false);
   const [txModalOpen, setTxModalOpen] = React.useState(false);
-  const toggleModality = (m) => setModalities(list => list.includes(m) ? list.filter(x=>x!==m) : [...list, m]);
+
+  const toggleMethod = (m) => setMethods(list => list.includes(m) ? list.filter(x=>x!==m) : [...list, m]);
+
+  function addExercise() {
+    setExercises(list => [...list, {
+      name:'', description:'', sets:'', reps:'', duration:'',
+      hold_time:'', rest_time:'', equipment:'', notes:'',
+    }]);
+  }
+  function setExercise(i, patch) {
+    setExercises(list => list.map((e,idx)=>idx===i?{...e,...patch}:e));
+  }
+  function removeExercise(i) {
+    setExercises(list => list.filter((_,idx)=>idx!==i));
+  }
+  function moveExercise(i, dir) {
+    setExercises(list => {
+      const arr = list.slice();
+      const j = i + dir;
+      if (j < 0 || j >= arr.length) return arr;
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+      return arr;
+    });
+  }
+
   const patients = (window.scopePatients ? window.scopePatients(DATA.patients) : DATA.patients) || [];
   const [patientId, setPatientId] = React.useState("");
   const therapists = (DATA.therapists || []);
   const [therapistId, setTherapistId] = React.useState("");
 
-  // Expected end — derived from the start date plus either the template's
-  // recovery window or the sessions/frequency pair. Display-only.
+  // Expected end — derived from the start date plus either the recovery
+  // window or the sessions/frequency pair. Display-only.
   const expectedEnd = React.useMemo(() => {
     const start = startDate ? new Date(startDate + "T00:00:00") : null;
     if (!start || isNaN(start)) return "—";
-    let days = tplObj && tplObj.expected_recovery_days ? Number(tplObj.expected_recovery_days) : 0;
+    let days = expectedRecoveryDays ? Number(expectedRecoveryDays) : 0;
     if (!days) {
       const total = Number(totalSessions) || 0;
       const freq  = Number(frequency) || 0;
@@ -217,34 +259,39 @@ function TreatmentPlanCreate({ onCancel, onSave, template }) {
     if (!days) return "—";
     const end = new Date(start.getTime() + days * 86400000);
     return end.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-  }, [startDate, totalSessions, frequency, tplObj]);
+  }, [startDate, totalSessions, frequency, expectedRecoveryDays]);
 
   // Save the treatment as a real PostgreSQL record. The doctor supplies
-  // patient + therapist; everything else is already filled (from the
-  // template or by hand) and stays editable up to this point. Saving
-  // NEVER touches the template — the RPC copies values and links back
-  // via template_id + template_version for audit.
+  // patient + therapist; every other field is already filled (from the
+  // template or edited by hand). Saving NEVER touches the template —
+  // the RPC links back via template_id + template_version for audit.
   async function doSaveTreatment(statusVal) {
     if (saving) return;
     if (!patientId)   { if (window.showToast) window.showToast("اختر المريض", "error"); return; }
     if (!therapistId) { if (window.showToast) window.showToast("اختر الأخصائي المسؤول", "error"); return; }
     if (!diag.trim()) { if (window.showToast) window.showToast("التشخيص مطلوب", "error"); return; }
     setSaving(true);
-    const tplModalities = (tplObj && Array.isArray(tplObj.modalities)) ? tplObj.modalities : [];
-    const keptModalities = tplModalities.filter(m => modalities.includes(m));
-    const methodNames = modalities.filter(m => !keptModalities.includes(m));
+    const cleanExercises = exercises
+      .map(e => ({ ...e, name: String(e.name || '').trim() }))
+      .filter(e => e.name);
     const payload = {
       patient_id:   patientId,
       therapist_id: therapistId,
       template_id:  (tplObj && tplObj.template_id) || null,
-      name:         tplName || diag.trim(),
+      name:         (tplName || diag.trim()),
+      category:     category.trim() || null,
+      body_part:    bodyPart.trim() || null,
       diagnosis:    diag.trim(),
       goals:        goalsText.split("\n").map(g => g.trim()).filter(Boolean),
-      methods:      methodNames.map(name => ({ name })),
-      modalities:   keptModalities,
+      exercises:    cleanExercises,
+      methods:      methods.map(name => ({ name })),
+      home_instructions:      homeInstr,
       notes,
-      estimated_sessions: totalSessions === "" ? null : Number(totalSessions),
-      weekly_frequency:   frequency === "" ? null : Number(frequency),
+      warnings,
+      followup_instructions:  followupInstr,
+      estimated_sessions:     totalSessions === "" ? null : Number(totalSessions),
+      weekly_frequency:       frequency === "" ? null : Number(frequency),
+      expected_recovery_days: expectedRecoveryDays === "" ? null : Number(expectedRecoveryDays),
       start_date:   startDate || null,
       status:       statusVal,
     };
@@ -302,7 +349,7 @@ function TreatmentPlanCreate({ onCancel, onSave, template }) {
 
       <div className="rgrid c-lg" style={{"--gtc":"1.4fr 1fr"}}>
         <div className="card card-pad">
-          <div className="h3" style={{marginBottom:14}}>الخطة details</div>
+          <div className="h3" style={{marginBottom:14}}>تفاصيل الخطة</div>
           <div className="rgrid c-sm" style={{"--gtc":"repeat(2,1fr)",gap:14}}>
             <Field label="مريض" required>
               <PatientCombobox value={patientId} onChange={setPatientId} patients={patients}/>
@@ -310,12 +357,17 @@ function TreatmentPlanCreate({ onCancel, onSave, template }) {
             <Field label="الأخصائي المسؤول" required>
               <TherapistCombobox value={therapistId} onChange={setTherapistId} therapists={therapists}/>
             </Field>
+            <Field label="اسم الخطة" span={2}>
+              <input className="input" value={tplName} onChange={e=>setTplName(e.target.value)} placeholder="اسم القالب أو التشخيص"/>
+            </Field>
+            <Field label="الفئة"><input className="input" value={category} onChange={e=>setCategory(e.target.value)}/></Field>
+            <Field label="الجزء المستهدف"><input className="input" value={bodyPart} onChange={e=>setBodyPart(e.target.value)}/></Field>
             <Field label="التشخيص" required span={2}><input className="input" value={diag} onChange={e=>setDiag(e.target.value)}/></Field>
             <Field label="الأهداف (هدف بكل سطر)" span={2}><textarea className="input" style={{height:100,padding:10}} value={goalsText} onChange={e=>setGoalsText(e.target.value)}/></Field>
             <Field label="طرق العلاج" span={2}>
               <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
                 {activeMethods.map(m=>{
-                  const on = modalities.includes(m.name);
+                  const on = methods.includes(m.name);
                   const IconCmp = m.icon && I[m.icon];
                   // When the method has a color, use it for selected background
                   // and border. Otherwise fall back to the default blue accent.
@@ -329,7 +381,7 @@ function TreatmentPlanCreate({ onCancel, onSave, template }) {
                     ? (m.color || "var(--blue-900)")
                     : "var(--ink-700)";
                   return (
-                    <button key={m.id} type="button" onClick={()=>toggleModality(m.name)} className="btn btn-secondary"
+                    <button key={m.id} type="button" onClick={()=>toggleMethod(m.name)} className="btn btn-secondary"
                       style={{fontSize:12,padding:"6px 10px",background:bg,borderColor:bd,color:fg,display:"inline-flex",alignItems:"center",gap:6}}>
                       {on
                         ? <span style={{fontWeight:600}}>✓</span>
@@ -338,6 +390,12 @@ function TreatmentPlanCreate({ onCancel, onSave, template }) {
                     </button>
                   );
                 })}
+                {methods.filter(n => !activeMethods.some(m => m.name === n)).map(n => (
+                  <span key={n} style={{fontSize:12,padding:"6px 10px",background:"#fff",border:"1px dashed var(--blue-500)",borderRadius:8,color:"var(--blue-900)",display:"inline-flex",alignItems:"center",gap:6}}>
+                    <span style={{fontWeight:600}}>✓</span>{n}
+                    <button type="button" className="btn btn-ghost" style={{padding:"0 2px"}} onClick={()=>toggleMethod(n)}><I.X size={10}/></button>
+                  </span>
+                ))}
                 {canManageTx && (
                   <button
                     type="button"
@@ -350,7 +408,25 @@ function TreatmentPlanCreate({ onCancel, onSave, template }) {
                 )}
               </div>
             </Field>
-            <Field label="ملاحظات" span={2}><textarea className="input" style={{height:80,padding:10}} placeholder="ملاحظات داخلية لفريق الرعاية" value={notes} onChange={e=>setNotes(e.target.value)}/></Field>
+            <div style={{gridColumn:"1 / -1"}}>
+              <TemplateExercises
+                list={exercises}
+                onAdd={addExercise} onChange={setExercise}
+                onRemove={removeExercise} onMove={moveExercise}
+              />
+            </div>
+            <Field label="تعليمات المريض في المنزل" span={2}>
+              <textarea className="input" style={{height:70,padding:10}} value={homeInstr} onChange={e=>setHomeInstr(e.target.value)}/>
+            </Field>
+            <Field label="تحذيرات" span={2}>
+              <textarea className="input" style={{height:60,padding:10}} value={warnings} onChange={e=>setWarnings(e.target.value)}/>
+            </Field>
+            <Field label="تعليمات المتابعة" span={2}>
+              <textarea className="input" style={{height:60,padding:10}} value={followupInstr} onChange={e=>setFollowupInstr(e.target.value)}/>
+            </Field>
+            <Field label="ملاحظات داخلية" span={2}>
+              <textarea className="input" style={{height:80,padding:10}} placeholder="ملاحظات لفريق الرعاية" value={notes} onChange={e=>setNotes(e.target.value)}/>
+            </Field>
           </div>
         </div>
         <div className="card card-pad">
@@ -363,6 +439,10 @@ function TreatmentPlanCreate({ onCancel, onSave, template }) {
             <option value="3">3× per week</option>
             {!["","1","2","3"].includes(frequency) && <option value={frequency}>{frequency}× per week</option>}
           </select></Field>
+          <div style={{height:12}}/>
+          <Field label="مدّة التعافي المتوقعة (أيام)">
+            <input className="input" type="number" value={expectedRecoveryDays} onChange={e=>setExpectedRecoveryDays(e.target.value)}/>
+          </Field>
           <div style={{height:12}}/>
           <Field label="تاريخ البدء"><input className="input" type="date" value={startDate} onChange={e=>setStartDate(e.target.value)}/></Field>
           <div style={{height:12}}/>
@@ -384,8 +464,8 @@ function TreatmentPlanCreate({ onCancel, onSave, template }) {
           onSaved={(m) => {
             // Auto-select the newly created method so it's already part of
             // the plan when the doctor closes the modal.
-            if (m && m.name && !modalities.includes(m.name)) {
-              setModalities(list => [...list, m.name]);
+            if (m && m.name && !methods.includes(m.name)) {
+              setMethods(list => [...list, m.name]);
             }
           }}
         />
@@ -396,7 +476,7 @@ function TreatmentPlanCreate({ onCancel, onSave, template }) {
 
 // ═══════════════════════════════════════════════════════════════════
 // TxMethodModal — "طرق علاج أخرى"
-// Doctors/admins add custom modalities to the shared library. Search
+// Doctors/admins add custom treatment methods to the shared library. Search
 // existing rows first to avoid duplicates; the RPC also enforces the
 // name uniqueness server-side. Edit + archive are inline actions on
 // each result so managing the library never leaves the modal.
@@ -6061,11 +6141,6 @@ function __tplPerms() {
   };
 }
 
-const TPL_BUILTIN_MODALITIES = [
-  'الموجات فوق الصوتية','الليزر','التحفيز الكهربي','العلاج الحراري',
-  'العلاج بالثلج','العلاج اليدوي','الوخز الجاف','المساج','العلاج المائي',
-];
-
 // `pickerOnly` locks the modal into a search + preview + apply flow. All
 // management actions (create/edit/duplicate/archive/delete) are hidden
 // so this same component can back both the Treatment Plan picker and,
@@ -6287,7 +6362,7 @@ function TemplateRow({ t, perms, onUse, onPreview, onEdit, onDuplicate, onArchiv
           {[t.diagnosis, t.category, t.body_part].filter(Boolean).join(' · ') || '—'}
         </div>
         <div className="muted" style={{fontSize:11,marginTop:2}}>
-          {(t.exercises?.length || 0)} تمرين · {(t.methods?.length || 0)} طريقة · {(t.modalities?.length || 0)} وسيلة
+          {(t.exercises?.length || 0)} تمرين · {(t.methods?.length || 0)} طريقة
           {t.estimated_sessions ? ` · ${t.estimated_sessions} جلسة` : ''}
         </div>
       </div>
@@ -6335,7 +6410,7 @@ function TemplateEditorModal({ templateId, onClose, onSaved }) {
   const [state, setState]       = React.useState({
     name:'', category:'', diagnosis:'', body_part:'',
     goals: [''],
-    exercises: [], methods: [], modalities: [],
+    exercises: [], methods: [],
     home_instructions:'', notes:'', warnings:'', followup_instructions:'',
     estimated_sessions:'', weekly_frequency:'', expected_recovery_days:'',
   });
@@ -6355,7 +6430,6 @@ function TemplateEditorModal({ templateId, onClose, onSaved }) {
           goals: Array.isArray(t.goals) && t.goals.length ? t.goals : [''],
           exercises: Array.isArray(t.exercises) ? t.exercises : [],
           methods: Array.isArray(t.methods) ? t.methods : [],
-          modalities: Array.isArray(t.modalities) ? t.modalities : [],
           home_instructions: t.home_instructions || '',
           notes: t.notes || '',
           warnings: t.warnings || '',
@@ -6414,16 +6488,6 @@ function TemplateEditorModal({ templateId, onClose, onSaved }) {
   }
   function removeMethod(name) {
     up('methods', state.methods.filter(m => (m.name || m) !== name));
-  }
-
-  function toggleModality(name) {
-    if (state.modalities.includes(name)) up('modalities', state.modalities.filter(m => m !== name));
-    else                                  up('modalities', [...state.modalities, name]);
-  }
-  function addCustomModality(name) {
-    const n = String(name || '').trim();
-    if (!n || state.modalities.includes(n)) return;
-    up('modalities', [...state.modalities, n]);
   }
 
   async function doSave() {
@@ -6495,11 +6559,6 @@ function TemplateEditorModal({ templateId, onClose, onSaved }) {
             onToggle={toggleMethod}
             onAddCustom={addCustomMethod}
             onRemove={removeMethod}
-          />
-          <TemplateModalities
-            selected={state.modalities}
-            onToggle={toggleModality}
-            onAddCustom={addCustomModality}
           />
 
           <Field label="تعليمات المريض في المنزل">
@@ -6623,46 +6682,6 @@ function TemplateMethods({ selected, library, onToggle, onAddCustom, onRemove })
   );
 }
 
-function TemplateModalities({ selected, onToggle, onAddCustom }) {
-  const [custom, setCustom] = React.useState('');
-  return (
-    <div className="card card-pad" style={{background:'var(--ink-50)'}}>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-        <strong style={{fontSize:13.5}}>الوسائل العلاجية</strong>
-        <span className="muted" style={{fontSize:11}}>{selected.length} محدّدة</span>
-      </div>
-      <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:8}}>
-        {TPL_BUILTIN_MODALITIES.map(m => {
-          const on = selected.includes(m);
-          return (
-            <button key={m} type="button" onClick={()=>onToggle(m)}
-              className="btn btn-secondary"
-              style={{fontSize:12,padding:'5px 9px',background: on?'var(--blue-50)':'#fff',borderColor: on?'var(--blue-500)':'var(--ink-200)',color: on?'var(--blue-900)':'var(--ink-700)'}}>
-              {on ? '✓' : '+'} {m}
-            </button>
-          );
-        })}
-      </div>
-      {selected.filter(m => !TPL_BUILTIN_MODALITIES.includes(m)).length > 0 && (
-        <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:8}}>
-          {selected.filter(m => !TPL_BUILTIN_MODALITIES.includes(m)).map((m,i)=>(
-            <span key={i} style={{fontSize:12,padding:'4px 8px',background:'#fff',border:'1px dashed var(--blue-500)',borderRadius:8,color:'var(--blue-900)',display:'inline-flex',alignItems:'center',gap:6}}>
-              {m}
-              <button className="btn btn-ghost" style={{padding:'0 2px'}} onClick={()=>onToggle(m)}><I.X size={10}/></button>
-            </span>
-          ))}
-        </div>
-      )}
-      <div style={{display:'flex',gap:6}}>
-        <input className="input" style={{fontSize:12}} value={custom} onChange={e=>setCustom(e.target.value)} placeholder="أضف وسيلة مخصّصة"/>
-        <button className="btn btn-secondary" style={{fontSize:12}} onClick={()=>{ onAddCustom(custom); setCustom(''); }}>
-          <I.Plus size={12}/> إضافة
-        </button>
-      </div>
-    </div>
-  );
-}
-
 // ── Preview + Versions ────────────────────────────────────────
 function TemplatePreviewModal({ templateId, onClose, onUse }) {
   window.useDataVersion && window.useDataVersion();
@@ -6756,13 +6775,6 @@ function TemplatePreviewModal({ templateId, onClose, onUse }) {
             <PreviewSection title="طرق العلاج">
               <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
                 {t.methods.map((m,i)=><span key={i} className="badge b-blue" style={{fontSize:11.5}}>{m.name || m}</span>)}
-              </div>
-            </PreviewSection>
-          )}
-          {Array.isArray(t.modalities) && t.modalities.length > 0 && (
-            <PreviewSection title="الوسائل العلاجية">
-              <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-                {t.modalities.map((m,i)=><span key={i} className="badge b-grey" style={{fontSize:11.5}}>{m}</span>)}
               </div>
             </PreviewSection>
           )}

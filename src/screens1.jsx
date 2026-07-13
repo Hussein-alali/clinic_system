@@ -1330,7 +1330,7 @@ function PatientTreatmentPlan({ p, t }) {
   // Initialized from the saved treatment record when one is passed
   // (`t` — a row from the treatments table, values copied from the
   // template at creation time); otherwise from the patient's record
-  // with empty goals/modalities for the clinician to fill in.
+  // with empty goals/methods for the clinician to fill in.
   const [plan, setPlan] = React.useState(() => {
     if (t) {
       const thName = t.therapist_name || t.therapist_id || "—";
@@ -1338,10 +1338,7 @@ function PatientTreatmentPlan({ p, t }) {
       return {
         goals: (Array.isArray(t.goals) ? t.goals : []).map(g =>
           typeof g === "string" ? { g, done: false } : { g: g.g || "", done: !!g.done }),
-        modalities: [
-          ...(Array.isArray(t.methods) ? t.methods.map(m => m.name || m) : []),
-          ...(Array.isArray(t.modalities) ? t.modalities : []),
-        ].filter(Boolean),
+        modalities: (Array.isArray(t.methods) ? t.methods.map(m => m.name || m) : []).filter(Boolean),
         notes: t.notes || "",
         therapist: { initials: thName !== "—" ? initialsOf(thName) : "—", name: thName, spec: (thRow && thRow.spec) || "" },
         diagnosis: t.diagnosis || "—",

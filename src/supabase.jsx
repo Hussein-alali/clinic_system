@@ -1248,7 +1248,7 @@ const QuickPay = {
 
 // ══════════════════════════════════════════════════════════════
 // Treatment Methods API ("طرق علاج أخرى")
-// Shared library of modalities that doctors can extend at run-time.
+// Shared library of treatment methods that doctors can extend at run-time.
 // The list is stored in DATA.treatmentMethods; every write also
 // hits the DB (via RPC when Supabase is on) so custom methods are
 // available to every terminal and every future treatment plan.
@@ -2076,7 +2076,6 @@ function __normalizeTemplate(input) {
         notes:       e?.notes || '',
       })).filter(e => e.name),
       methods:               arr(input?.methods).map(m => (typeof m === 'string') ? { name: m } : m).filter(m => m && m.name),
-      modalities:            arr(input?.modalities).map(m => String(m||'').trim()).filter(Boolean),
       home_instructions:     input?.home_instructions || '',
       notes:                 input?.notes || '',
       warnings:              input?.warnings || '',
