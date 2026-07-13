@@ -2171,7 +2171,7 @@ function QuickBookingModal({ onClose, onDone }) {
         status: "مؤكد",
         type: doctor ? `جلسة + استشارة ${dept ? dept.name_ar : "طبيب"}` : "جلسة علاج طبيعي",
         notes: form.notes.trim(),
-        dur: 30,
+        dur: (window.calendarConfig ? window.calendarConfig().slotMinutes : 30),
         created_at: new Date().toISOString(),
       });
 
@@ -2400,7 +2400,7 @@ async function generateFromSchedule(patient, schedule, { startIso, sessions } = 
       status: "مؤكد",
       type: "جلسة علاج طبيعي",
       notes: "موعد مُنشأ من الجدول الثابت",
-      dur: 45,
+      dur: (window.calendarConfig ? window.calendarConfig().slotMinutes : 45),
       created_at: new Date().toISOString(),
     });
     created.push(row);
@@ -2553,10 +2553,17 @@ window.RecurringScheduleModal = RecurringScheduleModal;
 function CalendarView({ dateOffset, setDateOffset }) {
   // Subscribe to data-updated events so external mutations (new
   // booking, quick payment, quick reschedule from another tab) flow
-  // in without a page reload.
+  // in without a page reload. Also re-renders on clinic-settings
+  // changes, so admin edits to working hours apply immediately.
   window.useDataVersion && window.useDataVersion();
 
-  const hours = ["08:00","09:00","10:00","11:00","12:00","13:00","14:00","15:00","16:00","17:00","18:00"];
+  // Working window from clinic settings (start/end/slot duration) —
+  // nothing here is hardcoded anymore.
+  const calCfg = window.calendarConfig ? window.calendarConfig()
+    : { start:"08:00", end:"18:00", slotMinutes:30, startMinutes:480, endMinutes:1080 };
+  const hours = window.calendarHours ? window.calendarHours()
+    : ["08:00","09:00","10:00","11:00","12:00","13:00","14:00","15:00","16:00","17:00","18:00"];
+  const gridStartMin = calCfg.startMinutes - (calCfg.startMinutes % 60);
   // Four tabs: "day" (all appts, chronological list), "therapist"
   // (therapists-only grid), "doctor" (doctors-only grid), "week"
   // (7-day summary). Role-restricted users get pinned to their tab.
@@ -2616,23 +2623,23 @@ function CalendarView({ dateOffset, setDateOffset }) {
     name:      t.name,
     role:      "الأخصائي",
     subtitle:  t.spec || "",
-    hours:     t.schedule || t.hours || "08:00 - 18:00",
+    hours:     t.schedule || t.hours || `${calCfg.start} - ${calCfg.end}`,
     load:      (t.load != null && t.max != null) ? `${t.load}/${t.max}` : "",
     color:     t.color || "#7BBDE8",
     _row:      t,
     _kind:     "therapist",
-  })), [therapists]);
+  })), [therapists, calCfg.start, calCfg.end]);
   const doctorCols = React.useMemo(() => doctors.map(d => ({
     key:       "dr:" + (d.id || d.name),
     name:      d.name,
     role:      "طبيب",
     subtitle:  d.specialization || "",
-    hours:     d.schedule || d.hours || "08:00 - 18:00",
+    hours:     d.schedule || d.hours || `${calCfg.start} - ${calCfg.end}`,
     load:      "",
     color:     d.color || "#7E6BD3",
     _row:      d,
     _kind:     "doctor",
-  })), [doctors]);
+  })), [doctors, calCfg.start, calCfg.end]);
   // Combined map — used by day/week views to look up which column an
   // appointment belongs to for color + display.
   const staffCols = React.useMemo(() => [...therapistCols, ...doctorCols],
@@ -2670,17 +2677,26 @@ function CalendarView({ dateOffset, setDateOffset }) {
   // therapist, doctor, week) — they remain in the DB and in the list tab.
   const scopedAll = window.scopeAppts ? window.scopeAppts(DATA.appts || []) : (DATA.appts || []);
   const scoped = scopedAll.filter(a => !isCancelledAppt(a));
-  // For therapist/doctor grids, drop appts that don't belong to that role.
+  // For therapist/doctor grids, keep every appointment assigned to that
+  // role. An appointment can carry BOTH a therapist and a doctor (session
+  // + consultation) — it must appear in the therapist's calendar too, so
+  // membership is inclusive, never "therapist only if no doctor".
   const dayAppts = React.useMemo(() => {
     return scoped
       .filter(a => apptDateIso(a) === viewIso)
       .filter(a => {
-        if (viewMode === "therapist") return isTherapistAppt(a) && !isDoctorAppt(a);
+        if (viewMode === "therapist") return isTherapistAppt(a);
         if (viewMode === "doctor")    return isDoctorAppt(a);
         return true;
       })
       .map(a => ({ ...a, colIndex: columnIndexOf(a) }));
   }, [scoped, viewIso, visibleStaffCols, viewMode]);
+  // Grid views can only render appointments routable to a visible column.
+  // Anything left over (inactive/unknown specialist) must not silently
+  // vanish — surface a count so the receptionist knows to fix the row.
+  const unroutedCount = (viewMode === "therapist" || viewMode === "doctor")
+    ? dayAppts.filter(a => a.colIndex === -1 && a.status !== "متاح").length
+    : 0;
 
   // ── Week scaffolding (Saturday-start clinic week) ──
   const weekStart = React.useMemo(() => {
@@ -2712,11 +2728,12 @@ function CalendarView({ dateOffset, setDateOffset }) {
   const dayFree    = dayAppts.filter(a => a.status === "متاح").length;
   const dayPending = dayAppts.filter(a => a.status === "معلّق").length;
 
+  // Minutes from the top of the grid (configured start hour, not 08:00).
   const minutesFromHour = (t) => {
     const parts = (t || "").split(":").map(Number);
-    const h = Number.isFinite(parts[0]) ? parts[0] : 8;
+    const h = Number.isFinite(parts[0]) ? parts[0] : Math.floor(gridStartMin / 60);
     const m = Number.isFinite(parts[1]) ? parts[1] : 0;
-    return (h-8)*60 + m;
+    return h * 60 + m - gridStartMin;
   };
 
   // ── Persist a move (drag-drop or reschedule modal) ──
@@ -2790,6 +2807,11 @@ function CalendarView({ dateOffset, setDateOffset }) {
         {canSeeTab("week")      && <button className={viewMode==="week"      ? "on" : ""} onClick={()=>setViewMode("week")}>الأسبوع</button>}
       </div>
       <div style={{flex:1}}/>
+      {unroutedCount > 0 && (
+        <span style={{fontSize:12,color:"var(--red)"}} title="مواعيد مسندة لأخصائي/طبيب غير موجود في الأعمدة الظاهرة (غير نشط أو محذوف) — راجعها من تبويب القائمة">
+          ⚠ {unroutedCount} موعد خارج الشبكة
+        </span>
+      )}
       <span className="muted" style={{fontSize:12}}>{dayBooked} محجوز · {dayFree} متاح · {dayPending} بانتظار</span>
     </div>
   );
@@ -2835,8 +2857,13 @@ function CalendarView({ dateOffset, setDateOffset }) {
                 e.preventDefault();
                 const rect = e.currentTarget.getBoundingClientRect();
                 const offsetY = e.clientY - rect.top;
-                const totalMin = Math.round(offsetY / 54) * 15;
-                const hh = Math.floor(8 + totalMin/60);
+                // Snap the drop to the configured slot duration, measured
+                // from the grid's configured start hour (54px per hour).
+                const snap = calCfg.slotMinutes;
+                const rawMin = gridStartMin + (offsetY / 54) * 60;
+                const totalMin = Math.max(calCfg.startMinutes,
+                  Math.min(calCfg.endMinutes, Math.round(rawMin / snap) * snap));
+                const hh = Math.floor(totalMin / 60);
                 const mm = totalMin % 60;
                 const newTime = `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
                 const orig = dayAppts.find(x => x.id === draggedId);
@@ -2874,7 +2901,7 @@ function CalendarView({ dateOffset, setDateOffset }) {
               {/* now indicator — only on today's column */}
               {col===0 && dateOffset===0 && (() => {
                 const now = new Date();
-                const nowMin = (now.getHours()-8)*60 + now.getMinutes();
+                const nowMin = now.getHours()*60 + now.getMinutes() - gridStartMin;
                 if (nowMin < 0 || nowMin > hours.length*60) return null;
                 return (
                   <div style={{position:"absolute",top:(nowMin/60)*54-2,left:0,right:0,height:2,background:"var(--red)",zIndex:5}}>
@@ -2884,9 +2911,12 @@ function CalendarView({ dateOffset, setDateOffset }) {
               })()}
 
               {dayAppts.filter(a=>a.colIndex===col).map(a=>{
-                const top = (minutesFromHour(a.time)/60)*54;
-                const dur = Number(a.dur) || 30;
-                const h = (dur/60)*54;
+                const gridH = hours.length * 54;
+                // Clamp into the visible grid so an appointment outside the
+                // configured window is still reachable instead of hidden.
+                const top = Math.max(0, Math.min(gridH - 30, (minutesFromHour(a.time)/60)*54));
+                const dur = Number(a.dur) || calCfg.slotMinutes;
+                const h = Math.min((dur/60)*54, gridH - top);
                 const isAvail = a.status==="متاح";
                 const c = s.color;
                 const bg = isAvail ? "transparent" : `${c}1A`;
@@ -3127,7 +3157,8 @@ function RescheduleModal({ appt, onClose, onSave, therapists }) {
 
   const AR_WEEKDAYS = ["الأحد","الإثنين","الثلاثاء","الأربعاء","الخميس","الجمعة","السبت"];
   const AR_MONTHS   = ["يناير","فبراير","مارس","أبريل","مايو","يونيو","يوليو","أغسطس","سبتمبر","أكتوبر","نوفمبر","ديسمبر"];
-  const timeSlots = [
+  // Bookable slots from clinic settings (working window + slot duration).
+  const timeSlots = window.calendarSlots ? window.calendarSlots() : [
     "08:00","08:30","09:00","09:30","10:00","10:30","11:00","11:30",
     "12:00","12:30","13:00","13:30","14:00","14:30","15:00","15:30",
     "16:00","16:30","17:00","17:30","18:00"
@@ -3473,17 +3504,18 @@ function AppointmentList() {
 }
 
 // ── BookingFlow — 5 steps ──────────────────────────────────────
-// Standard hourly slots used for "next available" hints.
-const STD_SLOTS = ["09:00","10:00","11:00","12:00","13:00","14:00","15:00","16:00","17:00"];
-// Earliest free standard slot for a doctor across the next 14 days.
+// Earliest free slot for a doctor across the next 14 days, using the
+// configured working window (no hardcoded hours).
 function nextAvailableLabel(doctorId) {
+  const slots = window.calendarSlots ? window.calendarSlots()
+    : ["09:00","10:00","11:00","12:00","13:00","14:00","15:00","16:00","17:00"];
   for (let i = 0; i < 14; i++) {
     const d = new Date(Date.now() + i * 864e5);
     const iso = d.toISOString().slice(0, 10);
     const booked = new Set((DATA.appts || [])
       .filter(a => a.doctor_id === doctorId && a.date === iso && a.status !== "ملغي")
       .map(a => a.time));
-    const free = STD_SLOTS.find(t => !booked.has(t));
+    const free = slots.find(t => !booked.has(t));
     if (free) {
       const lbl = i === 0 ? "اليوم" : i === 1 ? "غدًا" : d.toLocaleDateString("ar-EG", { day: "numeric", month: "short" });
       return `${lbl} ${free}`;
@@ -3596,7 +3628,7 @@ function BookingFlow({ onDone }) {
         status: "مؤكد",
         type: doctor ? `جلسة + استشارة ${dept ? dept.name_ar : "طبيب"}` : "جلسة علاج طبيعي",
         notes: picks.notes || "",
-        dur: 45,
+        dur: (window.calendarConfig ? window.calendarConfig().slotMinutes : 45),
         created_at: new Date().toISOString(),
       });
       // "Update Preferred Time": only rewrite the saved fixed time when the
@@ -3936,7 +3968,9 @@ function DatePick({ value, onPick, schedule, patient, onGenerated }) {
 }
 
 function SlotPick({ picks, update, schedule }) {
-  const ALL = ["08:30","09:00","09:30","10:00","10:30","11:00","11:30","12:00","13:00","13:30","14:00","14:30","15:00","15:30","16:00","16:30","17:00"];
+  // Slots come from clinic settings (working window + slot duration).
+  const ALL = window.calendarSlots ? window.calendarSlots()
+    : ["08:30","09:00","09:30","10:00","10:30","11:00","11:30","12:00","13:00","13:30","14:00","14:30","15:00","15:30","16:00","16:30","17:00"];
   const morning = ALL.filter(t => t < "12:00");
   const afternoon = ALL.filter(t => t >= "12:00");
   const doctor = picks.doctorId ? (DATA.doctors || []).find(d => d.id === picks.doctorId) : null;
@@ -3987,7 +4021,7 @@ function SlotPick({ picks, update, schedule }) {
     <div>
       <div className="h2" style={{marginBottom:6}}>اختر الوقت</div>
       <div className="muted" style={{marginBottom:18,fontSize:13}}>
-        {picks.therapist ? `المتاح لـ${picks.therapist}` : "المتاح"} · {picks.date || "—"} · جلسات 45 دقيقة
+        {picks.therapist ? `المتاح لـ${picks.therapist}` : "المتاح"} · {picks.date || "—"} · جلسات {window.calendarConfig ? window.calendarConfig().slotMinutes : 45} دقيقة
       </div>
       {preferredTime && (
         <div style={{display:"flex",alignItems:"center",gap:8,fontSize:12.5,marginBottom:14,padding:"8px 12px",background:"var(--blue-50)",border:"1px solid var(--blue-100)",borderRadius:8}}>

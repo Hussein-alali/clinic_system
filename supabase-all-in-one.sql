@@ -3983,7 +3983,30 @@ alter table if exists treatments           drop column if exists modalities;
 -- both of which no longer reference the column.
 
 -- ┌────────────────────────────────────────────────────────────────────┐
--- │ 11. SEED — main admin account (skipped if it already exists)
+-- │ 11. MIGRATION — configurable calendar working hours
+-- │ (source: supabase-migration-calendar-hours-2026-07-13.sql)
+-- └────────────────────────────────────────────────────────────────────┘
+
+-- ═══════════════════════════════════════════════════════════════
+-- Migration: configurable calendar working hours (2026-07-13)
+--
+-- The calendar grid and every time-slot picker previously hardcoded
+-- 08:00–18:00. The working window now lives in clinic settings:
+--   • calendar_start / calendar_end — visible time range
+--   • appointment_duration (already existed) — slot duration
+-- Every calendar view reads these live, so changing them in Settings
+-- updates all therapist/doctor calendars immediately.
+-- Idempotent — safe to re-run.
+-- ═══════════════════════════════════════════════════════════════
+
+alter table clinic_settings add column if not exists calendar_start text default '08:00';
+alter table clinic_settings add column if not exists calendar_end   text default '18:00';
+
+-- Ask PostgREST to refresh its schema cache immediately.
+notify pgrst, 'reload schema';
+
+-- ┌────────────────────────────────────────────────────────────────────┐
+-- │ 12. SEED — main admin account (skipped if it already exists)
 -- │ (source: seed-admin.sql)
 -- └────────────────────────────────────────────────────────────────────┘
 
@@ -4090,7 +4113,7 @@ begin
 end $$;
 
 -- ┌────────────────────────────────────────────────────────────────────┐
--- │ 12. SEED — clinic staff: therapists + receptionist
+-- │ 13. SEED — clinic staff: therapists + receptionist
 -- │ (source: seed-staff.sql)
 -- └────────────────────────────────────────────────────────────────────┘
 

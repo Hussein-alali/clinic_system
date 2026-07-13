@@ -24,7 +24,9 @@ supabase/
     │                                        # auth_uid/contact columns on
     │                                        # doctors + therapists, and the
     │                                        # receptionists table (PGRST204 fix)
-    └── 20260713020000_drop_modalities.sql   # drop removed `modalities` column
+    ├── 20260713020000_drop_modalities.sql   # drop removed `modalities` column
+    └── 20260713030000_calendar_hours.sql    # configurable calendar working
+                                             # hours (calendar_start/_end)
 ```
 
 Every statement is **idempotent** (`create ... if not exists`,
