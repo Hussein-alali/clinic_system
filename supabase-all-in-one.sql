@@ -3884,7 +3884,106 @@ create policy "therapist writes own bookings" on bookings for all using (
 );
 
 -- ┌────────────────────────────────────────────────────────────────────┐
--- │ 9. SEED — main admin account (skipped if it already exists)
+-- │ 9. MIGRATION — staff roster columns: auth_uid/contact fields on
+-- │    doctors + therapists, receptionists table (fixes PGRST204)
+-- │ (source: supabase-migration-staff-roster-2026-07-13.sql)
+-- └────────────────────────────────────────────────────────────────────┘
+
+-- ═══════════════════════════════════════════════════════════════
+-- Migration: staff roster columns (2026-07-13)
+-- Fixes PGRST204 ("Could not find the 'auth_uid' column of 'doctors'
+-- in the schema cache") when saving doctors / therapists /
+-- receptionists from the staff-management screen.
+--
+-- The roster UI writes contact + account-link fields (auth_uid, phone,
+-- email, license_number, notes, updated_at) that the original tables
+-- never gained, and the receptionists table was never created at all.
+-- Idempotent — safe to re-run.
+-- ═══════════════════════════════════════════════════════════════
+
+-- ── therapists: roster/profile fields ─────────────────────────
+alter table therapists add column if not exists department_id  text references departments(id) on delete set null;
+alter table therapists add column if not exists phone          text;
+alter table therapists add column if not exists email          text;
+alter table therapists add column if not exists license_number text;
+alter table therapists add column if not exists notes          text;
+alter table therapists add column if not exists active         boolean default true;
+alter table therapists add column if not exists auth_uid       uuid;   -- links to auth.users.id
+alter table therapists add column if not exists updated_at     timestamptz default now();
+-- Used by RLS policies that resolve the logged-in therapist by account.
+create index if not exists therapists_auth_uid_idx on therapists(auth_uid);
+
+-- ── doctors: roster/profile fields ─────────────────────────────
+alter table doctors add column if not exists phone          text;
+alter table doctors add column if not exists email          text;
+alter table doctors add column if not exists license_number text;
+alter table doctors add column if not exists notes          text;
+alter table doctors add column if not exists auth_uid       uuid;      -- links to auth.users.id
+alter table doctors add column if not exists updated_at     timestamptz default now();
+create index if not exists doctors_auth_uid_idx on doctors(auth_uid);
+
+-- ── receptionists (roster) ─────────────────────────────────────
+create table if not exists receptionists (
+  id          text primary key,
+  name        text not null,
+  phone       text,
+  email       text,
+  notes       text,
+  active      boolean default true,
+  auth_uid    uuid,                                -- links to auth.users.id
+  created_at  timestamptz default now(),
+  updated_at  timestamptz default now()
+);
+create index if not exists receptionists_auth_uid_idx on receptionists(auth_uid);
+
+alter table receptionists enable row level security;
+
+-- Same posture as doctors/therapists: every staff role can read the
+-- roster; only admin manages it.
+drop policy if exists "staff read receptionists" on receptionists;
+create policy "staff read receptionists" on receptionists for select using (
+  public.app_role() in ('admin','receptionist','doctor','therapist')
+);
+drop policy if exists "admin write receptionists" on receptionists;
+create policy "admin write receptionists" on receptionists for all using (
+  public.app_role() = 'admin'
+) with check (
+  public.app_role() = 'admin'
+);
+
+-- Ask PostgREST to refresh its schema cache immediately so the new
+-- columns are usable without waiting for the automatic reload.
+notify pgrst, 'reload schema';
+
+-- ┌────────────────────────────────────────────────────────────────────┐
+-- │ 10. MIGRATION — drop the removed `modalities` column from
+-- │     treatment_templates and treatments
+-- │ (source: supabase-migration-drop-modalities-2026-07-13.sql)
+-- └────────────────────────────────────────────────────────────────────┘
+
+-- ============================================================
+-- Migration 2026-07-13 — Drop `modalities` column
+--
+-- The "الوسائل العلاجية" concept was removed from the product.
+-- The treatment methods (طرق العلاج) field now covers every
+-- clinical modality doctors select. This migration drops the
+-- redundant column from both template and treatment tables and
+-- rebuilds the RPCs that used to touch it.
+--
+-- Idempotent: safe to re-run.
+-- ============================================================
+
+alter table if exists treatment_templates drop column if exists modalities;
+alter table if exists treatments           drop column if exists modalities;
+
+-- The RPCs (create_treatment_template, update_treatment_template,
+-- duplicate_treatment_template, restore_template_version,
+-- create_treatment, update_treatment) are re-created by re-running
+-- supabase-schema.sql and supabase-migration-treatments-2026-07-12.sql —
+-- both of which no longer reference the column.
+
+-- ┌────────────────────────────────────────────────────────────────────┐
+-- │ 11. SEED — main admin account (skipped if it already exists)
 -- │ (source: seed-admin.sql)
 -- └────────────────────────────────────────────────────────────────────┘
 
@@ -3991,7 +4090,7 @@ begin
 end $$;
 
 -- ┌────────────────────────────────────────────────────────────────────┐
--- │ 10. SEED — clinic staff: therapists + receptionist
+-- │ 12. SEED — clinic staff: therapists + receptionist
 -- │ (source: seed-staff.sql)
 -- └────────────────────────────────────────────────────────────────────┘
 

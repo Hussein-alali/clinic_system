@@ -1,9 +1,9 @@
 # Supabase — schema & migrations
 
 This folder holds the database schema as **versioned migrations** for the
-Supabase CLI. The repo-root `supabase-schema.sql` is the same content as a
-single paste-friendly file for the Dashboard SQL editor — the two are kept in
-sync.
+Supabase CLI. The repo-root `supabase-all-in-one.sql` carries the same content
+(plus the seeds) as a single paste-friendly file for the Dashboard SQL editor —
+the two are kept in sync.
 
 ```
 supabase/
@@ -16,10 +16,15 @@ supabase/
     │                                        # ledger, subscriptions, treatment
     │                                        # methods/templates, patient fields,
     │                                        # files, staff roles, treatments
-    └── 20260713000000_appointment_scheduling.sql
-                                             # recurring patient schedules,
-                                             # optional doctor / required
-                                             # therapist, calendar indexes
+    ├── 20260713000000_appointment_scheduling.sql
+    │                                        # recurring patient schedules,
+    │                                        # optional doctor / required
+    │                                        # therapist, calendar indexes
+    ├── 20260713010000_staff_roster_columns.sql
+    │                                        # auth_uid/contact columns on
+    │                                        # doctors + therapists, and the
+    │                                        # receptionists table (PGRST204 fix)
+    └── 20260713020000_drop_modalities.sql   # drop removed `modalities` column
 ```
 
 Every statement is **idempotent** (`create ... if not exists`,
@@ -48,9 +53,8 @@ Dashboard SQL editor.
 ### Option B — Dashboard (no CLI)
 
 1. Open your project → **SQL Editor**.
-2. Paste and run the root **`supabase-schema.sql`** (or the baseline migration —
-   identical content).
-3. Paste and run **`seed-admin.sql`** to create the `amir` admin.
+2. Paste and run the root **`supabase-all-in-one.sql`** — it contains the full
+   schema, every migration, and the seeds in dependency order.
 
 ## Adding future changes
 
@@ -62,8 +66,9 @@ supabase migration new add_something   # creates supabase/migrations/<ts>_add_so
 supabase db push
 ```
 
-Keep the root `supabase-schema.sql` in sync (it's the consolidated snapshot
-used by Dashboard users) by appending the same statements.
+Keep the root `supabase-all-in-one.sql` in sync (it's the consolidated file
+used by Dashboard users) by adding the same statements as a new numbered
+section before the seed sections.
 
 ## What the baseline contains
 
