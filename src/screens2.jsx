@@ -38,9 +38,14 @@ function Treatments({ go }) {
 
   const plans = records.map(t => {
     const total = Number(t.estimated_sessions) || 0;
-    const done = DATA.sessions.filter(s =>
+    // completed_sessions is maintained by the DB trigger from linked
+    // sessions. Legacy sessions logged before linking existed carry no
+    // treatment_id, so fall back to the old per-patient heuristic.
+    const linkedDone = Number(t.completed_sessions) || 0;
+    const heuristicDone = DATA.sessions.filter(s =>
       s.patient_id === t.patient_id
       && (!t.treatment_date || !s.date || s.date >= t.treatment_date)).length;
+    const done = linkedDone > 0 ? linkedDone : heuristicDone;
     const progress = total ? Math.min(100, Math.round(done / total * 100)) : 0;
     const patientRow = (DATA.patients || []).find(p => (p.patient_id || p.id) === t.patient_id);
     const updatedAt = t.updated_at || t.created_at;
@@ -2621,39 +2626,11 @@ function CampaignAnalytics({ c, onBack }) {
       <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr"}}>
         <div className="card card-pad">
           <div className="h2" style={{marginBottom:14}}>أفضل الردود</div>
-          {!window.IS_DEMO && <div className="muted" style={{fontSize:13,padding:"14px 0"}}>ستظهر ردود المرضى هنا بعد ربط واتساب للأعمال.</div>}
-          {(window.IS_DEMO ? [
-            {p:"هناء مصطفى", t:"نعم please, can I book Wednesday at 10?", time:"منذ 14 دقيقة"},
-            {p:"وليد حسن", t:"ما المواعيد المتاحة هذا الأسبوع؟", time:"منذ ساعة"},
-            {p:"سلمى رضا", t:"ألمي أفضل بكثير، شكرًا لك 🙏", time:"منذ 3 ساعات"},
-            {p:"تامر إبراهيم", t:"أحتاج إعادة جدولة موعد الثلاثاء الماضي", time:"أمس"},
-          ] : []).map((r,i)=>(
-            <div key={i} style={{padding:"10px 0",borderBottom:i<3?"1px dashed var(--ink-100)":"none",display:"flex",gap:12}}>
-              <div className="av md">{r.p.split(" ").map(x=>x[0]).join("").slice(0,2)}</div>
-              <div style={{flex:1}}>
-                <div style={{display:"flex",justifyContent:"space-between"}}>
-                  <span style={{fontWeight:500,fontSize:13}}>{r.p}</span>
-                  <span className="muted" style={{fontSize:11}}>{r.time}</span>
-                </div>
-                <div style={{fontSize:12.5,color:"var(--ink-700)",marginTop:2}}>{r.t}</div>
-              </div>
-            </div>
-          ))}
+          <div className="muted" style={{fontSize:13,padding:"14px 0"}}>ستظهر ردود المرضى هنا بعد ربط واتساب للأعمال.</div>
         </div>
         <div className="card card-pad">
           <div className="h2" style={{marginBottom:14}}>رسائل فاشلة</div>
-          {!window.IS_DEMO && <div className="muted" style={{fontSize:13,padding:"14px 0"}}>لا رسائل فاشلة — تُعرض التسليمات المرتدة هنا بعد ربط واتساب للأعمال.</div>}
-          {(window.IS_DEMO ? [
-            {p:"+20 100 ███ ███",r:"Invalid واتساب number"},
-            {p:"+20 122 ███ ███",r:"المستخدم حظر الحساب"},
-            {p:"+20 101 ███ ███",r:"Number not on واتساب"},
-          ] : []).map((f,i)=>(
-            <div key={i} style={{padding:"10px 0",borderBottom:i<2?"1px dashed var(--ink-100)":"none",display:"flex",alignItems:"center",gap:10}}>
-              <I.X size={14} style={{color:"var(--red)"}}/>
-              <span className="mono" style={{fontSize:12.5,flex:1}}>{f.p}</span>
-              <span className="muted" style={{fontSize:12}}>{f.r}</span>
-            </div>
-          ))}
+          <div className="muted" style={{fontSize:13,padding:"14px 0"}}>لا رسائل فاشلة — تُعرض التسليمات المرتدة هنا بعد ربط واتساب للأعمال.</div>
         </div>
       </div>
     </Page>
@@ -4583,24 +4560,9 @@ root.render(<App/>);
 // PATIENT-FACING PORTAL — different shell, simpler nav, friendly tone
 // ═══════════════════════════════════════════════════════════════
 
-// Fallback shape when we can't derive from window.ME (unauthenticated /demo).
-const PATIENT_FALLBACK = {
-  name: "هناء مصطفى",
-  initials: "HM",
-  file: "P-10241",
-  phone: "+20 100 234 1180",
-  diag: "انزلاق غضروفي L4–L5",
-  doctor: "د. ياسمين عادل",
-  therapist: "كريم صالح",
-  remaining: 5,
-  total: 12,
-  next: { date: "غدًا، 25 مايو", time: "09:00", dur: 45, with: "كريم صالح", room: "غرفة 2", type: "علاج يدوي" },
-};
-
 // Look up the logged-in patient from ME.patient_id (or ME.match) against the
-// current DATA.patients cache. Falls back to the seed record when running
-// without a real login (previously the whole portal displayed هناء's data
-// regardless of who logged in).
+// current DATA.patients cache (hydrated from PostgreSQL). No mock persona —
+// an unmatched login gets a minimal identity derived from the account.
 // Placeholder "next visit" when the patient has nothing booked — keeps the
 // portal UI stable without inventing an appointment.
 const NEXT_NONE = { none:true, date:"—", time:"—", dur:0, with:"—", room:"—", type:"لا حجز قادم" };
@@ -4611,9 +4573,6 @@ function getPatientMe(){
   const pid = ME.patient_id || ME.match || null;
   const row = pid ? patients.find(p => p.patient_id === pid || p.id === pid || p.name === pid) : null;
   if (!row) {
-    // Demo keeps the seed persona; production derives a minimal identity
-    // from the login instead of showing another patient's data.
-    if (window.IS_DEMO) return PATIENT_FALLBACK;
     const nm = ME.name || "مريض";
     return {
       name: nm,
@@ -4968,21 +4927,7 @@ function PatientHome({ onBook, go }) {
 
         <div className="card card-pad">
           <div className="h2" style={{marginBottom:14}}>تمارين اليوم</div>
-          {(window.IS_DEMO ? [
-            { l:"تمدد القط-الجمل", sub:"10 تكرارات × 2 مجموعة", done:true },
-            { l:"ديد-باج، بالتبادل", sub:"8 لكل جانب × 3", done:true },
-            { l:"جسر الأرداف", sub:"15 تكرار × 3 مجموعة", done:false },
-            { l:"امشي 20 دقيقة", sub:"في أي وقت اليوم", done:false },
-          ] : []).map((h,i)=>(
-            <label key={i} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 0",borderBottom:i<3?"1px dashed var(--ink-100)":"none",fontSize:13.5,cursor:"pointer"}}>
-              <input type="checkbox" defaultChecked={h.done} style={{width:18,height:18,accentColor:"var(--blue-500)"}}/>
-              <div style={{flex:1}}>
-                <div style={{fontWeight:500,textDecoration:h.done?"line-through":"none",color:h.done?"var(--ink-500)":"var(--ink-900)"}}>{h.l}</div>
-                <div className="muted" style={{fontSize:11.5,marginTop:1}}>{h.sub}</div>
-              </div>
-            </label>
-          ))}
-          {!window.IS_DEMO && <div className="muted" style={{fontSize:13,padding:"14px 0"}}>لا تمارين منزلية مسندة بعد — سيضيفها أخصائيك بعد الجلسة.</div>}
+          <div className="muted" style={{fontSize:13,padding:"14px 0"}}>لا تمارين منزلية مسندة بعد — سيضيفها أخصائيك بعد الجلسة.</div>
         </div>
       </div>
 
@@ -5174,70 +5119,15 @@ function PatientPlanView() {
 }
 
 function PatientMessages() {
-  // No messaging backend yet — the threaded conversation below is a demo
-  // fixture, so production shows a contact card instead of fake chats.
-  if (!window.IS_DEMO) {
-    return (
-      <div>
-        <h1 style={{fontSize:"clamp(22px, 5vw, 28px)",fontWeight:600,letterSpacing:"-.01em",margin:"0 0 4px"}}>الرسائل</h1>
-        <div className="muted" style={{fontSize:13.5,marginBottom:20}}>تحدّث مع فريق الرعاية.</div>
-        <EmptyState icon={<I.WhatsApp size={22}/>} title="لا رسائل بعد"
-          body="المراسلة داخل البوابة قادمة قريبًا — تواصل مع العيادة مباشرة عبر واتساب أو الهاتف."
-          action={<button className="btn btn-blue" onClick={()=>window.open("https://wa.me/","_blank")}><I.WhatsApp size={13}/> تواصل عبر واتساب</button>}/>
-      </div>
-    );
-  }
+  // No in-portal messaging backend yet — show the real contact channels
+  // instead of a fabricated conversation.
   return (
     <div>
       <h1 style={{fontSize:"clamp(22px, 5vw, 28px)",fontWeight:600,letterSpacing:"-.01em",margin:"0 0 4px"}}>الرسائل</h1>
-      <div className="muted" style={{fontSize:13.5,marginBottom:20}}>تحدّث مع فريق الرعاية — الردود عادةً خلال ساعتين.</div>
-
-      <div className="rgrid c-sm" style={{"--gtc":"260px 1fr"}}>
-        <div className="card chat-list" style={{padding:0}}>
-          {[
-            { n:"كريم صالح", r:"الأخصائي", last:"أراك غدًا 09:00", time:"2h", unread:1, active:true },
-            { n:"د. ياسمين عادل", r:"طبيب", last:"كيف البرنامج الجديد؟", time:"أمس", unread:0 },
-            { n:"مريم خليل", r:"الاستقبال", last:"تم إرسال الإيصال للبريد", time:"3d", unread:0 },
-          ].map((c,i)=>(
-            <div key={i} style={{
-              padding:"12px 14px",borderBottom:"1px solid var(--ink-100)",
-              background: c.active?"var(--blue-50)":"transparent",cursor:"pointer",
-              display:"flex",gap:10,alignItems:"center"
-            }}>
-              <div className="av md" style={{background:"var(--blue-100)",color:"var(--blue-700)"}}>{c.n.split(" ").slice(-2).map(x=>x[0]).join("")}</div>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{display:"flex",justifyContent:"space-between"}}>
-                  <span style={{fontWeight:600,fontSize:13}}>{c.n}</span>
-                  <span className="muted" style={{fontSize:11}}>{c.time}</span>
-                </div>
-                <div style={{fontSize:12,color:"var(--ink-500)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c.last}</div>
-              </div>
-              {c.unread>0 && <span className="mono" style={{background:"var(--blue-500)",color:"#fff",borderRadius:999,padding:"1px 7px",fontSize:10,fontWeight:600}}>{c.unread}</span>}
-            </div>
-          ))}
-        </div>
-
-        <div className="card chat-pane" style={{padding:0,display:"flex",flexDirection:"column"}}>
-          <div style={{padding:"14px 18px",borderBottom:"1px solid var(--ink-100)",display:"flex",alignItems:"center",gap:10}}>
-            <div className="av md" style={{background:"var(--blue-100)",color:"var(--blue-700)"}}>KS</div>
-            <div style={{flex:1}}>
-              <div style={{fontWeight:600,fontSize:14}}>كريم صالح</div>
-              <div style={{fontSize:11,color:"var(--green)"}}>● متصل</div>
-            </div>
-            <button className="btn btn-ghost btn-icon" onClick={()=>window.open("tel:+201002341180")}><I.Phone size={15}/></button>
-          </div>
-          <div style={{flex:1,padding:18,background:"#F4F8FB",overflowY:"auto",display:"flex",flexDirection:"column",gap:10}}>
-            <div style={{alignSelf:"flex-start",maxWidth:"75%",background:"#fff",padding:"10px 14px",borderRadius:"14px 14px 14px 4px",fontSize:13.5,boxShadow:"var(--shadow-sm)"}}>أهلاً Hana! How are you feeling after أمس's جلسة?</div>
-            <div style={{alignSelf:"flex-end",maxWidth:"75%",background:"var(--blue-500)",color:"#fff",padding:"10px 14px",borderRadius:"14px 14px 4px 14px",fontSize:13.5}}>أفضل بكثير — نمت طوال الليل لأول مرة منذ أسابيع 🙏</div>
-            <div style={{alignSelf:"flex-start",maxWidth:"75%",background:"#fff",padding:"10px 14px",borderRadius:"14px 14px 14px 4px",fontSize:13.5,boxShadow:"var(--shadow-sm)"}}>That's wonderful! Keep up the home exercises. See you tomorrow at 09:00 for جلسة #8.</div>
-            <div style={{alignSelf:"flex-end",fontSize:11,color:"var(--ink-500)",marginTop:6}}>منذ ساعتين</div>
-          </div>
-          <div style={{padding:14,borderTop:"1px solid var(--ink-100)",display:"flex",gap:8}}>
-            <input className="input" placeholder="اكتب رسالة…" style={{flex:1}}/>
-            <button className="btn btn-blue" style={{padding:"8px 12px"}}><I.Send size={14}/></button>
-          </div>
-        </div>
-      </div>
+      <div className="muted" style={{fontSize:13.5,marginBottom:20}}>تحدّث مع فريق الرعاية.</div>
+      <EmptyState icon={<I.WhatsApp size={22}/>} title="لا رسائل بعد"
+        body="المراسلة داخل البوابة قادمة قريبًا — تواصل مع العيادة مباشرة عبر واتساب أو الهاتف."
+        action={<button className="btn btn-blue" onClick={()=>window.open("https://wa.me/","_blank")}><I.WhatsApp size={13}/> تواصل عبر واتساب</button>}/>
     </div>
   );
 }

@@ -757,7 +757,8 @@ const DATA_TABLES = {
                 cols: ["schedule_id","patient_id","therapist_id","days","time","sessions_per_week",
                        "allow_consecutive","active","notes","created_at","updated_at"] },
   sessions:   { key: "sessions",   pk: "session_id",  ls: "kinetic.sessions",
-                cols: ["session_id","patient_id","therapist_id","date","pain_score","session_notes","session_number","created_at"] },
+                cols: ["session_id","patient_id","therapist_id","treatment_id","booking_id","date","pain_score",
+                       "mood","duration_minutes","goals","completed_exercises","session_notes","session_number","created_at"] },
   payments:   { key: "invoices",   pk: "invoice_id",  ls: "kinetic.invoices",
                 cols: ["invoice_id","patient_id","amount","paid","payment_method","status","created_at"] },
   paymentHistory: { key: "payments", pk: "payment_id", ls: "kinetic.payment_history",
@@ -951,6 +952,10 @@ function normalizeDomainData(D) {
             ? (function(){ try { return JSON.parse(s.days); } catch { return []; } })()
             : []),
   }));
+  const jsonArr = (v) => Array.isArray(v) ? v
+    : (typeof v === "string"
+        ? (function(){ try { const p = JSON.parse(v); return Array.isArray(p) ? p : []; } catch { return []; } })()
+        : []);
   D.sessions = (D.sessions || []).map(s => ({
     ...s,
     id: s.session_id ?? s.id,
@@ -961,8 +966,8 @@ function normalizeDomainData(D) {
     date: s.date ?? String(s.created_at || "").slice(0, 10),
     patient: s.patient ?? nameOfPatient(s.patient_id),
     therapist: s.therapist ?? nameOfTherapist(s.therapist_id),
-    goals: Array.isArray(s.goals) ? s.goals : [],
-    done: Array.isArray(s.done) ? s.done : [],
+    goals: jsonArr(s.goals),
+    done: Array.isArray(s.done) ? s.done : jsonArr(s.completed_exercises),
   }));
   D.payments = (D.payments || []).map(v => ({
     ...v,
@@ -2517,11 +2522,20 @@ async function getTreatment(treatmentId) {
   } catch (e) { console.warn('get_treatment failed', e); return null; }
 }
 
+// The patient's active treatment plan (خطة العلاج) — the single source the
+// session screen populates itself from. Latest active plan wins.
+async function activeTreatmentFor(patientId) {
+  if (!patientId) return null;
+  const res = await listTreatments({ patientId, status: 'active', limit: 1 });
+  return (res.rows && res.rows[0]) || null;
+}
+
 const TreatmentsAPI = {
-  list:   listTreatments,
-  get:    getTreatment,
-  create: createTreatment,
-  update: updateTreatment,
+  list:      listTreatments,
+  get:       getTreatment,
+  create:    createTreatment,
+  update:    updateTreatment,
+  activeFor: activeTreatmentFor,
 };
 window.TreatmentsAPI = TreatmentsAPI;
 
