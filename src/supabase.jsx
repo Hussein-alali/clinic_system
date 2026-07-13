@@ -720,15 +720,15 @@ const DATA_TABLES = {
                 cols: ["staff_id","name","role","phone","email","auth_uid"] },
   therapists: { key: "therapists", pk: "id",          ls: "kinetic.therapists",
                 cols: ["id","name","spec","load","max","color","department_id","phone","email",
-                       "license_number","notes","active","created_at","updated_at"] },
+                       "license_number","notes","active","auth_uid","created_at","updated_at"] },
   departments:{ key: "departments",pk: "id",          ls: "kinetic.departments",
                 cols: ["id","name_ar","name_en","description","icon","color","sort_order","active"] },
   doctors:    { key: "doctors",    pk: "id",          ls: "kinetic.doctors",
                 cols: ["id","name","department_id","specialization","experience_years","photo","schedule",
-                       "status","color","active","phone","email","license_number","notes",
+                       "status","color","active","phone","email","license_number","notes","auth_uid",
                        "created_at","updated_at"] },
   receptionists: { key: "receptionists", pk: "id",    ls: "kinetic.receptionists",
-                cols: ["id","name","phone","email","notes","active","created_at","updated_at"] },
+                cols: ["id","name","phone","email","notes","active","auth_uid","created_at","updated_at"] },
   packages:   { key: "packages",   pk: "id",          ls: "kinetic.packages",
                 cols: ["id","name","sessions","price","active","popular","color","sold"] },
   campaigns:  { key: "campaigns",  pk: "id",          ls: "kinetic.campaigns",
@@ -2562,6 +2562,30 @@ const TplCategories = {
 };
 window.TplCategories = TplCategories;
 
+// ── Auth-user picker helper (used by staff modals) ────────────
+// Returns unlinked staff (auth) accounts of the given role — i.e.
+// accounts that could still be assigned to a roster row. `linkedField`
+// is the roster column that stores the FK (auth_uid). `linkedRows` is
+// the current roster to filter against.
+async function listAvailableAuthUsers(roleSlug, linkedRows) {
+  const staff = await listTable("staff");
+  const takenUids = new Set(
+    (linkedRows || [])
+      .map(r => r && r.auth_uid)
+      .filter(Boolean)
+  );
+  return (staff || [])
+    .filter(s => s && s.role === roleSlug && s.auth_uid && !takenUids.has(s.auth_uid))
+    .map(s => ({
+      auth_uid: s.auth_uid,
+      staff_id: s.staff_id || s.id,
+      name: s.name || "",
+      email: s.email || "",
+      role: s.role,
+      phone: s.phone || "",
+    }));
+}
+
 // ── Public API ────────────────────────────────────────────────
 Object.assign(window, {
   loadClinic, saveClinic,
@@ -2569,6 +2593,7 @@ Object.assign(window, {
   loadBranches, addBranch, updateBranch, setActiveBranch, removeBranch,
   signInEmail, signOut, getSession, getAuthStaff, STAFF_ROLES, onAuthChange,
   adminCreateUser, sendPasswordReset, updateOwnPassword, updateOwnProfile, updateStaffMember,
+  listAvailableAuthUsers,
   startDictation, printHTML, escHtml,
   KineticData, QuickPay, TxMethods, InvoicesAPI, PaymentReceipts, Templates, TplCategories, TreatmentsAPI,
   uploadPatientFile, listPatientFiles, removePatientFile, getPatientFileUrl,

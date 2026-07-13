@@ -2993,6 +2993,10 @@ function RosterPager({ page, pages, total, onPage }) {
 }
 
 function DeptDoctorsPanel() {
+  // Subscribe to kinetic:data-updated so a successful upsert (which mutates
+  // window.DATA and fires the event) triggers an immediate re-render —
+  // this is what fulfils the "table refreshes automatically" contract.
+  window.useDataVersion && window.useDataVersion();
   const depts = (DATA.departments || []).slice().sort((a,b)=>(a.sort_order||0)-(b.sort_order||0));
   const doctors      = DATA.doctors        || [];
   const specialists  = DATA.therapists     || [];
@@ -3087,7 +3091,7 @@ function DeptDoctorsPanel() {
       <RosterToolbar
         title="الأطباء" subtitle="يظهرون في الحجز ضمن أقسامهم عند تفعيلهم."
         search={doctorsRoster.search} setSearch={doctorsRoster.setSearch}
-        onAdd={()=>setDocModal({})} addLabel="إضافة طبيب" addDisabled={depts.length===0}/>
+        onAdd={()=>setDocModal({})} addLabel="إضافة طبيب"/>
       <div className="tbl-scroll">
         <table className="tbl">
           <thead><tr><th>الطبيب</th><th>القسم</th><th>التخصص</th><th>الهاتف</th><th>البريد</th><th>التوفر</th><th>الحالة</th><th></th></tr></thead>
@@ -3126,7 +3130,7 @@ function DeptDoctorsPanel() {
       <RosterToolbar
         title="الأخصائيون" subtitle="فريق العلاج الطبيعي المعيّن للحالات."
         search={specRoster.search} setSearch={specRoster.setSearch}
-        onAdd={()=>setSpecModal({})} addLabel="إضافة أخصائي" addDisabled={depts.length===0}/>
+        onAdd={()=>setSpecModal({})} addLabel="إضافة أخصائي"/>
       <div className="tbl-scroll">
         <table className="tbl">
           <thead><tr><th>الأخصائي</th><th>القسم</th><th>التخصص</th><th>الهاتف</th><th>البريد</th><th>رقم الترخيص</th><th>الحالة</th><th></th></tr></thead>
@@ -3250,61 +3254,184 @@ function DeptModal({ row, onClose }) {
   );
 }
 
+// ── Auth-user picker (shared by roster modals) ────────────────
+// Loads existing auth accounts of the given role that aren't yet linked
+// to any row in `linkedRows`. On selection, hands back the picked staff
+// object so the modal can hydrate name/email/phone/auth_uid from it.
+// Never asks the operator to type an email — the email always comes from
+// the linked auth account.
+function AuthUserPicker({ roleSlug, linkedRows, value, onChange, disabled }) {
+  const [options, setOptions] = React.useState(null); // null = loading
+  const [search, setSearch] = React.useState("");
+  React.useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const raw = window.listAvailableAuthUsers
+          ? await window.listAvailableAuthUsers(roleSlug, linkedRows)
+          : [];
+        if (alive) setOptions(Array.isArray(raw) ? raw : []);
+      } catch (e) {
+        console.warn("listAvailableAuthUsers failed", e);
+        if (alive) setOptions([]);
+      }
+    })();
+    return () => { alive = false; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roleSlug]);
+  if (disabled) {
+    return (
+      <div className="input" style={{opacity:.75,cursor:"not-allowed",background:"var(--ink-50)"}}>
+        {value ? `${value.name || "—"} — ${value.email || "—"}` : "غير مربوط بحساب"}
+      </div>
+    );
+  }
+  if (options === null) {
+    return <div className="muted" style={{fontSize:12}}>جاري تحميل الحسابات…</div>;
+  }
+  const q = search.trim().toLowerCase();
+  const filtered = q
+    ? options.filter(o =>
+        (o.name || "").toLowerCase().includes(q) ||
+        (o.email || "").toLowerCase().includes(q))
+    : options;
+  return (
+    <div>
+      <input className="input" style={{marginBottom:6,fontSize:12.5}} placeholder="بحث بالاسم أو البريد…"
+        value={search} onChange={e=>setSearch(e.target.value)}/>
+      <select className="input" value={(value && value.auth_uid) || ""}
+        onChange={e => {
+          const uid = e.target.value;
+          const picked = options.find(o => o.auth_uid === uid) || null;
+          onChange(picked);
+        }}>
+        <option value="">— اختر حسابًا مرتبطًا —</option>
+        {filtered.map(o => (
+          <option key={o.auth_uid} value={o.auth_uid}>
+            {(o.name || o.email || o.auth_uid)} — {o.email || "—"} — {roleLabelAr(o.role)}
+          </option>
+        ))}
+      </select>
+      {options.length === 0 && (
+        <div className="muted" style={{fontSize:11.5,marginTop:6,lineHeight:1.6,padding:"8px 10px",background:"var(--ink-50)",borderRadius:8}}>
+          لا توجد حسابات متاحة بهذا الدور غير مرتبطة بسجل بعد. أنشئ حسابًا من «المستخدمون والأدوار» → «إنشاء مستخدم» أولاً.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Local role→AR label (mirrors ROLE_AR below; declared here so the picker
+// works even before ROLE_AR's module-scope binding is reached in TDZ).
+function roleLabelAr(slug) {
+  const t = { admin:"مدير", receptionist:"موظف استقبال", doctor:"طبيب", therapist:"الأخصائي" };
+  return t[slug] || slug || "—";
+}
+
+// Turn a PostgREST unique-violation into an Arabic explainer. This is the
+// last line of defence against duplicate assignment: the DB unique index
+// still rejects the write even if the client picker was stale.
+function friendlyRosterError(msg, roleLabel) {
+  const t = String(msg || "").toLowerCase();
+  if (t.includes("23505") || t.includes("duplicate") || t.includes("unique")) {
+    return `هذا الحساب مربوط بالفعل بسجل ${roleLabel} آخر — اختر حسابًا مختلفًا`;
+  }
+  return msg || "تعذّر الحفظ";
+}
+
 function DoctorModal({ row, depts, onClose }) {
   const isNew = !row.id;
+  const doctorsAll = (window.DATA && window.DATA.doctors) || [];
+  // For editing, exclude THIS row so its own auth_uid isn't reported as taken.
+  const linkedRows = isNew ? doctorsAll : doctorsAll.filter(d => (d.id||d.pk) !== row.id);
+  const [account, setAccount] = React.useState(
+    isNew ? null : (row.auth_uid ? { auth_uid: row.auth_uid, name: row.name || "", email: row.email || "", role: "doctor" } : null)
+  );
   const [f, setF] = React.useState({
-    name: row.name||"", department_id: row.department_id||(depts[0]&&depts[0].id)||"",
-    specialization: row.specialization||"", experience_years: row.experience_years||0,
-    schedule: row.schedule||"", status: row.status||"available",
-    color: row.color||"#7BBDE8", active: row.active!==false,
-    phone: row.phone||"", email: row.email||"", license_number: row.license_number||"", notes: row.notes||"",
+    department_id: row.department_id || (depts[0] && depts[0].id) || "",
+    specialization: row.specialization || "",
+    experience_years: row.experience_years || 0,
+    schedule: row.schedule || "",
+    status: row.status || "available",
+    color: row.color || "#7BBDE8",
+    active: row.active !== false,
+    phone: row.phone || "",
+    license_number: row.license_number || "",
+    notes: row.notes || "",
   });
   const [busy, setBusy] = React.useState(false);
-  const set = (k,v)=>setF(s=>({...s,[k]:v}));
+  const set = (k,v) => setF(s => ({ ...s, [k]: v }));
+  // When an account is picked, hydrate name/email/phone from it.
+  function pickAccount(u) {
+    setAccount(u);
+    if (u && u.phone && !f.phone) set("phone", u.phone);
+  }
   async function save() {
-    if (!f.name.trim()) return window.showToast && window.showToast("أدخل اسم الطبيب","error");
-    if (!f.department_id) return window.showToast && window.showToast("اختر القسم","error");
-    if (f.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email)) {
-      return window.showToast && window.showToast("صيغة البريد غير صحيحة","error");
+    if (isNew && (!account || !account.auth_uid)) {
+      return window.showToast && window.showToast("اختر حسابًا مرتبطًا للطبيب","error");
     }
+    if (!depts.length) return window.showToast && window.showToast("أضف قسمًا أولاً","error");
+    if (!f.department_id) return window.showToast && window.showToast("اختر القسم","error");
     setBusy(true);
     try {
+      const name = (account && account.name) ? account.name.trim() : (row.name || "").trim();
+      const email = (account && account.email) ? account.email.trim() : (row.email || "").trim();
       const res = await window.KineticData.upsert("doctors", {
-        id: row.id || newId("DR-"), ...f, name: f.name.trim(),
-        experience_years: Number(f.experience_years)||0,
-        phone: f.phone.trim() || null, email: f.email.trim() || null,
-        license_number: f.license_number.trim() || null, notes: f.notes.trim() || null,
+        id: row.id || newId("DR-"),
+        auth_uid: (account && account.auth_uid) || row.auth_uid || null,
+        name, email,
+        department_id: f.department_id,
+        specialization: f.specialization.trim() || null,
+        experience_years: Number(f.experience_years) || 0,
+        schedule: f.schedule.trim() || null,
+        status: f.status,
+        color: f.color,
+        active: !!f.active,
+        phone: (f.phone || "").trim() || null,
+        license_number: f.license_number.trim() || null,
+        notes: f.notes.trim() || null,
       });
-      if (res && res._ok === false) throw new Error(res._error || "تعذّر الحفظ");
-      window.showToast && window.showToast(isNew?"تمت إضافة الطبيب":"تم تحديث الطبيب","success");
+      if (res && res._ok === false) throw new Error(friendlyRosterError(res._error, "طبيب"));
+      window.showToast && window.showToast(isNew ? "تمت إضافة الطبيب" : "تم تحديث الطبيب", "success");
       onClose();
-    } catch(e){ console.error(e); window.showToast && window.showToast(e.message || "تعذّر الحفظ","error"); }
+    } catch (e) { console.error(e); window.showToast && window.showToast(e.message || "تعذّر الحفظ","error"); }
     finally { setBusy(false); }
   }
   return (
     <Modal title={isNew?"طبيب جديد":"تعديل طبيب"} onClose={onClose} width={600}
       footer={<><button className="btn btn-ghost" onClick={onClose}>إلغاء</button>
         <button className="btn btn-blue" disabled={busy} onClick={save}><I.Check size={13}/> حفظ</button></>}>
-      <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
-        <Field label="الاسم" required><input className="input" value={f.name} onChange={e=>set("name",e.target.value)} placeholder="د. …"/></Field>
-        <Field label="القسم" required><select className="input" value={f.department_id} onChange={e=>set("department_id",e.target.value)}>
-          {depts.map(d=><option key={d.id} value={d.id}>{d.name_ar}</option>)}
-        </select></Field>
-      </div>
+      <Field label="الحساب المرتبط" required hint={isNew ? "يظهر فقط حسابات دور «طبيب» غير المربوطة" : "الحساب المرتبط لا يتغيّر بعد الحفظ"}>
+        <AuthUserPicker roleSlug="doctor" linkedRows={linkedRows} value={account} onChange={pickAccount} disabled={!isNew}/>
+      </Field>
       <div style={{height:12}}/>
+      {(account || !isNew) && (
+        <>
+          <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
+            <Field label="الاسم"><input className="input" value={(account && account.name) || row.name || ""} disabled style={{opacity:.75}}/></Field>
+            <Field label="البريد الإلكتروني"><input className="input" value={(account && account.email) || row.email || ""} disabled dir="ltr" style={{opacity:.75}}/></Field>
+          </div>
+          <div style={{height:12}}/>
+        </>
+      )}
       <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
+        <Field label="القسم" required>
+          <select className="input" value={f.department_id} onChange={e=>set("department_id",e.target.value)}>
+            <option value="">— اختر —</option>
+            {depts.map(d=><option key={d.id} value={d.id}>{d.name_ar}</option>)}
+          </select>
+        </Field>
         <Field label="التخصص"><input className="input" value={f.specialization} onChange={e=>set("specialization",e.target.value)}/></Field>
-        <Field label="سنوات الخبرة"><input className="input" type="number" value={f.experience_years} onChange={e=>set("experience_years",e.target.value)}/></Field>
       </div>
       <div style={{height:12}}/>
       <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
         <Field label="الهاتف"><input className="input" value={f.phone} onChange={e=>set("phone",e.target.value)} placeholder="+20 …"/></Field>
-        <Field label="البريد الإلكتروني"><input className="input" value={f.email} onChange={e=>set("email",e.target.value)} placeholder="dr@clinic.com"/></Field>
+        <Field label="سنوات الخبرة"><input className="input" type="number" value={f.experience_years} onChange={e=>set("experience_years",e.target.value)}/></Field>
       </div>
       <div style={{height:12}}/>
       <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
         <Field label="رقم الترخيص"><input className="input" value={f.license_number} onChange={e=>set("license_number",e.target.value)}/></Field>
-        <Field label="أوقات العمل"><input className="input" value={f.schedule} onChange={e=>set("schedule",e.target.value)} placeholder="مثال: الأحد–الخميس 09:00–17:00"/></Field>
+        <Field label="أوقات العمل"><input className="input" value={f.schedule} onChange={e=>set("schedule",e.target.value)} placeholder="الأحد–الخميس 09:00–17:00"/></Field>
       </div>
       <div style={{height:12}}/>
       <Field label="ملاحظات"><textarea className="input" rows={2} value={f.notes} onChange={e=>set("notes",e.target.value)}/></Field>
@@ -3323,12 +3450,15 @@ function DoctorModal({ row, depts, onClose }) {
 // ── Specialist modal (persists to `therapists` table) ────────
 function SpecialistModal({ row, depts, onClose }) {
   const isNew = !row.id;
+  const thsAll = (window.DATA && window.DATA.therapists) || [];
+  const linkedRows = isNew ? thsAll : thsAll.filter(t => (t.id||t.pk) !== row.id);
+  const [account, setAccount] = React.useState(
+    isNew ? null : (row.auth_uid ? { auth_uid: row.auth_uid, name: row.name || "", email: row.email || "", role: "therapist" } : null)
+  );
   const [f, setF] = React.useState({
-    name: row.name || "",
     department_id: row.department_id || (depts[0] && depts[0].id) || "",
     spec: row.spec || "",
     phone: row.phone || "",
-    email: row.email || "",
     license_number: row.license_number || "",
     notes: row.notes || "",
     color: row.color || "#7BBDE8",
@@ -3337,27 +3467,33 @@ function SpecialistModal({ row, depts, onClose }) {
   });
   const [busy, setBusy] = React.useState(false);
   const set = (k,v) => setF(s => ({ ...s, [k]: v }));
+  function pickAccount(u) {
+    setAccount(u);
+    if (u && u.phone && !f.phone) set("phone", u.phone);
+  }
   async function save() {
-    if (!f.name.trim()) return window.showToast && window.showToast("أدخل اسم الأخصائي","error");
-    if (!f.department_id) return window.showToast && window.showToast("اختر القسم","error");
-    if (f.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email)) {
-      return window.showToast && window.showToast("صيغة البريد غير صحيحة","error");
+    if (isNew && (!account || !account.auth_uid)) {
+      return window.showToast && window.showToast("اختر حسابًا مرتبطًا للأخصائي","error");
     }
+    if (!depts.length) return window.showToast && window.showToast("أضف قسمًا أولاً","error");
+    if (!f.department_id) return window.showToast && window.showToast("اختر القسم","error");
     setBusy(true);
     try {
+      const name = (account && account.name) ? account.name.trim() : (row.name || "").trim();
+      const email = (account && account.email) ? account.email.trim() : (row.email || "").trim();
       const res = await window.KineticData.upsert("therapists", {
         id: row.id || newId("TH-"),
-        name: f.name.trim(),
+        auth_uid: (account && account.auth_uid) || row.auth_uid || null,
+        name, email,
         department_id: f.department_id,
         spec: f.spec.trim() || null,
-        phone: f.phone.trim() || null,
-        email: f.email.trim() || null,
+        phone: (f.phone || "").trim() || null,
         license_number: f.license_number.trim() || null,
         notes: f.notes.trim() || null,
-        color: f.color, max: Number(f.max)||0,
+        color: f.color, max: Number(f.max) || 0,
         active: !!f.active,
       });
-      if (res && res._ok === false) throw new Error(res._error || "تعذّر الحفظ");
+      if (res && res._ok === false) throw new Error(friendlyRosterError(res._error, "أخصائي"));
       window.showToast && window.showToast(isNew ? "تمت إضافة الأخصائي" : "تم تحديث الأخصائي", "success");
       onClose();
     } catch (e) { console.error(e); window.showToast && window.showToast(e.message || "تعذّر الحفظ","error"); }
@@ -3367,21 +3503,32 @@ function SpecialistModal({ row, depts, onClose }) {
     <Modal title={isNew?"أخصائي جديد":"تعديل أخصائي"} onClose={onClose} width={600}
       footer={<><button className="btn btn-ghost" onClick={onClose}>إلغاء</button>
         <button className="btn btn-blue" disabled={busy} onClick={save}><I.Check size={13}/> حفظ</button></>}>
-      <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
-        <Field label="الاسم" required><input className="input" value={f.name} onChange={e=>set("name",e.target.value)}/></Field>
-        <Field label="القسم" required><select className="input" value={f.department_id} onChange={e=>set("department_id",e.target.value)}>
-          {depts.map(d=><option key={d.id} value={d.id}>{d.name_ar}</option>)}
-        </select></Field>
-      </div>
+      <Field label="الحساب المرتبط" required hint={isNew ? "يظهر فقط حسابات دور «الأخصائي» غير المربوطة" : "الحساب المرتبط لا يتغيّر بعد الحفظ"}>
+        <AuthUserPicker roleSlug="therapist" linkedRows={linkedRows} value={account} onChange={pickAccount} disabled={!isNew}/>
+      </Field>
       <div style={{height:12}}/>
+      {(account || !isNew) && (
+        <>
+          <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
+            <Field label="الاسم"><input className="input" value={(account && account.name) || row.name || ""} disabled style={{opacity:.75}}/></Field>
+            <Field label="البريد الإلكتروني"><input className="input" value={(account && account.email) || row.email || ""} disabled dir="ltr" style={{opacity:.75}}/></Field>
+          </div>
+          <div style={{height:12}}/>
+        </>
+      )}
       <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
+        <Field label="القسم" required>
+          <select className="input" value={f.department_id} onChange={e=>set("department_id",e.target.value)}>
+            <option value="">— اختر —</option>
+            {depts.map(d=><option key={d.id} value={d.id}>{d.name_ar}</option>)}
+          </select>
+        </Field>
         <Field label="التخصص"><input className="input" value={f.spec} onChange={e=>set("spec",e.target.value)}/></Field>
-        <Field label="الحد الأقصى للجلسات/يوم"><input className="input" type="number" min="0" max="60" value={f.max} onChange={e=>set("max",e.target.value)}/></Field>
       </div>
       <div style={{height:12}}/>
       <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
         <Field label="الهاتف"><input className="input" value={f.phone} onChange={e=>set("phone",e.target.value)} placeholder="+20 …"/></Field>
-        <Field label="البريد الإلكتروني"><input className="input" value={f.email} onChange={e=>set("email",e.target.value)} placeholder="you@clinic.com"/></Field>
+        <Field label="الحد الأقصى للجلسات/يوم"><input className="input" type="number" min="0" max="60" value={f.max} onChange={e=>set("max",e.target.value)}/></Field>
       </div>
       <div style={{height:12}}/>
       <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
@@ -3400,31 +3547,39 @@ function SpecialistModal({ row, depts, onClose }) {
 // ── Receptionist modal (persists to `receptionists` table) ───
 function ReceptionistModal({ row, onClose }) {
   const isNew = !row.id;
+  const rcpAll = (window.DATA && window.DATA.receptionists) || [];
+  const linkedRows = isNew ? rcpAll : rcpAll.filter(r => (r.id||r.pk) !== row.id);
+  const [account, setAccount] = React.useState(
+    isNew ? null : (row.auth_uid ? { auth_uid: row.auth_uid, name: row.name || "", email: row.email || "", role: "receptionist" } : null)
+  );
   const [f, setF] = React.useState({
-    name: row.name || "",
     phone: row.phone || "",
-    email: row.email || "",
     notes: row.notes || "",
     active: row.active !== false,
   });
   const [busy, setBusy] = React.useState(false);
   const set = (k,v) => setF(s => ({ ...s, [k]: v }));
+  function pickAccount(u) {
+    setAccount(u);
+    if (u && u.phone && !f.phone) set("phone", u.phone);
+  }
   async function save() {
-    if (!f.name.trim()) return window.showToast && window.showToast("أدخل الاسم","error");
-    if (f.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email)) {
-      return window.showToast && window.showToast("صيغة البريد غير صحيحة","error");
+    if (isNew && (!account || !account.auth_uid)) {
+      return window.showToast && window.showToast("اختر حسابًا مرتبطًا لموظف الاستقبال","error");
     }
     setBusy(true);
     try {
+      const name = (account && account.name) ? account.name.trim() : (row.name || "").trim();
+      const email = (account && account.email) ? account.email.trim() : (row.email || "").trim();
       const res = await window.KineticData.upsert("receptionists", {
         id: row.id || newId("RC-"),
-        name: f.name.trim(),
-        phone: f.phone.trim() || null,
-        email: f.email.trim() || null,
+        auth_uid: (account && account.auth_uid) || row.auth_uid || null,
+        name, email,
+        phone: (f.phone || "").trim() || null,
         notes: f.notes.trim() || null,
         active: !!f.active,
       });
-      if (res && res._ok === false) throw new Error(res._error || "تعذّر الحفظ");
+      if (res && res._ok === false) throw new Error(friendlyRosterError(res._error, "موظف استقبال"));
       window.showToast && window.showToast(isNew ? "تمت إضافة موظف الاستقبال" : "تم التحديث", "success");
       onClose();
     } catch (e) { console.error(e); window.showToast && window.showToast(e.message || "تعذّر الحفظ","error"); }
@@ -3434,12 +3589,20 @@ function ReceptionistModal({ row, onClose }) {
     <Modal title={isNew?"موظف استقبال جديد":"تعديل موظف استقبال"} onClose={onClose} width={520}
       footer={<><button className="btn btn-ghost" onClick={onClose}>إلغاء</button>
         <button className="btn btn-blue" disabled={busy} onClick={save}><I.Check size={13}/> حفظ</button></>}>
-      <Field label="الاسم" required><input className="input" value={f.name} onChange={e=>set("name",e.target.value)}/></Field>
+      <Field label="الحساب المرتبط" required hint={isNew ? "يظهر فقط حسابات دور «موظف الاستقبال» غير المربوطة" : "الحساب المرتبط لا يتغيّر بعد الحفظ"}>
+        <AuthUserPicker roleSlug="receptionist" linkedRows={linkedRows} value={account} onChange={pickAccount} disabled={!isNew}/>
+      </Field>
       <div style={{height:12}}/>
-      <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
-        <Field label="الهاتف"><input className="input" value={f.phone} onChange={e=>set("phone",e.target.value)} placeholder="+20 …"/></Field>
-        <Field label="البريد الإلكتروني"><input className="input" value={f.email} onChange={e=>set("email",e.target.value)} placeholder="you@clinic.com"/></Field>
-      </div>
+      {(account || !isNew) && (
+        <>
+          <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:12}}>
+            <Field label="الاسم"><input className="input" value={(account && account.name) || row.name || ""} disabled style={{opacity:.75}}/></Field>
+            <Field label="البريد الإلكتروني"><input className="input" value={(account && account.email) || row.email || ""} disabled dir="ltr" style={{opacity:.75}}/></Field>
+          </div>
+          <div style={{height:12}}/>
+        </>
+      )}
+      <Field label="الهاتف"><input className="input" value={f.phone} onChange={e=>set("phone",e.target.value)} placeholder="+20 …"/></Field>
       <div style={{height:12}}/>
       <Field label="ملاحظات"><textarea className="input" rows={3} value={f.notes} onChange={e=>set("notes",e.target.value)}/></Field>
       <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,marginTop:14,cursor:"pointer"}}>
