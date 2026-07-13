@@ -13,30 +13,50 @@ function downloadCsv(rows, filename) {
 }
 
 function Treatments({ go }) {
+  window.useDataVersion && window.useDataVersion();
   const [view, setView] = React.useState("list");
   const [selected, setSelected] = React.useState(null);
   const [templatesOpen, setTemplatesOpen] = React.useState(false);
   const [template, setTemplate] = React.useState(null);
+  const [records, setRecords] = React.useState([]);
+  const [loadingRecords, setLoadingRecords] = React.useState(true);
 
-  // One plan row per real patient — progress derived from the package
-  // size and remaining sessions (no fabricated plan fixtures).
-  const plans = DATA.patients.map(p => {
-    const pid = p.patient_id || p.id;
-    const total = Number(((p.pkg || "").match(/(\d+)/) || [])[1]) || 0;
-    const loggedCount = DATA.sessions.filter(s => s.patient_id === pid || s.patient === p.name).length;
-    const done = p.remain != null && total ? Math.max(0, total - p.remain) : loggedCount;
+  // Real treatment records from PostgreSQL — one row per saved treatment
+  // (created blank or from a template). No derived/fabricated fixtures.
+  const reload = React.useCallback(async () => {
+    if (!window.TreatmentsAPI) { setLoadingRecords(false); return; }
+    const res = await window.TreatmentsAPI.list({ limit: 500 });
+    setRecords(res.rows || []);
+    setLoadingRecords(false);
+  }, []);
+  React.useEffect(() => {
+    reload();
+    const onUpd = () => reload();
+    window.addEventListener('kinetic:treatments-updated', onUpd);
+    return () => window.removeEventListener('kinetic:treatments-updated', onUpd);
+  }, [reload]);
+
+  const plans = records.map(t => {
+    const total = Number(t.estimated_sessions) || 0;
+    const done = DATA.sessions.filter(s =>
+      s.patient_id === t.patient_id
+      && (!t.treatment_date || !s.date || s.date >= t.treatment_date)).length;
     const progress = total ? Math.min(100, Math.round(done / total * 100)) : 0;
+    const patientRow = (DATA.patients || []).find(p => (p.patient_id || p.id) === t.patient_id);
+    const updatedAt = t.updated_at || t.created_at;
     return {
-      id: "TP-" + pid,
-      patient: p.name,
-      diag: p.diag || p.diagnosis || "—",
-      therapist: p.th && p.th !== "—" ? p.th : "—",
-      goals: 0,
+      id: t.treatment_id,
+      patient: t.patient_name || (patientRow && patientRow.name) || t.patient_id,
+      diag: t.diagnosis || "—",
+      therapist: t.therapist_name || t.therapist_id || "—",
+      goals: Array.isArray(t.goals) ? t.goals.length : 0,
       progress,
       sessions: total ? `${done}/${total}` : String(done),
-      status: progress >= 100 && total ? "مكتمل" : (p.status === "غير نشط" ? "مسودة" : "نشط"),
-      updated: p.visited && p.visited !== "—" ? p.visited : (p.registered || "—"),
-      p,
+      status: t.status === "completed" || (progress >= 100 && total) ? "مكتمل"
+            : t.status === "draft" ? "مسودة" : "نشط",
+      updated: updatedAt ? new Date(updatedAt).toLocaleDateString("ar-EG") : "—",
+      p: patientRow || { patient_id: t.patient_id, name: t.patient_name || t.patient_id },
+      t,
     };
   });
   const avgProgress = plans.length ? Math.round(plans.reduce((s, x) => s + x.progress, 0) / plans.length) : 0;
@@ -73,8 +93,8 @@ function Treatments({ go }) {
         <table className="tbl">
           <thead><tr><th>الخطة</th><th>المريض</th><th>التشخيص</th><th>الأخصائي</th><th>التقدّم</th><th>الجلسات</th><th>الحالة</th><th>آخر تحديث</th></tr></thead>
           <tbody>
-            {plans.length===0 && (
-              <tr><td colSpan={8}><EmptyState icon={<I.Clipboard size={22}/>} title="لا خطط علاج بعد" body="أضف مرضى لتظهر خططهم العلاجية هنا."/></td></tr>
+            {plans.length===0 && !loadingRecords && (
+              <tr><td colSpan={8}><EmptyState icon={<I.Clipboard size={22}/>} title="لا خطط علاج بعد" body="أنشئ خطة جديدة أو استخدم أحد القوالب لتظهر هنا."/></td></tr>
             )}
             {plans.map(p=>(
               <tr key={p.id} data-clickable="true" tabIndex={0} onClick={()=>{setSelected(p);setView("detail")}} onKeyDown={e=>{ if(e.key==="Enter"||e.key===" "){e.preventDefault();setSelected(p);setView("detail");} }}>
@@ -107,11 +127,18 @@ function Treatments({ go }) {
         <TemplatesLibraryModal
           pickerOnly
           onClose={()=>setTemplatesOpen(false)}
-          onUse={(t)=>{
-            setTemplate(t);
+          onUse={async (t)=>{
             setTemplatesOpen(false);
+            // Fetch the FULL template row (all fields + current version) so
+            // the treatment form opens with every value pre-populated.
+            let full = t;
+            try {
+              const res = await window.Templates.get(t.template_id);
+              if (res && res.template) full = res.template;
+            } catch(_) {}
+            setTemplate(full);
             setView("create");
-            if(window.showToast) window.showToast(`تم تحميل القالب: ${t.name}`, "success");
+            if(window.showToast) window.showToast(`تم تحميل القالب: ${full.name}`, "success");
           }}
         />
       )}
@@ -134,7 +161,7 @@ function TreatmentPlanDetail({ plan, onBack, onEdit }) {
         </div>
       </div>
 
-      <PatientTreatmentPlan p={plan.p}/>
+      <PatientTreatmentPlan p={plan.p} t={plan.t}/>
     </Page>
   );
 }
@@ -142,25 +169,98 @@ function TreatmentPlanDetail({ plan, onBack, onEdit }) {
 function TreatmentPlanCreate({ onCancel, onSave, template }) {
   window.useDataVersion && window.useDataVersion();
   // `template` may be a plain diagnosis string (legacy) or a full DB
-  // template object (from the new library). Hydrate diag + preselected
-  // methods/modalities from either shape.
+  // template object (from the new library). Every template field is
+  // hydrated into the form state — visible fields are editable below,
+  // and the rest (exercises, home instructions, warnings…) ride along
+  // untouched so the saved treatment is a complete copy of the قالب.
   const tplObj = (template && typeof template === "object") ? template : null;
   const tplName = tplObj ? tplObj.name : (typeof template === "string" ? template : "");
   const [diag, setDiag] = React.useState(
-    (tplObj && tplObj.diagnosis) || (typeof template === "string" ? template : "متلازمة ألم الرضفة الفخذية")
+    (tplObj && tplObj.diagnosis) || (typeof template === "string" ? template : "")
   );
+  const [goalsText, setGoalsText] = React.useState(() =>
+    (tplObj && Array.isArray(tplObj.goals)) ? tplObj.goals.join("\n") : ""
+  );
+  const [notes, setNotes] = React.useState((tplObj && tplObj.notes) || "");
+  const [totalSessions, setTotalSessions] = React.useState(
+    tplObj && tplObj.estimated_sessions != null ? String(tplObj.estimated_sessions) : "10"
+  );
+  const [frequency, setFrequency] = React.useState(
+    tplObj && tplObj.weekly_frequency != null ? String(tplObj.weekly_frequency) : "2"
+  );
+  const [startDate, setStartDate] = React.useState(() => new Date().toISOString().slice(0, 10));
   const [modalities, setModalities] = React.useState(() => {
     if (!tplObj) return [];
     const fromMethods    = Array.isArray(tplObj.methods)    ? tplObj.methods.map(m => m.name || m) : [];
     const fromModalities = Array.isArray(tplObj.modalities) ? tplObj.modalities : [];
     return Array.from(new Set([...fromMethods, ...fromModalities]));
   });
+  const [saving, setSaving] = React.useState(false);
   const [txModalOpen, setTxModalOpen] = React.useState(false);
   const toggleModality = (m) => setModalities(list => list.includes(m) ? list.filter(x=>x!==m) : [...list, m]);
   const patients = (window.scopePatients ? window.scopePatients(DATA.patients) : DATA.patients) || [];
-  const [patientId, setPatientId] = React.useState(patients[0] ? (patients[0].patient_id || patients[0].id) : "");
+  const [patientId, setPatientId] = React.useState("");
   const therapists = (DATA.therapists || []);
-  const [therapistId, setTherapistId] = React.useState(therapists[0] ? (therapists[0].staff_id || therapists[0].id || therapists[0].name) : "");
+  const [therapistId, setTherapistId] = React.useState("");
+
+  // Expected end — derived from the start date plus either the template's
+  // recovery window or the sessions/frequency pair. Display-only.
+  const expectedEnd = React.useMemo(() => {
+    const start = startDate ? new Date(startDate + "T00:00:00") : null;
+    if (!start || isNaN(start)) return "—";
+    let days = tplObj && tplObj.expected_recovery_days ? Number(tplObj.expected_recovery_days) : 0;
+    if (!days) {
+      const total = Number(totalSessions) || 0;
+      const freq  = Number(frequency) || 0;
+      if (total && freq) days = Math.ceil(total / freq) * 7;
+    }
+    if (!days) return "—";
+    const end = new Date(start.getTime() + days * 86400000);
+    return end.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  }, [startDate, totalSessions, frequency, tplObj]);
+
+  // Save the treatment as a real PostgreSQL record. The doctor supplies
+  // patient + therapist; everything else is already filled (from the
+  // template or by hand) and stays editable up to this point. Saving
+  // NEVER touches the template — the RPC copies values and links back
+  // via template_id + template_version for audit.
+  async function doSaveTreatment(statusVal) {
+    if (saving) return;
+    if (!patientId)   { if (window.showToast) window.showToast("اختر المريض", "error"); return; }
+    if (!therapistId) { if (window.showToast) window.showToast("اختر الأخصائي المسؤول", "error"); return; }
+    if (!diag.trim()) { if (window.showToast) window.showToast("التشخيص مطلوب", "error"); return; }
+    setSaving(true);
+    const tplModalities = (tplObj && Array.isArray(tplObj.modalities)) ? tplObj.modalities : [];
+    const keptModalities = tplModalities.filter(m => modalities.includes(m));
+    const methodNames = modalities.filter(m => !keptModalities.includes(m));
+    const payload = {
+      patient_id:   patientId,
+      therapist_id: therapistId,
+      template_id:  (tplObj && tplObj.template_id) || null,
+      name:         tplName || diag.trim(),
+      diagnosis:    diag.trim(),
+      goals:        goalsText.split("\n").map(g => g.trim()).filter(Boolean),
+      methods:      methodNames.map(name => ({ name })),
+      modalities:   keptModalities,
+      notes,
+      estimated_sessions: totalSessions === "" ? null : Number(totalSessions),
+      weekly_frequency:   frequency === "" ? null : Number(frequency),
+      start_date:   startDate || null,
+      status:       statusVal,
+    };
+    const res = await window.TreatmentsAPI.create(payload);
+    setSaving(false);
+    if (!res.ok) {
+      if (window.showToast) window.showToast(res.error || "تعذّر حفظ خطة العلاج", "error");
+      return;
+    }
+    if (statusVal === "draft") {
+      if (window.showToast) window.showToast("تم الحفظ كمسودة", "success");
+      onCancel();
+    } else {
+      onSave();
+    }
+  }
 
   // Load the shared library on first mount. Idempotent — the API skips
   // the network round-trip if DATA.treatmentMethods is already warm.
@@ -194,9 +294,9 @@ function TreatmentPlanCreate({ onCancel, onSave, template }) {
       <div className="page-head">
         <div className="h1">إنشاء خطة علاج{tplName ? ` — ${tplName}` : ""}</div>
         <div className="page-actions">
-          <button className="btn btn-ghost" onClick={onCancel}>إلغاء</button>
-          <button className="btn btn-secondary" onClick={()=>{if(window.showToast)window.showToast("تم الحفظ كمسودة","success");onCancel();}}>حفظ كمسودة</button>
-          <button className="btn btn-blue" onClick={onSave}><I.Check size={13}/> نشر الخطة</button>
+          <button className="btn btn-ghost" onClick={onCancel} disabled={saving}>إلغاء</button>
+          <button className="btn btn-secondary" onClick={()=>doSaveTreatment("draft")} disabled={saving}>حفظ كمسودة</button>
+          <button className="btn btn-blue" onClick={()=>doSaveTreatment("active")} disabled={saving}><I.Check size={13}/> {saving ? "جارٍ الحفظ…" : "نشر الخطة"}</button>
         </div>
       </div>
 
@@ -211,7 +311,7 @@ function TreatmentPlanCreate({ onCancel, onSave, template }) {
               <TherapistCombobox value={therapistId} onChange={setTherapistId} therapists={therapists}/>
             </Field>
             <Field label="التشخيص" required span={2}><input className="input" value={diag} onChange={e=>setDiag(e.target.value)}/></Field>
-            <Field label="الأهداف (هدف بكل سطر)" span={2}><textarea className="input" style={{height:100,padding:10}} defaultValue={"Restore pain-free stair descent\nReturn to running بواسطة July\nQuad strength symmetry ≥ 90%"}/></Field>
+            <Field label="الأهداف (هدف بكل سطر)" span={2}><textarea className="input" style={{height:100,padding:10}} value={goalsText} onChange={e=>setGoalsText(e.target.value)}/></Field>
             <Field label="طرق العلاج" span={2}>
               <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
                 {activeMethods.map(m=>{
@@ -250,18 +350,23 @@ function TreatmentPlanCreate({ onCancel, onSave, template }) {
                 )}
               </div>
             </Field>
-            <Field label="ملاحظات" span={2}><textarea className="input" style={{height:80,padding:10}} placeholder="ملاحظات داخلية لفريق الرعاية"/></Field>
+            <Field label="ملاحظات" span={2}><textarea className="input" style={{height:80,padding:10}} placeholder="ملاحظات داخلية لفريق الرعاية" value={notes} onChange={e=>setNotes(e.target.value)}/></Field>
           </div>
         </div>
         <div className="card card-pad">
           <div className="h3" style={{marginBottom:14}}>الجدولة</div>
-          <Field label="إجمالي الجلسات"><input className="input" type="number" defaultValue="10"/></Field>
+          <Field label="إجمالي الجلسات"><input className="input" type="number" value={totalSessions} onChange={e=>setTotalSessions(e.target.value)}/></Field>
           <div style={{height:12}}/>
-          <Field label="التكرار"><select className="input"><option>2× per week</option><option>1× per week</option><option>3× per week</option></select></Field>
+          <Field label="التكرار"><select className="input" value={frequency} onChange={e=>setFrequency(e.target.value)}>
+            <option value="2">2× per week</option>
+            <option value="1">1× per week</option>
+            <option value="3">3× per week</option>
+            {!["","1","2","3"].includes(frequency) && <option value={frequency}>{frequency}× per week</option>}
+          </select></Field>
           <div style={{height:12}}/>
-          <Field label="تاريخ البدء"><input className="input" type="date" defaultValue="2026-05-26"/></Field>
+          <Field label="تاريخ البدء"><input className="input" type="date" value={startDate} onChange={e=>setStartDate(e.target.value)}/></Field>
           <div style={{height:12}}/>
-          <Field label="النهاية المتوقعة"><input className="input" disabled defaultValue="Jul 7, 2026"/></Field>
+          <Field label="النهاية المتوقعة"><input className="input" disabled value={expectedEnd}/></Field>
 
           <div style={{padding:14,background:"var(--blue-50)",border:"1px solid var(--blue-100)",borderRadius:12,marginTop:18,fontSize:12.5}}>
             <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
@@ -5867,9 +5972,9 @@ function TemplatesLibraryModal({ onClose, onUse, pickerOnly }) {
     setConfirmDel(null);
   }
   function doUse(t) {
-    // Fire-and-forget: usage row + counter increments. The parent
-    // navigates immediately so the doctor sees the plan editor.
-    if (window.Templates) window.Templates.apply(t.template_id).catch(()=>{});
+    // Navigation only — the usage row + counter are written by the
+    // create_treatment RPC when the doctor actually SAVES a treatment,
+    // so cancelled forms never inflate the template's usage stats.
     if (onUse) onUse(t);
   }
 

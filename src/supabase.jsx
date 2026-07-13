@@ -2377,6 +2377,92 @@ const Templates = {
 window.Templates = Templates;
 
 // ══════════════════════════════════════════════════════════════
+// Treatments API — real treatment records (سجلات العلاج)
+// PostgreSQL only: every read/write goes through the security-definer
+// RPCs (create_treatment / update_treatment / list_treatments /
+// get_treatment). No localStorage mirror — a treatment is a clinical
+// record, so it must never exist only in a browser.
+// Creating from a template happens server-side: the RPC copies every
+// clinical field of the template, merges the doctor's edits on top,
+// stores template_id + version + snapshot for audit, and logs
+// template_usage in the same transaction. The template row itself is
+// never modified by any of these calls.
+// ══════════════════════════════════════════════════════════════
+function __treatmentId() {
+  const d = new Date();
+  const pad = (n, w = 2) => String(n).padStart(w, '0');
+  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
+  return `TRT-${stamp}-${rand}`;
+}
+function __trtDispatch(action, treatment_id) {
+  window.dispatchEvent(new CustomEvent('kinetic:treatments-updated', { detail: { action, treatment_id } }));
+  window.dispatchEvent(new CustomEvent('kinetic:data-updated', { detail: { table: 'treatments' } }));
+}
+const __TRT_NO_DB = 'قاعدة البيانات غير متصلة — لا يمكن حفظ سجلات العلاج';
+
+async function createTreatment(payload) {
+  if (!sb) return { ok: false, error: __TRT_NO_DB };
+  const treatment_id = __treatmentId();
+  try {
+    const { data, error } = await sb.rpc('create_treatment', {
+      p_treatment_id: treatment_id, p_payload: payload || {},
+    });
+    if (error) return { ok: false, error: error.message || 'تعذّر حفظ العلاج' };
+    __trtDispatch('create', treatment_id);
+    // The RPC bumped the template's usage counter — refresh template UIs.
+    if (payload && payload.template_id) __tplDispatch('apply', payload.template_id);
+    return { ok: true, treatment_id, row: data || null };
+  } catch (e) { return { ok: false, error: e.message || 'تعذّر حفظ العلاج' }; }
+}
+
+async function updateTreatment(treatmentId, payload) {
+  if (!treatmentId) return { ok: false, error: 'معرّف العلاج مفقود' };
+  if (!sb) return { ok: false, error: __TRT_NO_DB };
+  try {
+    const { data, error } = await sb.rpc('update_treatment', {
+      p_treatment_id: treatmentId, p_payload: payload || {},
+    });
+    if (error) return { ok: false, error: error.message || 'تعذّر التحديث' };
+    __trtDispatch('update', treatmentId);
+    return { ok: true, treatment_id: treatmentId, row: data || null };
+  } catch (e) { return { ok: false, error: e.message || 'تعذّر التحديث' }; }
+}
+
+async function listTreatments(opts = {}) {
+  if (!sb) return { rows: [], count: 0, error: __TRT_NO_DB };
+  const { patientId = null, status = '', search = '', limit = 200, offset = 0 } = opts;
+  try {
+    const { data, error } = await sb.rpc('list_treatments', {
+      p_patient_id: patientId || null,
+      p_status:     status || null,
+      p_search:     search || null,
+      p_limit:      limit,
+      p_offset:     offset,
+    });
+    if (error) { console.warn('list_treatments failed', error.message || error); return { rows: [], count: 0, error: error.message }; }
+    return { rows: (data && data.rows) || [], count: (data && data.count) || 0 };
+  } catch (e) { console.warn('list_treatments failed', e); return { rows: [], count: 0, error: e.message }; }
+}
+
+async function getTreatment(treatmentId) {
+  if (!sb || !treatmentId) return null;
+  try {
+    const { data, error } = await sb.rpc('get_treatment', { p_treatment_id: treatmentId });
+    if (error) { console.warn('get_treatment failed', error.message || error); return null; }
+    return data || null;
+  } catch (e) { console.warn('get_treatment failed', e); return null; }
+}
+
+const TreatmentsAPI = {
+  list:   listTreatments,
+  get:    getTreatment,
+  create: createTreatment,
+  update: updateTreatment,
+};
+window.TreatmentsAPI = TreatmentsAPI;
+
+// ══════════════════════════════════════════════════════════════
 // TplCategories — DB-authoritative categories for treatment plan
 // templates. Managed from Settings → قوالب خطط العلاج. Renaming
 // propagates to templates.category server-side so the picker stays
@@ -2484,6 +2570,6 @@ Object.assign(window, {
   signInEmail, signOut, getSession, getAuthStaff, STAFF_ROLES, onAuthChange,
   adminCreateUser, sendPasswordReset, updateOwnPassword, updateOwnProfile, updateStaffMember,
   startDictation, printHTML, escHtml,
-  KineticData, QuickPay, TxMethods, InvoicesAPI, PaymentReceipts, Templates, TplCategories,
+  KineticData, QuickPay, TxMethods, InvoicesAPI, PaymentReceipts, Templates, TplCategories, TreatmentsAPI,
   uploadPatientFile, listPatientFiles, removePatientFile, getPatientFileUrl,
 });

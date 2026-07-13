@@ -1326,12 +1326,34 @@ function PatientHistory({ p }) {
   );
 }
 
-function PatientTreatmentPlan({ p }) {
-  // Initialized from the patient's real record; goals/modalities start
-  // empty and are filled in by the clinician (editable below).
+function PatientTreatmentPlan({ p, t }) {
+  // Initialized from the saved treatment record when one is passed
+  // (`t` — a row from the treatments table, values copied from the
+  // template at creation time); otherwise from the patient's record
+  // with empty goals/modalities for the clinician to fill in.
   const [plan, setPlan] = React.useState(() => {
+    if (t) {
+      const thName = t.therapist_name || t.therapist_id || "—";
+      const thRow = (DATA.therapists || []).find(x => x.name === thName || x.id === t.therapist_id);
+      return {
+        goals: (Array.isArray(t.goals) ? t.goals : []).map(g =>
+          typeof g === "string" ? { g, done: false } : { g: g.g || "", done: !!g.done }),
+        modalities: [
+          ...(Array.isArray(t.methods) ? t.methods.map(m => m.name || m) : []),
+          ...(Array.isArray(t.modalities) ? t.modalities : []),
+        ].filter(Boolean),
+        notes: t.notes || "",
+        therapist: { initials: thName !== "—" ? initialsOf(thName) : "—", name: thName, spec: (thRow && thRow.spec) || "" },
+        diagnosis: t.diagnosis || "—",
+        schedule: {
+          frequency: t.weekly_frequency ? `${t.weekly_frequency}× أسبوعيًا` : "—",
+          duration: "—",
+          total: Number(t.estimated_sessions) || 0,
+        },
+      };
+    }
     const th = p && p.th && p.th !== "—" ? p.th : "";
-    const thRow = (DATA.therapists || []).find(t => t.name === th);
+    const thRow = (DATA.therapists || []).find(x => x.name === th);
     const total = Number(((p && p.pkg || "").match(/(\d+)/) || [])[1]) || 0;
     return {
       goals: [],
