@@ -89,7 +89,7 @@ window.Icon = Icon;
 
 window.DATA = {
   patients: [], appts: [], therapists: [], departments: [], doctors: [],
-  receptionists: [],
+  receptionists: [], schedules: [],
   packages: [], payments: [], campaigns: [], sessions: [],
   paymentHistory: [], subscriptions: [], treatmentMethods: [],
 };
@@ -98,13 +98,19 @@ window.DATA = {
 // Components that read from window.DATA.* should call useDataVersion()
 // so they re-render when any table is upserted/removed/hydrated.
 // Emits the same event (kinetic:data-updated) already dispatched by
-// KineticData.upsert/remove and hydrateDomainTables.
+// KineticData.upsert/remove and hydrateDomainTables. Also reacts to
+// kinetic:clinic-updated so calendar working hours / slot duration
+// changes propagate to every open calendar without a reload.
 function useDataVersion() {
   const [tick, setTick] = React.useState(0);
   React.useEffect(() => {
     const on = () => setTick(t => t + 1);
     window.addEventListener("kinetic:data-updated", on);
-    return () => window.removeEventListener("kinetic:data-updated", on);
+    window.addEventListener("kinetic:clinic-updated", on);
+    return () => {
+      window.removeEventListener("kinetic:data-updated", on);
+      window.removeEventListener("kinetic:clinic-updated", on);
+    };
   }, []);
   return tick;
 }

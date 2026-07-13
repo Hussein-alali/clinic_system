@@ -3943,6 +3943,8 @@ function ClinicDetailsPanel() {
     currency: src.currency || "EGP",
     timezone: src.timezone || "Africa/Cairo",
     appointment_duration: src.appointment_duration != null ? String(src.appointment_duration) : "30",
+    calendar_start: src.calendar_start || "08:00",
+    calendar_end: src.calendar_end || "18:00",
   });
   const [form, setForm] = React.useState(() => seedFromForm(window.CLINIC || {}));
   const [saving, setSaving] = React.useState(false);
@@ -3977,6 +3979,13 @@ function ClinicDetailsPanel() {
     const dur = parseInt(form.appointment_duration, 10);
     if (!Number.isFinite(dur) || dur < 5 || dur > 240) {
       if (window.showToast) window.showToast("مدة الجلسة بين 5 و 240 دقيقة","error"); return;
+    }
+    const hm = /^([01]\d|2[0-3]):[0-5]\d$/;
+    if (!hm.test(form.calendar_start) || !hm.test(form.calendar_end)) {
+      if (window.showToast) window.showToast("أدخل بداية ونهاية دوام صحيحتين (HH:MM)","error"); return;
+    }
+    if (form.calendar_end <= form.calendar_start) {
+      if (window.showToast) window.showToast("نهاية الدوام يجب أن تكون بعد بدايته","error"); return;
     }
     if (!window.saveClinic) {
       if (window.showToast) window.showToast("قاعدة البيانات غير متصلة","error");
@@ -4024,7 +4033,15 @@ function ClinicDetailsPanel() {
             <option value="Asia/Amman">عمّان (Asia/Amman)</option>
           </select>
         </Field>
-        <Field label="مدة الجلسة (دقيقة)" span={2}>
+        <Field label="بداية دوام التقويم" hint="أول موعد يظهر في التقويم">
+          <input className="input" type="time" value={form.calendar_start}
+                 onChange={e=>set("calendar_start", e.target.value)}/>
+        </Field>
+        <Field label="نهاية دوام التقويم" hint="آخر موعد يظهر في التقويم">
+          <input className="input" type="time" value={form.calendar_end}
+                 onChange={e=>set("calendar_end", e.target.value)}/>
+        </Field>
+        <Field label="مدة الجلسة (دقيقة)" span={2} hint="تُستخدم كمدة الخانة في التقويم وكل شاشات اختيار الوقت">
           <input className="input" type="number" min="5" max="240" step="5"
                  value={form.appointment_duration}
                  onChange={e=>set("appointment_duration", e.target.value)}/>
@@ -5369,10 +5386,14 @@ function PatientProfile() {
 // output, which uses "الاثنين" in ar-EG.
 const __BK_AR_WD = ["الأحد","الإثنين","الثلاثاء","الأربعاء","الخميس","الجمعة","السبت"];
 const __BK_AR_MO = ["يناير","فبراير","مارس","أبريل","مايو","يونيو","يوليو","أغسطس","سبتمبر","أكتوبر","نوفمبر","ديسمبر"];
-const __BK_SLOTS = [
-  "08:30","09:00","09:30","10:00","10:30","11:00","11:30",
-  "12:00","13:00","13:30","14:00","14:30","15:00","15:30","16:00","16:30","17:00"
-];
+// Bookable slots from clinic settings (working window + slot duration) —
+// falls back to the legacy fixed list only if settings aren't loaded yet.
+function __bkSlots() {
+  return window.calendarSlots ? window.calendarSlots() : [
+    "08:30","09:00","09:30","10:00","10:30","11:00","11:30",
+    "12:00","13:00","13:30","14:00","14:30","15:00","15:30","16:00","16:30","17:00"
+  ];
+}
 function __bkIso(d){ const p=n=>String(n).padStart(2,"0"); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
 function __bkFormat(iso, offset) {
   const d = new Date(iso + "T00:00:00");
@@ -5403,7 +5424,8 @@ function __bkDays(count, therapistName, excludeId) {
         (excludeId == null || (a.booking_id || a.id) !== excludeId)
       ).map(a => a.time)
     );
-    const slotPool = iso === todayIso ? __BK_SLOTS.filter(t => t > nowHM) : __BK_SLOTS;
+    const slots = __bkSlots();
+    const slotPool = iso === todayIso ? slots.filter(t => t > nowHM) : slots;
     const avail = Math.max(0, slotPool.filter(t => !takenTimes.has(t)).length);
     out.push({ ...info, slots: avail, takenTimes, todayIso, nowHM });
   }
@@ -5603,7 +5625,7 @@ function PatientBookingFlow({ onClose, onDone }) {
 
                     <div className="label">وقت</div>
                     <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                      {__BK_SLOTS.map(t => {
+                      {__bkSlots().map(t => {
                         const isPast  = picks.date === todayInfo.todayIso && t <= todayInfo.nowHM;
                         const isTaken = takenTimes.has(t);
                         const unavail = isPast || isTaken;
@@ -5969,7 +5991,7 @@ function PublicBookingScreen({ onBack, onDone }) {
 
                   <div className="label" style={{marginBottom:10}}>اختر وقتًا</div>
                   <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                    {__BK_SLOTS.map(t => {
+                    {__bkSlots().map(t => {
                       const isPast  = picks.date === todayInfo.todayIso && t <= todayInfo.nowHM;
                       const isTaken = takenTimes.has(t);
                       const unavail = isPast || isTaken;

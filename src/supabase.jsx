@@ -38,6 +38,10 @@ const DEFAULT_CLINIC = {
   subtitle: "",
   logo: null,
   primary: "#7BBDE8",
+  // Calendar working window — used by every calendar view and slot picker.
+  calendar_start: "08:00",
+  calendar_end: "18:00",
+  appointment_duration: 30,
 };
 
 // ── Default custom sections (empty) ───────────────────────────
@@ -89,8 +93,53 @@ async function loadClinic() {
 const CLINIC_COLS = [
   "id","name","subtitle","logo","primary_color","branch","phone","email",
   "address","tax_id","hours","website","currency","timezone",
-  "appointment_duration","updated_at",
+  "appointment_duration","calendar_start","calendar_end","updated_at",
 ];
+
+// ── Calendar working window (from clinic settings) ────────────
+// Single source of truth for every calendar grid and time-slot picker.
+// Reads window.CLINIC (hydrated by loadClinic) with safe fallbacks, so
+// no screen ever hardcodes working hours or slot duration again.
+function hmToMinutes(t) {
+  const [h, m] = String(t || "").split(":").map(Number);
+  return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0);
+}
+function minutesToHm(min) {
+  return `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
+}
+function calendarConfig() {
+  const c = window.CLINIC || DEFAULT_CLINIC;
+  const valid = (t) => /^([01]\d|2[0-3]):[0-5]\d$/.test(t || "");
+  let start = valid(c.calendar_start) ? c.calendar_start : "08:00";
+  let end   = valid(c.calendar_end)   ? c.calendar_end   : "18:00";
+  if (end <= start) { start = "08:00"; end = "18:00"; }
+  let slotMinutes = parseInt(c.appointment_duration, 10);
+  if (!Number.isFinite(slotMinutes) || slotMinutes < 5 || slotMinutes > 240) slotMinutes = 30;
+  return {
+    start, end, slotMinutes,
+    startMinutes: hmToMinutes(start),
+    endMinutes: hmToMinutes(end),
+  };
+}
+// Bookable time slots between start (inclusive) and end (inclusive),
+// stepped by the configured slot duration (or an explicit step).
+function calendarSlots(stepMinutes) {
+  const cfg = calendarConfig();
+  const step = Number.isFinite(stepMinutes) && stepMinutes > 0 ? stepMinutes : cfg.slotMinutes;
+  const out = [];
+  for (let m = cfg.startMinutes; m <= cfg.endMinutes; m += step) out.push(minutesToHm(m));
+  return out;
+}
+// Hour-row labels for the calendar grids (whole hours covering the window).
+function calendarHours() {
+  const cfg = calendarConfig();
+  const out = [];
+  for (let m = cfg.startMinutes - (cfg.startMinutes % 60); m <= cfg.endMinutes; m += 60) {
+    out.push(minutesToHm(m));
+  }
+  return out;
+}
+Object.assign(window, { calendarConfig, calendarSlots, calendarHours });
 
 async function saveClinic(patch) {
   if (!sb) throw new Error("قاعدة البيانات غير متصلة");
@@ -965,7 +1014,9 @@ async function hydrateDomainTables() {
   for (const name of Object.keys(DATA_TABLES)) {
     try {
       const rows = await listTable(name);
-      if (rows && rows.length) fetched[name] = rows;
+      // Trust the database as the single source of truth — an empty table
+      // means empty UI, not "keep whatever was in memory before".
+      if (Array.isArray(rows)) fetched[name] = rows;
     } catch (e) { console.warn("hydrate", name, "failed", e); }
   }
   if (window.DATA) {
