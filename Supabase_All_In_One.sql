@@ -2125,7 +2125,7 @@ begin
       nullif(p_payload->>'display_order','')::int,
       case when coalesce(p_payload->>'is_active','true')='false' then 'archived' else 'active' end,
       v_uid,
-      (select name from staff where user_id = v_uid limit 1)
+      (select name from staff where auth_uid = v_uid limit 1)
     );
   end if;
 
@@ -2286,7 +2286,7 @@ begin
       nullif(btrim(coalesce(p_payload->>'description','')),''),
       nullif(p_payload->>'sort_order','')::int,
       'active', v_uid,
-      (select name from staff where user_id = v_uid limit 1)
+      (select name from staff where auth_uid = v_uid limit 1)
     );
   end if;
 
@@ -2327,6 +2327,37 @@ begin
 end;
 $$;
 grant execute on function public.set_template_category_status(text, text) to authenticated;
+
+-- ── RPC: delete a category (blocked if any template still uses it) ──
+-- Safe hard-delete: refuses when a treatment_templates row still carries
+-- this category's name, so no template is ever orphaned. Callers should
+-- reassign or archive instead. Admin/doctor only; audited.
+create or replace function public.delete_template_category(
+  p_category_id text
+) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  v_role text := public.app_role();
+  v_uid  uuid := auth.uid();
+  v_cat  template_categories%rowtype;
+  v_used int;
+begin
+  if v_role not in ('admin','doctor') then
+    raise exception 'غير مصرح — لا تملك صلاحية حذف الفئات';
+  end if;
+  select * into v_cat from template_categories where category_id = p_category_id;
+  if not found then raise exception 'الفئة غير موجودة'; end if;
+  select count(*) into v_used from treatment_templates where category = v_cat.name;
+  if v_used > 0 then
+    raise exception 'لا يمكن حذف الفئة — يستخدمها % قالب. أعد تصنيف القوالب أو أرشِف الفئة بدلًا من حذفها.', v_used;
+  end if;
+  delete from template_categories where category_id = p_category_id;
+  insert into audit_events (actor_uid, actor_role, action, table_name, row_pk, payload)
+  values (v_uid, v_role, 'tpl_cat_delete', 'template_categories', p_category_id, to_jsonb(v_cat));
+  return jsonb_build_object('category_id', p_category_id, 'deleted', true);
+end;
+$$;
+grant execute on function public.delete_template_category(text) to authenticated;
 
 -- ┌────────────────────────────────────────────────────────────────────┐
 -- │ 2. MIGRATION 2026-07-11 — payments/receipts, treatment templates & methods
@@ -2592,7 +2623,7 @@ begin
       nullif(btrim(coalesce(p_payload->>'description','')),''),
       nullif(p_payload->>'sort_order','')::int,
       'active', v_uid,
-      (select name from staff where user_id = v_uid limit 1)
+      (select name from staff where auth_uid = v_uid limit 1)
     );
   end if;
 
@@ -3969,4 +4000,54 @@ begin
 end $$;
 
 -- Refresh the PostgREST schema cache once, after all DDL above.
+notify pgrst, 'reload schema';
+
+-- ┌────────────────────────────────────────────────────────────────────┐
+-- │ 12. MIGRATION — staff account status enforcement + admin actions    │
+-- │ (admin password reset, activate/deactivate, audit trail)            │
+-- └────────────────────────────────────────────────────────────────────┘
+-- ══════════════════════════════════════════════════════════════════════
+-- A staff account can be deactivated by an admin. A deactivated account:
+--   • cannot sign in (blocked in signInEmail on the client, and the
+--     Auth user is banned via the admin API so token refresh fails);
+--   • loses ALL data access even with a still-valid access token, because
+--     public.app_role() below returns NULL for a non-active staff row, so
+--     every RLS policy that checks app_role() denies the request;
+--   • keeps its row + all historical data (appointments, sessions,
+--     invoices, audit logs) fully intact.
+-- Reactivation simply flips status back to 'active' and unbans the user.
+-- ══════════════════════════════════════════════════════════════════════
+
+-- Status column already added earlier (default 'active'); make sure every
+-- pre-existing row has a concrete value and constrain it to known states.
+alter table staff add column if not exists status text default 'active';
+update staff set status = 'active' where status is null or status not in ('active','inactive');
+do $$ begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'staff_status_chk'
+  ) then
+    alter table staff
+      add constraint staff_status_chk check (status in ('active','inactive'));
+  end if;
+end $$;
+create index if not exists staff_status_idx on staff(status);
+
+-- app_role() now resolves to the role ONLY for an ACTIVE staff row. A
+-- deactivated (or missing) account resolves to NULL, so every RLS policy
+-- that gates on app_role() denies it — this is the server-side teeth
+-- behind deactivation. security definer + fixed search_path unchanged.
+create or replace function public.app_role() returns text
+language plpgsql stable security definer
+set search_path = public
+as $$
+begin
+  return (
+    select s.role from staff s
+    where s.auth_uid = auth.uid()
+      and coalesce(s.status, 'active') = 'active'
+    limit 1
+  );
+end $$;
+
+-- Refresh PostgREST so the redefined function + new column are live.
 notify pgrst, 'reload schema';

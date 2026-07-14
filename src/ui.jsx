@@ -871,6 +871,60 @@ function TherapistCombobox({ value, onChange, therapists = [], placeholder, disa
 }
 window.TherapistCombobox = TherapistCombobox;
 
+// ── CategoryCombobox — treatment-plan template category picker ──
+// DB-authoritative, searchable dropdown backed by the template_categories
+// table (via window.TplCategories). It loads active categories on mount,
+// refreshes live on `kinetic:tpl-categories-updated`, and stores the
+// selected category NAME (templates keep category as free text so a
+// rename/archive never orphans historical templates). A current value
+// that isn't an active category (legacy / archived) is preserved as a
+// pinned option so editing an old template never silently drops it. The
+// first option clears the field ("بدون فئة").
+function CategoryCombobox({ value, onChange, placeholder, disabled }) {
+  const [cats, setCats] = React.useState([]);
+  const reload = React.useCallback(async () => {
+    if (!window.TplCategories) return;
+    const res = await window.TplCategories.list(false);   // active only
+    if (res && res.ok) setCats(res.rows || []);
+  }, []);
+  React.useEffect(() => {
+    reload();
+    const on = () => reload();
+    window.addEventListener("kinetic:tpl-categories-updated", on);
+    return () => window.removeEventListener("kinetic:tpl-categories-updated", on);
+  }, [reload]);
+
+  const items = React.useMemo(() => {
+    const list = [{ id: "", name: "بدون فئة", __none: true }];
+    (cats || []).forEach(c => list.push({
+      id: c.name, name: c.name, category_id: c.category_id, description: c.description || null,
+    }));
+    if (value && !list.some(it => it.id === value)) {
+      list.push({ id: value, name: value, __custom: true });
+    }
+    return list;
+  }, [cats, value]);
+
+  return (
+    <EntityCombobox
+      value={value || ""}
+      onChange={(id) => onChange && onChange(id || "")}
+      items={items}
+      getId={it => it.id}
+      getPrimary={it => it.name}
+      getSearchText={it => it.name || ""}
+      getInitials={it => it.__none ? "—" : initialsOf2(it.name)}
+      renderSecondary={(it) => it.__custom ? "فئة مخصّصة" : (it.description || null)}
+      placeholder={placeholder || "اختر فئة…"}
+      emptyMessage="لا توجد فئات"
+      emptyHint="أضِف فئات من «إدارة الفئات»"
+      ariaLabel="قائمة الفئات"
+      disabled={disabled}
+    />
+  );
+}
+window.CategoryCombobox = CategoryCombobox;
+
 // ── Stat card ──────────────────────────────────────────────────
 function StatCard({ label, value, delta, deltaKind, icon, accent="#7BBDE8", spark }) {
   const up = deltaKind === "up";

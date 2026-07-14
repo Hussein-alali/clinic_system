@@ -1365,7 +1365,7 @@ begin
       nullif(p_payload->>'display_order','')::int,
       case when coalesce(p_payload->>'is_active','true')='false' then 'archived' else 'active' end,
       v_uid,
-      (select name from staff where user_id = v_uid limit 1)
+      (select name from staff where auth_uid = v_uid limit 1)
     );
   end if;
 
@@ -1526,7 +1526,7 @@ begin
       nullif(btrim(coalesce(p_payload->>'description','')),''),
       nullif(p_payload->>'sort_order','')::int,
       'active', v_uid,
-      (select name from staff where user_id = v_uid limit 1)
+      (select name from staff where auth_uid = v_uid limit 1)
     );
   end if;
 

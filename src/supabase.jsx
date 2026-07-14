@@ -359,6 +359,15 @@ async function signInEmail(email, password) {
     const q = await sb.from("staff").select("*").eq("auth_uid", uid).maybeSingle();
     if (!q.error && q.data) { staffRow = q.data; role = q.data.role || null; }
   }
+  // A deactivated account must never establish a session. Sign the just-
+  // created session back out and report a clear reason — the RLS layer
+  // (app_role() → NULL for inactive) is the server-side backstop, this is
+  // the friendly front door.
+  if (staffRow && String(staffRow.status || "active") !== "active") {
+    try { await sb.auth.signOut({ scope: "local" }); } catch {}
+    return { ok: false, reason: "account-inactive",
+             error: "هذا الحساب معطّل. تواصل مع مدير النظام لإعادة تفعيله." };
+  }
   // The staff table in PostgreSQL is authoritative (it's what RLS's
   // app_role() reads); user_metadata is only a display fallback for
   // accounts whose staff row hasn't been provisioned yet.
@@ -426,8 +435,10 @@ async function getAuthStaff() {
     return { ok: false, reason: "invalid-session", error: e.message || String(e) };
   }
 
-  // Role from PostgreSQL — the same row RLS's app_role() reads.
-  const q = await sb.from("staff").select("staff_id,name,role,email").eq("auth_uid", user.id).maybeSingle();
+  // Role from PostgreSQL — the same row RLS's app_role() reads. The self
+  // read policy (auth_uid = auth.uid()) still returns the row for an
+  // inactive account, so we can distinguish "disabled" from "no record".
+  const q = await sb.from("staff").select("staff_id,name,role,email,status").eq("auth_uid", user.id).maybeSingle();
   if (q.error) {
     return { ok: false, reason: "staff-lookup-failed", session, user,
              error: q.error.message || "تعذّرت قراءة سجل الموظف" };
@@ -435,6 +446,11 @@ async function getAuthStaff() {
   if (!q.data || !q.data.role) {
     return { ok: false, reason: "no-staff-role", session, user,
              error: "لا يوجد سجل موظف مرتبط بهذا الحساب في قاعدة البيانات" };
+  }
+  // Deactivated accounts lose access even with a still-valid token.
+  if (String(q.data.status || "active") !== "active") {
+    return { ok: false, reason: "account-inactive", session, user, staff: q.data,
+             error: "هذا الحساب معطّل. تواصل مع مدير النظام لإعادة تفعيله." };
   }
   const role = String(q.data.role).trim();
   if (!STAFF_ROLES.includes(role)) {
@@ -647,6 +663,98 @@ async function updateStaffMember(staffId, patch) {
   } catch (e) { return { ok: false, error: e.message || String(e) }; }
 }
 
+// Read an Edge Function's structured JSON error body regardless of whether
+// supabase-js surfaced it as `data` (2xx) or wrapped it in a
+// FunctionsHttpError (4xx/5xx). Returns { error, detail } or null.
+async function __edgeErrorBody(data, error) {
+  if (data && data.ok === false) return { error: data.error, detail: data.detail };
+  if (error && error.context && typeof error.context.json === "function") {
+    try { const b = await error.context.json(); if (b && b.error) return b; } catch {}
+  }
+  return null;
+}
+
+const __ADMIN_ACTION_ERRORS = {
+  forbidden:             "لا تملك صلاحية هذا الإجراء — يتطلب دور «مدير»",
+  missing_token:         "انتهت الجلسة — سجّل الدخول من جديد",
+  invalid_token:         "انتهت الجلسة — سجّل الدخول من جديد",
+  weak_password:         "كلمة المرور ضعيفة — 6 أحرف على الأقل",
+  missing_target:        "لم يتم تحديد الموظف",
+  staff_not_found:       "الموظف غير موجود",
+  no_auth_account:       "لا يوجد حساب دخول مرتبط بهذا الموظف",
+  cannot_deactivate_self:"لا يمكنك تعطيل حسابك الخاص",
+  server_misconfigured:  "إعدادات الخادم غير مكتملة — تواصل مع الدعم",
+  update_failed:         "تعذّر تنفيذ العملية",
+  lookup_failed:         "تعذّرت قراءة سجل الموظف",
+};
+function __adminActionError(code, fallback) {
+  return (code && __ADMIN_ACTION_ERRORS[code]) || fallback || "تعذّر تنفيذ العملية";
+}
+
+// Admin: force-set another staff member's password (no current password
+// needed). Runs through the admin-reset-password Edge Function which uses
+// the Auth Admin API + service role — the browser anon key cannot do this.
+// Password hashes are NEVER read or returned. Admin-only (enforced server
+// side, re-checked here as a UX guard).
+async function adminResetPassword({ staff_id, auth_uid, password }) {
+  if (!password || password.length < 6)
+    return { ok: false, error: __adminActionError("weak_password") };
+  if (!staff_id && !auth_uid)
+    return { ok: false, error: __adminActionError("missing_target") };
+  if (!sb) return { ok: true, demo: true };
+  try {
+    const { data, error } = await sb.functions.invoke("admin-reset-password", {
+      body: { staff_id, auth_uid, password },
+    });
+    if (!error && data && data.ok) return { ok: true, staff_id: data.staff_id };
+    const eb = await __edgeErrorBody(data, error);
+    if (eb) return { ok: false, error: __adminActionError(eb.error, eb.detail) };
+    return { ok: false, error: "خدمة إعادة تعيين كلمة المرور غير منشورة — انشر admin-reset-password (انظر deploy-edge-function.sh)" };
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) };
+  }
+}
+
+// Admin: activate / deactivate a staff account. Deactivation blocks sign
+// in, revokes data access via RLS (app_role() → null), and bans token
+// refresh — all server side through the admin-set-status Edge Function.
+// Historical data is untouched.
+async function adminSetStaffStatus({ staff_id, active }) {
+  if (!staff_id) return { ok: false, error: __adminActionError("missing_target") };
+  const newStatus = active ? "active" : "inactive";
+  // Reflect the change in the in-memory mirror so the Staff Management
+  // table updates immediately (the data-updated event only re-renders; it
+  // does not re-fetch). The DB is already authoritative via the Edge
+  // Function / upsert below.
+  const syncMemory = () => {
+    if (window.DATA && Array.isArray(window.DATA.staff)) {
+      window.DATA.staff = window.DATA.staff.map(r =>
+        ((r.staff_id || r.id) === staff_id) ? { ...r, status: newStatus } : r);
+    }
+    window.dispatchEvent(new CustomEvent("kinetic:data-updated", { detail: { table: "staff" } }));
+  };
+  // Demo / offline: just flip the local row.
+  if (!sb) {
+    await updateStaffMember(staff_id, { status: newStatus });
+    syncMemory();
+    return { ok: true, demo: true, status: newStatus };
+  }
+  try {
+    const { data, error } = await sb.functions.invoke("admin-set-status", {
+      body: { staff_id, active: !!active },
+    });
+    if (!error && data && data.ok) {
+      syncMemory();
+      return { ok: true, status: data.status };
+    }
+    const eb = await __edgeErrorBody(data, error);
+    if (eb) return { ok: false, error: __adminActionError(eb.error, eb.detail) };
+    return { ok: false, error: "خدمة تغيير حالة الحساب غير منشورة — انشر admin-set-status (انظر deploy-edge-function.sh)" };
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) };
+  }
+}
+
 function onAuthChange(cb) {
   if (!sb) return () => {};
   const sub = sb.auth.onAuthStateChange((_evt, session) => {
@@ -771,7 +879,7 @@ const DATA_TABLES = {
                        "total_sessions","used_sessions","price","paid","status",
                        "expires_at","created_at","updated_at"] },
   staff:      { key: "staff",      pk: "staff_id",    ls: "kinetic.staff",
-                cols: ["staff_id","name","role","phone","email","auth_uid"] },
+                cols: ["staff_id","name","role","phone","email","auth_uid","status","created_by","created_at"] },
   therapists: { key: "therapists", pk: "id",          ls: "kinetic.therapists",
                 cols: ["id","name","spec","load","max","color","department_id","phone","email",
                        "license_number","notes","active","auth_uid","created_at","updated_at"] },
@@ -2613,12 +2721,37 @@ async function setTemplateCategoryStatus(category_id, status) {
   return { ok: true, category_id, status };
 }
 
+// Hard-delete a category. Blocked server-side (and in the LS mirror) when
+// any template still references its name, so no template is orphaned.
+async function deleteTemplateCategory(category_id) {
+  if (!category_id) return { ok: false, error: 'معرّف مفقود' };
+  if (sb) {
+    const { data, error } = await sb.rpc('delete_template_category', {
+      p_category_id: category_id,
+    });
+    if (error) return { ok: false, error: error.message || 'تعذّر الحذف' };
+    __tplCatDispatch();
+    return { ok: true, category_id: data && data.category_id };
+  }
+  // LS fallback: refuse when a mirrored template uses this category's name.
+  const rows = readLS(LS_TPL_CATEGORIES, []);
+  const cat = rows.find(r => r.category_id === category_id);
+  if (!cat) return { ok: false, error: 'الفئة غير موجودة' };
+  const tpls = readLS(LS_TEMPLATES, []);
+  const used = tpls.filter(t => t.category === cat.name).length;
+  if (used > 0) return { ok: false, error: `لا يمكن حذف الفئة — يستخدمها ${used} قالب. أعد تصنيف القوالب أو أرشِف الفئة بدلًا من حذفها.` };
+  writeLS(LS_TPL_CATEGORIES, rows.filter(r => r.category_id !== category_id));
+  __tplCatDispatch();
+  return { ok: true, category_id };
+}
+
 const TplCategories = {
   list:    listTemplateCategories,
   create:  (payload) => upsertTemplateCategory(null, payload),
   update:  upsertTemplateCategory,
   archive: (id) => setTemplateCategoryStatus(id, 'archived'),
   restore: (id) => setTemplateCategoryStatus(id, 'active'),
+  remove:  deleteTemplateCategory,
 };
 window.TplCategories = TplCategories;
 
@@ -2653,6 +2786,7 @@ Object.assign(window, {
   loadBranches, addBranch, updateBranch, setActiveBranch, removeBranch,
   signInEmail, signOut, getSession, getAuthStaff, STAFF_ROLES, onAuthChange,
   adminCreateUser, sendPasswordReset, updateOwnPassword, updateOwnProfile, updateStaffMember,
+  adminResetPassword, adminSetStaffStatus,
   listAvailableAuthUsers,
   startDictation, printHTML, escHtml,
   KineticData, QuickPay, TxMethods, InvoicesAPI, PaymentReceipts, Templates, TplCategories, TreatmentsAPI,

@@ -76,10 +76,35 @@ service-role key stays on the server; it is never shipped to the browser.
 
 **Option B — CLI:** run `./deploy-edge-function.sh <project-ref>` with a
 personal access token from
-https://supabase.com/dashboard/account/tokens.
+https://supabase.com/dashboard/account/tokens. The script deploys all
+three admin functions in one go.
 
 Only signed-in **admins** can call the function — it checks the caller's
 role in the `staff` table and refuses everyone else.
+
+### Admin password reset + account activation/deactivation
+
+Two more Edge Functions power the Staff Management actions
+(Settings → المستخدمون والأدوار):
+
+- **`admin-reset-password`** — an admin sets a NEW password for any staff
+  member without knowing the current one, via the Supabase Auth Admin API
+  (never by touching password hashes). Deploy exactly as above, naming it
+  `admin-reset-password` and pasting
+  [`supabase/functions/admin-reset-password/index.ts`](supabase/functions/admin-reset-password/index.ts).
+- **`admin-set-status`** — an admin activates/deactivates a staff account.
+  Deactivation flips `staff.status` to `inactive` (so `public.app_role()`
+  returns NULL and every RLS policy denies the user even with a valid
+  token), bans the Auth user so token refresh fails, and keeps all
+  historical data intact. Name it `admin-set-status` and paste
+  [`supabase/functions/admin-set-status/index.ts`](supabase/functions/admin-set-status/index.ts).
+
+Both turn **Verify JWT** off (they validate the caller's JWT themselves),
+require no secrets, and only signed-in admins may call them. Every action
+is written to `audit_events` (admin id, staff id + email, previous/new
+status, timestamp, IP). Run `Supabase_All_In_One.sql` (or the
+`20260714010000_account_status_audit.sql` migration) first so the
+`app_role()` change and `staff.status` enforcement are in place.
 
 ### Fallback path (no Edge Function)
 

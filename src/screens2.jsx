@@ -12,6 +12,89 @@ function downloadCsv(rows, filename) {
   URL.revokeObjectURL(url);
 }
 
+// ── Excel export (styled, RTL, Arabic-safe) ───────────────────
+// Builds a professional workbook from the ALREADY-FILTERED report rows:
+// clinic name, report title, generated date, active filters, bold header
+// band, bordered table, column widths, number/currency formats, and a
+// totals row. Uses the xlsx-js-style global loaded in index.html. Handles
+// thousands of rows (a single aoa_to_sheet + writeFile, no per-render DOM).
+//
+// columns: [{ key, label, type?: 'text'|'number'|'currency'|'date', total?, width? }]
+function exportReportExcel({ filename, sheetName = "التقرير", title, filters = [], columns = [], rows = [] }) {
+  const XLSX = window.XLSX;
+  if (!XLSX || !XLSX.utils) {
+    window.showToast && window.showToast("مكتبة Excel غير محمّلة — تحقق من الاتصال", "error");
+    return false;
+  }
+  const clinic = (window.CLINIC && window.CLINIC.name) || "العيادة";
+  const genDate = new Date().toLocaleString("ar-EG");
+  const nCols = Math.max(columns.length, 1);
+
+  const aoa = [];
+  aoa.push([clinic]);
+  aoa.push([title || sheetName]);
+  aoa.push([`تاريخ الإنشاء: ${genDate}`]);
+  const filterRow = filters.length ? aoa.length : -1;
+  if (filters.length) aoa.push(["عوامل التصفية:  " + filters.map(f => `${f.label}: ${f.value}`).join("   |   ")]);
+  aoa.push([]);                                   // spacer
+  const headerRowIdx = aoa.length;
+  aoa.push(columns.map(c => c.label));
+  const dataStart = aoa.length;
+  rows.forEach(r => aoa.push(columns.map(c => {
+    const v = r[c.key];
+    if (v == null) return "";
+    if ((c.type === "number" || c.type === "currency")) { const n = Number(v); return Number.isFinite(n) ? n : v; }
+    return v;
+  })));
+  const hasTotals = columns.some(c => c.total);
+  let totalsRowIdx = -1;
+  if (hasTotals && rows.length) {
+    totalsRowIdx = aoa.length;
+    aoa.push(columns.map((c, i) => {
+      if (i === 0) return "الإجمالي";
+      if (c.total) return rows.reduce((s, r) => s + (Number(r[c.key]) || 0), 0);
+      return "";
+    }));
+  }
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!merges"] = [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: nCols - 1 } },
+    { s: { r: 1, c: 0 }, e: { r: 1, c: nCols - 1 } },
+    { s: { r: 2, c: 0 }, e: { r: 2, c: nCols - 1 } },
+  ];
+  if (filterRow >= 0) ws["!merges"].push({ s: { r: filterRow, c: 0 }, e: { r: filterRow, c: nCols - 1 } });
+  ws["!cols"] = columns.map(c => ({ wch: Math.max(12, (c.label || "").length + 2, c.width || 0) }));
+  ws["!views"] = [{ RTL: true }];
+
+  const bd = { style: "thin", color: { rgb: "FFD0D7DE" } };
+  const borders = { top: bd, bottom: bd, left: bd, right: bd };
+  const range = XLSX.utils.decode_range(ws["!ref"]);
+  for (let R = range.s.r; R <= range.e.r; R++) {
+    for (let C = range.s.c; C <= range.e.c; C++) {
+      const cell = ws[XLSX.utils.encode_cell({ r: R, c: C })];
+      if (!cell) continue;
+      if (R === 0) cell.s = { font: { bold: true, sz: 16, color: { rgb: "FF1E4A6E" } }, alignment: { horizontal: "center" } };
+      else if (R === 1) cell.s = { font: { bold: true, sz: 13, color: { rgb: "FF2E4458" } }, alignment: { horizontal: "center" } };
+      else if (R === 2 || R === filterRow) cell.s = { font: { sz: 10, color: { rgb: "FF647686" } }, alignment: { horizontal: "center", wrapText: true } };
+      else if (R === headerRowIdx) cell.s = { font: { bold: true, color: { rgb: "FFFFFFFF" } }, fill: { fgColor: { rgb: "FF3A7FB5" } }, alignment: { horizontal: "center" }, border: borders };
+      else if (R >= dataStart) {
+        const col = columns[C] || {};
+        const numeric = col.type === "number" || col.type === "currency";
+        cell.s = { border: borders, alignment: { horizontal: numeric ? "left" : "right", vertical: "center" } };
+        if (R === totalsRowIdx) { cell.s.font = { bold: true }; cell.s.fill = { fgColor: { rgb: "FFEEF2F6" } }; }
+        if (typeof cell.v === "number") cell.z = col.type === "currency" ? '#,##0 "EGP"' : "#,##0";
+      }
+    }
+  }
+  ws["!rows"] = [{ hpt: 24 }, { hpt: 20 }];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, String(sheetName).slice(0, 31));
+  XLSX.writeFile(wb, filename || "report.xlsx");
+  return true;
+}
+
 function Treatments({ go }) {
   window.useDataVersion && window.useDataVersion();
   const [view, setView] = React.useState("list");
@@ -407,7 +490,7 @@ function TreatmentPlanCreate({ onCancel, onSave, template }) {
             <Field label="اسم الخطة" span={2}>
               <input className="input" value={tplName} onChange={e=>setTplName(e.target.value)} placeholder="اسم القالب أو التشخيص"/>
             </Field>
-            <Field label="الفئة"><input className="input" value={category} onChange={e=>setCategory(e.target.value)}/></Field>
+            <Field label="الفئة"><CategoryCombobox value={category} onChange={setCategory}/></Field>
             <Field label="الجزء المستهدف"><input className="input" value={bodyPart} onChange={e=>setBodyPart(e.target.value)}/></Field>
             <Field label="التشخيص" required span={2}><input className="input" value={diag} onChange={e=>setDiag(e.target.value)}/></Field>
             <Field label="الأهداف (هدف بكل سطر)" span={2}><textarea className="input" style={{height:100,padding:10}} value={goalsText} onChange={e=>setGoalsText(e.target.value)}/></Field>
@@ -2714,8 +2797,151 @@ Object.assign(window, { Campaigns });
 // ===== src/reports.jsx =====
 // Reports module + Settings + 404
 
+// ── Report helpers (shared by all three report tabs) ──────────
+const REPORT_PAGE_SIZE = 12;
+function reportToday() { return new Date().toISOString().slice(0, 10); }
+function reportDaysAgo(n) { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); }
+// ISO YYYY-MM-DD lexical compare doubles as chronological compare.
+function reportInRange(dateStr, from, to) {
+  const d = String(dateStr || "").slice(0, 10);
+  if (!d) return false;
+  if (from && d < from) return false;
+  if (to && d > to) return false;
+  return true;
+}
+// Shared filter + pagination state for a report tab.
+function useReportState() {
+  const [f, setF] = React.useState({
+    from: reportDaysAgo(30), to: reportToday(),
+    therapist: "all", doctor: "all", patient: "all", q: "",
+  });
+  const set = (k, v) => setF(s => ({ ...s, [k]: v }));
+  const [page, setPage] = React.useState(1);
+  React.useEffect(() => { setPage(1); }, [f.from, f.to, f.therapist, f.doctor, f.patient, f.q]);
+  return { f, set, page, setPage };
+}
+// Dropdown option lists sourced live from Supabase-hydrated DATA.
+function useReportOpts() {
+  return {
+    therapists: Array.from(new Set((DATA.therapists || []).map(t => t.name).filter(Boolean))),
+    doctors: Array.from(new Set((DATA.doctors || []).map(d => d.name).filter(Boolean))),
+    patients: (DATA.patients || []).map(p => ({ id: p.id || p.patient_id, name: p.name })).filter(p => p.id),
+  };
+}
+// Human-readable filter list for the Excel header + on-screen summary.
+function reportActiveFilters(f, show, opts) {
+  const list = [{ label: "الفترة", value: `${f.from || "—"} ← ${f.to || "—"}` }];
+  if (show.therapist && f.therapist !== "all") list.push({ label: "الأخصائي", value: f.therapist });
+  if (show.doctor && f.doctor !== "all") list.push({ label: "الطبيب", value: f.doctor });
+  if (show.patient && f.patient !== "all") {
+    const p = (opts.patients || []).find(x => x.id === f.patient);
+    list.push({ label: "المريض", value: p ? p.name : f.patient });
+  }
+  if (f.q) list.push({ label: "بحث", value: f.q });
+  return list;
+}
+
+// Date-range + entity filter bar with search + Excel export button.
+function ReportFilterBar({ f, set, opts, show, onExport, searchPlaceholder = "بحث…" }) {
+  return (
+    <div className="card card-pad" style={{ marginBottom: 18 }}>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <div style={{ minWidth: 140 }}>
+          <div className="label">من تاريخ</div>
+          <input type="date" className="input" value={f.from} max={f.to || undefined} onChange={e => set("from", e.target.value)} />
+        </div>
+        <div style={{ minWidth: 140 }}>
+          <div className="label">إلى تاريخ</div>
+          <input type="date" className="input" value={f.to} min={f.from || undefined} onChange={e => set("to", e.target.value)} />
+        </div>
+        {show.therapist && (
+          <div style={{ minWidth: 150 }}>
+            <div className="label">الأخصائي</div>
+            <select className="input" value={f.therapist} onChange={e => set("therapist", e.target.value)}>
+              <option value="all">كل الأخصائيين</option>
+              {opts.therapists.map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </div>
+        )}
+        {show.doctor && (
+          <div style={{ minWidth: 150 }}>
+            <div className="label">الطبيب</div>
+            <select className="input" value={f.doctor} onChange={e => set("doctor", e.target.value)}>
+              <option value="all">كل الأطباء</option>
+              {opts.doctors.map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </div>
+        )}
+        {show.patient && (
+          <div style={{ minWidth: 170 }}>
+            <div className="label">المريض</div>
+            <select className="input" value={f.patient} onChange={e => set("patient", e.target.value)}>
+              <option value="all">كل المرضى</option>
+              {opts.patients.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
+        )}
+        <div style={{ flex: 1, minWidth: 170 }}>
+          <div className="label">بحث</div>
+          <input className="input" placeholder={searchPlaceholder} value={f.q} onChange={e => set("q", e.target.value)} />
+        </div>
+        <button className="btn btn-blue" onClick={onExport} style={{ whiteSpace: "nowrap" }}>
+          <I.Download size={14} /> تصدير Excel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Paginated table shell — sticky-header table + result count + pager.
+function ReportTable({ columns, rows, page, setPage, empty }) {
+  const total = rows.length;
+  const pages = Math.max(1, Math.ceil(total / REPORT_PAGE_SIZE));
+  const safe = Math.min(page, pages);
+  const view = rows.slice((safe - 1) * REPORT_PAGE_SIZE, safe * REPORT_PAGE_SIZE);
+  return (
+    <div className="card card-pad">
+      <div className="tbl-scroll">
+        <table className="tbl">
+          <thead><tr>{columns.map(c => <th key={c.key} style={c.type === "number" || c.type === "currency" ? { textAlign: "start" } : undefined}>{c.label}</th>)}</tr></thead>
+          <tbody>
+            {view.length === 0 && (
+              <tr><td colSpan={columns.length}><div className="tbl-empty"><I.Search size={20} /><div>{empty || "لا نتائج ضمن عوامل التصفية الحالية."}</div></div></td></tr>
+            )}
+            {view.map((r, i) => (
+              <tr key={r.id || i}>
+                {columns.map(c => (
+                  <td key={c.key} className={(c.type === "number" || c.type === "currency") ? "mono tnum" : undefined}>
+                    {c.render ? c.render(r) : (c.type === "currency" ? `EGP ${(Number(r[c.key]) || 0).toLocaleString()}` : (r[c.key] == null || r[c.key] === "" ? "—" : r[c.key]))}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {total > 0 && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 12, gap: 8, flexWrap: "wrap" }}>
+          <div className="muted" style={{ fontSize: 12 }}>صفحة <span className="mono">{safe}</span> من <span className="mono">{pages}</span> · <span className="mono">{total.toLocaleString()}</span> نتيجة</div>
+          <div style={{ display: "flex", gap: 4 }}>
+            <button className="btn btn-secondary" style={{ fontSize: 12, padding: "4px 10px" }} disabled={safe <= 1} onClick={() => setPage(safe - 1)}>السابق</button>
+            <button className="btn btn-secondary" style={{ fontSize: 12, padding: "4px 10px" }} disabled={safe >= pages} onClick={() => setPage(safe + 1)}>التالي</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Reports({ go }) {
+  window.useDataVersion && window.useDataVersion();
   const [section, setSection] = React.useState("financial");
+
+  const cats = [
+    { id: "financial",   l: "المالية",     icon: <I.Dollar size={15} /> },
+    { id: "medical",     l: "الطبي",       icon: <I.Heart size={15} /> },
+    { id: "operational", l: "التشغيلية",   icon: <I.Activity size={15} /> },
+  ];
 
   return (
     <Page>
@@ -2723,41 +2949,17 @@ function Reports({ go }) {
         <div>
           <div className="crumb"><span>الرئيسية</span><I.Chevron size={11}/><span>التقارير</span></div>
           <div className="h1">التقارير</div>
-          <div className="muted" style={{fontSize:13.5,marginTop:4}}>طبي, تحليلات مالية وتشغيلية.</div>
-        </div>
-        <div className="page-actions">
-          <select className="input" style={{width:"auto",minWidth:150,flex:"0 1 180px"}}><option>آخر 30 يوم</option><option>هذا الشهر</option><option>هذا الربع</option><option>منذ بداية السنة</option></select>
-          <button className="btn btn-secondary" onClick={()=>{
-            const month = new Date().toISOString().slice(0,7);
-            const monthly = DATA.payments.filter(p=>String(p.date||p.created_at||"").slice(0,7)===month).reduce((s,p)=>s+(p.paid||0),0);
-            const active = DATA.patients.filter(p=>p.status!=="غير نشط").length;
-            const avg = DATA.payments.length ? Math.round(DATA.payments.reduce((s,p)=>s+(p.amount||0),0)/DATA.payments.length) : 0;
-            const rows=["التقرير,القيمة",`الإيرادات الشهرية,${monthly}`,`مرضى نشطون,${active}`,`الجلسات المسجلة,${DATA.sessions.length}`,`متوسط الفاتورة,${avg}`];
-            downloadCsv(rows, "report.csv");
-            if(window.showToast)window.showToast("تم تصدير التقرير","success");
-          }}><I.Download size={14}/> تصدير</button>
-          <button className="btn btn-secondary" onClick={()=>window.print()}><I.Print size={14}/> طباعة</button>
+          <div className="muted" style={{fontSize:13.5,marginTop:4}}>تحليلات مالية وطبية وتشغيلية — بيانات مباشرة من قاعدة البيانات.</div>
         </div>
       </div>
 
       <div className="rgrid c-lg" style={{"--gtc":"220px 1fr"}}>
+        {/* Clean 3-category sidebar — no submenus. Clicking a category
+            loads its full report in the main area. */}
         <div className="card side-tabs" style={{padding:8,height:"fit-content"}}>
-          {[
-            { id:"financial", l:"المالية",       icon:<I.Dollar size={14}/>, items:["إيرادات يومية","الإيرادات الشهرية","مدفوعات معلقة","توزيع طرق الدفع"]},
-            { id:"medical",   l:"طبي",         icon:<I.Heart size={14}/>,  items:["المريض history","تقدّم العلاج","الأخصائي activity","التشخيص trends"]},
-            { id:"operational",l:"التشغيلية",   icon:<I.Activity size={14}/>, items:["إحصاءات المواعيد","معدّل الحضور","حالات عدم الحضور","استخدام الغرف"]},
-          ].map(s=>(
-            <div key={s.id} style={{marginBottom:4}}>
-              <div className={"nav-item" + (section===s.id?" active":"")} style={{margin:0}} onClick={()=>setSection(s.id)}>
-                {s.icon}{s.l}
-              </div>
-              {section===s.id && (
-                <div style={{padding:"6px 16px 6px 36px"}}>
-                  {s.items.map(it=>(
-                    <div key={it} style={{padding:"4px 0",fontSize:12,color:"var(--ink-500)",cursor:"pointer"}}>{it}</div>
-                  ))}
-                </div>
-              )}
+          {cats.map(s=>(
+            <div key={s.id} className={"nav-item" + (section===s.id?" active":"")} style={{margin:0,marginBottom:4}} onClick={()=>setSection(s.id)}>
+              {s.icon}{s.l}
             </div>
           ))}
         </div>
@@ -2772,219 +2974,295 @@ function Reports({ go }) {
   );
 }
 
+// ── Financial report (payments / invoices) ────────────────────
 function FinancialReport() {
-  // Aggregated from the real invoices/packages tables.
-  const dateOf = (p) => String(p.date || p.created_at || "").slice(0, 10);
-  const byMonth = {}, byDay = {};
-  DATA.payments.forEach(p => {
-    const d = dateOf(p);
-    if (!d) return;
-    byMonth[d.slice(0,7)] = (byMonth[d.slice(0,7)]||0) + (p.paid||0);
-    byDay[d] = (byDay[d]||0) + (p.paid||0);
-  });
-  const monthly = Object.keys(byMonth).sort().slice(-6).map(m => ({ label:m.slice(2), v: Math.round(byMonth[m]/1000) }));
-  const daily = Object.keys(byDay).sort().slice(-7).map(d => ({ label:d.slice(5), v: byDay[d] }));
+  window.useDataVersion && window.useDataVersion();
+  const { f, set, page, setPage } = useReportState();
+  const opts = useReportOpts();
+  const show = { therapist: false, doctor: false, patient: true };
 
-  const thisMonth = new Date().toISOString().slice(0,7);
-  const monthRevenue = byMonth[thisMonth] || 0;
-  const collected = DATA.payments.reduce((s,p)=>s+(p.paid||0),0);
-  const outstanding = DATA.payments.reduce((s,p)=>s+Math.max(0,(p.amount||0)-(p.paid||0)),0);
-  const dayCount = Object.keys(byDay).length || 1;
-  const dailyAvg = collected / dayCount;
-  const fmtK = (v)=> v>=1000?`EGP ${(v/1000).toFixed(1)}K`:`EGP ${Math.round(v).toLocaleString()}`;
+  // Row-level financial data — one row per invoice, straight from the
+  // Supabase-hydrated payments table. No mock/static values.
+  const rows = React.useMemo(() => (DATA.payments || []).map(v => {
+    const amount = Number(v.amount) || 0, paid = Number(v.paid) || 0;
+    return {
+      id: v.id || v.invoice_id,
+      date: String(v.date || v.created_at || "").slice(0, 10),
+      patient: v.patient || "—",
+      patient_id: v.patient_id || null,
+      method: v.method || "—",
+      amount, paid, outstanding: Math.max(0, amount - paid),
+      status: v.status || "—",
+    };
+  }), [DATA.payments]);
 
-  const services = DATA.packages.map((p,i)=>({ l:p.name, v:(p.sold||0)*(p.price||0), c:["#7BBDE8","#7E6BD3","#BDD8E9","#3A7FB5","#1E4A6E"][i%5] }))
-    .filter(s=>s.v>0).sort((a,b)=>b.v-a.v).slice(0,5);
-  const maxService = services[0] ? services[0].v : 1;
+  const q = f.q.trim().toLowerCase();
+  const filtered = React.useMemo(() => rows.filter(r =>
+    reportInRange(r.date, f.from, f.to) &&
+    (f.patient === "all" || r.patient_id === f.patient) &&
+    (!q || [r.patient, r.method, r.id, r.status].some(x => String(x || "").toLowerCase().includes(q)))
+  ).sort((a, b) => String(b.date).localeCompare(String(a.date))), [rows, f.from, f.to, f.patient, q]);
+
+  const collected = filtered.reduce((s, r) => s + r.paid, 0);
+  const invoiced = filtered.reduce((s, r) => s + r.amount, 0);
+  const outstanding = filtered.reduce((s, r) => s + r.outstanding, 0);
+  const avg = filtered.length ? invoiced / filtered.length : 0;
+  const fmtK = (v) => v >= 1000 ? `EGP ${(v / 1000).toFixed(1)}K` : `EGP ${Math.round(v).toLocaleString()}`;
+
+  // Monthly collected trend + payment-method split from the filtered set.
+  const byMonth = {};
+  filtered.forEach(r => { if (r.date) byMonth[r.date.slice(0, 7)] = (byMonth[r.date.slice(0, 7)] || 0) + r.paid; });
+  const monthly = Object.keys(byMonth).sort().slice(-6).map(m => ({ label: m.slice(2), v: Math.round(byMonth[m] / 1000) }));
+  const byMethod = {};
+  filtered.forEach(r => { byMethod[r.method] = (byMethod[r.method] || 0) + r.paid; });
+  const methodColors = ["#7BBDE8", "#7E6BD3", "#3FA984", "#D49044", "#3A7FB5", "#BDD8E9"];
+  const methodData = Object.keys(byMethod).map((m, i) => ({ label: m, v: Math.round(byMethod[m]), color: methodColors[i % methodColors.length] })).filter(d => d.v > 0);
+
+  const columns = [
+    { key: "date", label: "التاريخ", type: "date", width: 12 },
+    { key: "patient", label: "المريض", type: "text", width: 20 },
+    { key: "method", label: "طريقة الدفع", type: "text", width: 14 },
+    { key: "amount", label: "المبلغ", type: "currency", total: true, width: 14 },
+    { key: "paid", label: "المدفوع", type: "currency", total: true, width: 14 },
+    { key: "outstanding", label: "المتبقي", type: "currency", total: true, width: 14 },
+    { key: "status", label: "الحالة", type: "text", width: 12 },
+  ];
+  function doExport() {
+    const ok = exportReportExcel({
+      filename: `تقرير-مالي-${reportToday()}.xlsx`, sheetName: "التقرير المالي",
+      title: "التقرير المالي", filters: reportActiveFilters(f, show, opts), columns, rows: filtered,
+    });
+    if (ok && window.showToast) window.showToast(`تم تصدير ${filtered.length} صفًا إلى Excel`, "success");
+  }
 
   return (
     <div>
-      <div className="grid-4" style={{marginBottom:18}}>
-        <StatCard label="إجمالي الإيرادات (شهر)" value={fmtK(monthRevenue)} accent="#3FA984" icon={<I.Dollar size={15}/>}/>
-        <StatCard label="المتوسط اليومي"      value={fmtK(dailyAvg)} accent="#7BBDE8" icon={<I.Chart size={15}/>}/>
-        <StatCard label="محصّل"          value={fmtK(collected)} accent="#3A7FB5" icon={<I.Check size={15}/>}/>
-        <StatCard label="معلّق"        value={fmtK(outstanding)} accent="#D49044" icon={<I.Clock size={15}/>}/>
+      <ReportFilterBar f={f} set={set} opts={opts} show={show} onExport={doExport} searchPlaceholder="بحث بالمريض أو طريقة الدفع…" />
+
+      <div className="grid-4" style={{ marginBottom: 18 }}>
+        <StatCard label="محصّل" value={fmtK(collected)} accent="#3FA984" icon={<I.Check size={15} />} />
+        <StatCard label="إجمالي مفوتر" value={fmtK(invoiced)} accent="#3A7FB5" icon={<I.Dollar size={15} />} />
+        <StatCard label="متبقٍ" value={fmtK(outstanding)} accent="#D49044" icon={<I.Clock size={15} />} />
+        <StatCard label="عدد الفواتير" value={filtered.length.toLocaleString()} accent="#7BBDE8" icon={<I.Chart size={15} />} />
       </div>
 
-      <div className="rgrid c-lg" style={{"--gtc":"1.5fr 1fr",marginBottom:18}}>
+      <div className="rgrid c-lg" style={{ "--gtc": "1.5fr 1fr", marginBottom: 18 }}>
         <div className="card card-pad">
-          <div className="h2" style={{marginBottom:14}}>اتجاه الإيرادات الشهري</div>
-          <AreaChart data={monthly} height={240} formatY={v=>`${v}K`}/>
+          <div className="h2" style={{ marginBottom: 14 }}>اتجاه المبالغ المحصّلة (شهريًا)</div>
+          {monthly.length ? <AreaChart data={monthly} height={240} formatY={v => `${v}K`} /> : <div className="muted" style={{ fontSize: 13, padding: "40px 0", textAlign: "center" }}>لا بيانات ضمن الفترة المحددة.</div>}
         </div>
         <div className="card card-pad">
-          <div className="h2" style={{marginBottom:14}}>يوميًا — آخر 7 أيام نشطة</div>
-          <BarChart data={daily} height={240} formatY={v=>v>=1000?`${Math.round(v/1000)}K`:v}/>
+          <div className="h2" style={{ marginBottom: 14 }}>توزيع طرق الدفع</div>
+          {methodData.length ? <DonutChart data={methodData} size={180} centerLabel="محصّل" centerValue={fmtK(collected)} /> : <div className="muted" style={{ fontSize: 13, padding: "40px 0", textAlign: "center" }}>لا بيانات.</div>}
         </div>
       </div>
 
-      <div className="card card-pad">
-        <div className="h2" style={{marginBottom:14}}>أفضل الخدمات حسب الإيرادات</div>
-        {services.length===0 && <div className="muted" style={{fontSize:13,padding:"14px 0"}}>لا مبيعات باقات بعد.</div>}
-        {services.map((s,i)=>(
-          <div key={i} style={{padding:"11px 0",borderBottom:i<services.length-1?"1px dashed var(--ink-100)":"none"}}>
-            <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
-              <span style={{fontSize:13,fontWeight:500}}>{s.l}</span>
-              <span className="mono" style={{fontSize:13,fontWeight:600}}>EGP {s.v.toLocaleString()}</span>
-            </div>
-            <div style={{height:5,background:"var(--ink-100)",borderRadius:999,overflow:"hidden"}}>
-              <div style={{height:"100%",width:`${s.v/maxService*100}%`,background:s.c}}/>
-            </div>
-          </div>
-        ))}
-      </div>
+      <ReportTable columns={columns} rows={filtered} page={page} setPage={setPage} empty="لا فواتير ضمن عوامل التصفية الحالية." />
     </div>
   );
 }
 
+// ── Medical report (treatment sessions / patients) ────────────
 function MedicalReport() {
-  // Aggregated from the real patients/sessions tables.
-  const patients = DATA.patients, sessions = DATA.sessions;
-  const active = patients.filter(p => p.status !== "غير نشط");
-  const avgSessions = patients.length ? (sessions.length / patients.length).toFixed(1) : "0";
-  const finished = patients.filter(p => p.remain === 0).length;
-  const goalRate = patients.length ? Math.round(finished / patients.length * 100) : 0;
+  window.useDataVersion && window.useDataVersion();
+  const { f, set, page, setPage } = useReportState();
+  const opts = useReportOpts();
+  const show = { therapist: true, doctor: true, patient: true };
 
-  // Diagnosis mix by keyword buckets.
+  // Patient lookup so each session can surface its diagnosis + doctor.
+  const patientById = React.useMemo(() => {
+    const m = {}; (DATA.patients || []).forEach(p => { m[p.id || p.patient_id] = p; }); return m;
+  }, [DATA.patients]);
+
+  // One row per treatment session, from the Supabase-hydrated sessions table.
+  const rows = React.useMemo(() => (DATA.sessions || []).map(s => {
+    const p = patientById[s.patient_id] || {};
+    return {
+      id: s.id || s.session_id,
+      date: String(s.date || s.created_at || "").slice(0, 10),
+      patient: s.patient || p.name || "—",
+      patient_id: s.patient_id || null,
+      therapist: s.therapist || "—",
+      therapist_id: s.therapist_id || null,
+      doctor: p.dr || "—",
+      diagnosis: p.diag || p.diagnosis || "—",
+      session: s.session ?? s.session_number ?? 0,
+      pain: s.pain ?? s.pain_score ?? 0,
+      notes: (s.notes || "").toString().slice(0, 120),
+    };
+  }), [DATA.sessions, patientById]);
+
+  const q = f.q.trim().toLowerCase();
+  const filtered = React.useMemo(() => rows.filter(r =>
+    reportInRange(r.date, f.from, f.to) &&
+    (f.therapist === "all" || r.therapist === f.therapist) &&
+    (f.doctor === "all" || r.doctor === f.doctor) &&
+    (f.patient === "all" || r.patient_id === f.patient) &&
+    (!q || [r.patient, r.therapist, r.doctor, r.diagnosis, r.notes].some(x => String(x || "").toLowerCase().includes(q)))
+  ).sort((a, b) => String(b.date).localeCompare(String(a.date))), [rows, f.from, f.to, f.therapist, f.doctor, f.patient, q]);
+
+  const distinctPatients = new Set(filtered.map(r => r.patient_id).filter(Boolean)).size;
+  const totalSessions = filtered.length;
+  const avgPain = filtered.length ? (filtered.reduce((s, r) => s + (Number(r.pain) || 0), 0) / filtered.length).toFixed(1) : "0";
+  const avgPer = distinctPatients ? (totalSessions / distinctPatients).toFixed(1) : "0";
+
+  // Diagnosis mix (from the patients touched in the filtered sessions).
   const buckets = [
-    { label:"أسفل الظهر / القطنية", re:/ظهر|قطن|غضروف|نسا/, color:"#7BBDE8" },
-    { label:"الركبة", re:/ركبة|رباط|رضف/, color:"#3A7FB5" },
-    { label:"الكتف", re:/كتف/, color:"#7E6BD3" },
-    { label:"الرقبة / العنقية", re:/رقبة|عنق/, color:"#3FA984" },
+    { label: "أسفل الظهر / القطنية", re: /ظهر|قطن|غضروف|نسا/, color: "#7BBDE8" },
+    { label: "الركبة", re: /ركبة|رباط|رضف/, color: "#3A7FB5" },
+    { label: "الكتف", re: /كتف/, color: "#7E6BD3" },
+    { label: "الرقبة / العنقية", re: /رقبة|عنق/, color: "#3FA984" },
   ];
-  let other = 0;
-  const counts = buckets.map(b => ({ ...b, v: 0 }));
-  patients.forEach(p => {
-    const d = p.diag || p.diagnosis || "";
-    const hit = counts.find(b => b.re.test(d));
+  const counts = buckets.map(b => ({ ...b, v: 0 })); let other = 0;
+  const seen = new Set();
+  filtered.forEach(r => {
+    if (!r.patient_id || seen.has(r.patient_id)) return;
+    seen.add(r.patient_id);
+    const hit = counts.find(b => b.re.test(r.diagnosis || ""));
     if (hit) hit.v += 1; else other += 1;
   });
-  const diagData = counts.filter(b => b.v > 0).map(({label,v,color}) => ({label,v,color}));
-  if (other > 0) diagData.push({ label:"أخرى", v: other, color:"#BDD8E9" });
+  const diagData = counts.filter(b => b.v > 0).map(({ label, v, color }) => ({ label, v, color }));
+  if (other > 0) diagData.push({ label: "أخرى", v: other, color: "#BDD8E9" });
 
-  // Real per-therapist session counts.
-  const sessionsOf = (t) => sessions.filter(s => s.therapist === t.name || s.therapist_id === t.id).length;
-
-  // Cohort pain trend: average pain per session number across all patients.
+  // Cohort pain trend: average pain per session number across filtered rows.
   const byNum = {};
-  sessions.forEach(s => {
-    const n = s.session ?? s.session_number;
-    if (!n) return;
-    (byNum[n] = byNum[n] || []).push(s.pain ?? s.pain_score ?? 0);
-  });
-  const cohort = Object.keys(byNum).map(Number).sort((a,b)=>a-b).slice(0,10)
-    .map(n => ({ label:`ج${n}`, v: byNum[n].reduce((s,v)=>s+v,0)/byNum[n].length }));
+  filtered.forEach(s => { const n = s.session; if (!n) return; (byNum[n] = byNum[n] || []).push(Number(s.pain) || 0); });
+  const cohort = Object.keys(byNum).map(Number).sort((a, b) => a - b).slice(0, 12)
+    .map(n => ({ label: `ج${n}`, v: byNum[n].reduce((s, v) => s + v, 0) / byNum[n].length }));
+
+  const columns = [
+    { key: "date", label: "التاريخ", type: "date", width: 12 },
+    { key: "patient", label: "المريض", type: "text", width: 20 },
+    { key: "therapist", label: "الأخصائي", type: "text", width: 18 },
+    { key: "doctor", label: "الطبيب", type: "text", width: 16 },
+    { key: "session", label: "رقم الجلسة", type: "number", width: 10 },
+    { key: "pain", label: "مستوى الألم", type: "number", width: 10 },
+    { key: "notes", label: "ملاحظات", type: "text", width: 30 },
+  ];
+  function doExport() {
+    const ok = exportReportExcel({
+      filename: `تقرير-طبي-${reportToday()}.xlsx`, sheetName: "التقرير الطبي",
+      title: "التقرير الطبي", filters: reportActiveFilters(f, show, opts), columns, rows: filtered,
+    });
+    if (ok && window.showToast) window.showToast(`تم تصدير ${filtered.length} صفًا إلى Excel`, "success");
+  }
 
   return (
     <div>
-      <div className="grid-3" style={{marginBottom:18}}>
-        <StatCard label="مرضى تحت العلاج" value={String(active.length)} accent="#7BBDE8" icon={<I.Users size={15}/>}/>
-        <StatCard label="متوسط الجلسات لكل مريض"   value={avgSessions} accent="#3FA984" icon={<I.Activity size={15}/>}/>
-        <StatCard label="أكملوا باقاتهم"        value={`${goalRate}%`} accent="#7E6BD3" icon={<I.Check size={15}/>}/>
+      <ReportFilterBar f={f} set={set} opts={opts} show={show} onExport={doExport} searchPlaceholder="بحث بالمريض أو التشخيص…" />
+
+      <div className="grid-4" style={{ marginBottom: 18 }}>
+        <StatCard label="مرضى تحت العلاج" value={String(distinctPatients)} accent="#7BBDE8" icon={<I.Users size={15} />} />
+        <StatCard label="عدد الجلسات" value={totalSessions.toLocaleString()} accent="#3A7FB5" icon={<I.Activity size={15} />} />
+        <StatCard label="متوسط الجلسات لكل مريض" value={avgPer} accent="#7E6BD3" icon={<I.Chart size={15} />} />
+        <StatCard label="متوسط مستوى الألم" value={avgPain} accent="#D49044" icon={<I.Heart size={15} />} />
       </div>
 
-      <div className="rgrid c-lg" style={{"--gtc":"1fr 1fr",marginBottom:18}}>
+      <div className="rgrid c-lg" style={{ "--gtc": "1fr 1fr", marginBottom: 18 }}>
         <div className="card card-pad">
-          <div className="h2" style={{marginBottom:18}}>التشخيص breakdown</div>
-          <DonutChart data={diagData} size={180} centerLabel="مريض" centerValue={String(patients.length)}/>
+          <div className="h2" style={{ marginBottom: 18 }}>توزيع التشخيصات</div>
+          {diagData.length ? <DonutChart data={diagData} size={180} centerLabel="مريض" centerValue={String(distinctPatients)} /> : <div className="muted" style={{ fontSize: 13, padding: "40px 0", textAlign: "center" }}>لا بيانات ضمن الفترة المحددة.</div>}
         </div>
         <div className="card card-pad">
-          <div className="h2" style={{marginBottom:14}}>الأخصائي activity</div>
-          {DATA.therapists.length===0 && <div className="muted" style={{fontSize:13,padding:"14px 0"}}>لا أخصائيين مسجّلين بعد.</div>}
-          {DATA.therapists.map((t,i)=>(
-            <div key={t.name} style={{padding:"11px 0",borderBottom:i<DATA.therapists.length-1?"1px dashed var(--ink-100)":"none",display:"flex",alignItems:"center",gap:10}}>
-              <span className="av md" style={{background:t.color+"33",color:t.color}}>{t.name.split(" ").map(x=>x[0]).join("")}</span>
-              <div style={{flex:1}}>
-                <div style={{fontWeight:500,fontSize:13}}>{t.name}</div>
-                <div className="muted" style={{fontSize:11.5}}>{t.spec}</div>
-              </div>
-              <div style={{textAlign:"right"}}>
-                <div className="mono" style={{fontSize:14,fontWeight:600}}>{sessionsOf(t)}</div>
-                <div className="muted" style={{fontSize:10.5}}>جلسات مسجلة</div>
-              </div>
-            </div>
-          ))}
+          <div className="h2" style={{ marginBottom: 6 }}>تقدّم العلاج · متوسط الألم</div>
+          <div className="muted" style={{ fontSize: 12.5, marginBottom: 14 }}>متوسط مستوى الألم حسب رقم الجلسة</div>
+          {cohort.length ? <AreaChart data={cohort} height={200} color="#3FA984" fill="rgba(63,169,132,.16)" formatY={v => Number(v).toFixed(1)} /> : <div className="muted" style={{ fontSize: 13, padding: "40px 0", textAlign: "center" }}>لا جلسات ضمن الفترة المحددة.</div>}
         </div>
       </div>
 
-      <div className="card card-pad">
-        <div className="h2" style={{marginBottom:14}}>تقدّم العلاج · cohort</div>
-        <div className="muted" style={{fontSize:12.5,marginBottom:14}}>متوسط مستوى الألم حسب رقم الجلسة · جميع المرضى</div>
-        <AreaChart data={cohort} height={200} color="#3FA984" fill="rgba(63,169,132,.16)" formatY={v=>Number(v).toFixed(1)}/>
-      </div>
+      <ReportTable columns={columns} rows={filtered} page={page} setPage={setPage} empty="لا جلسات ضمن عوامل التصفية الحالية." />
     </div>
   );
 }
 
+// ── Operational report (appointments / attendance / rooms) ────
 function OperationalReport() {
-  // Aggregated from the real bookings table.
-  const appts = DATA.appts;
-  const booked = appts.filter(a => a.status !== "متاح");
-  const completed = booked.filter(a => a.status === "مكتمل");
-  const noShow = booked.filter(a => a.status === "لم يحضر");
-  const confirmed = booked.filter(a => ["مؤكد","مكتمل","قيد التنفيذ"].includes(a.status));
-  const attended = booked.filter(a => a.status === "مكتمل" || a.status === "قيد التنفيذ");
-  const attendRate = booked.length ? Math.round(attended.length / booked.length * 100) : 0;
-  const noShowRate = booked.length ? (noShow.length / booked.length * 100).toFixed(1) : "0";
-  const utilization = appts.length ? Math.round(booked.length / appts.length * 100) : 0;
+  window.useDataVersion && window.useDataVersion();
+  const { f, set, page, setPage } = useReportState();
+  const opts = useReportOpts();
+  const show = { therapist: true, doctor: true, patient: true };
 
-  // By weekday (bookings carry a date in production).
-  const wd = ["الأحد","الإثنين","الثلاثاء","الأربعاء","الخميس","الجمعة","السبت"];
-  const byDay = wd.map(l => ({ label:l, v:0, color:"#7BBDE8" }));
-  booked.forEach(a => { if (a.date) { const d = new Date(a.date); if (!isNaN(d)) byDay[d.getDay()].v += 1; } });
+  // One row per booked appointment, from the Supabase-hydrated appts table.
+  const rows = React.useMemo(() => (DATA.appts || [])
+    .filter(a => a.status !== "متاح")
+    .map(a => ({
+      id: a.id || a.booking_id,
+      date: String(a.date || "").slice(0, 10),
+      time: a.time || "—",
+      patient: a.patient || "—",
+      patient_id: a.pid || a.patient_id || null,
+      therapist: a.th || "—",
+      doctor: a.dr || "—",
+      room: a.room || "—",
+      type: a.type || "—",
+      status: a.status || "—",
+    })), [DATA.appts]);
 
-  // By hour from the booking time.
+  const q = f.q.trim().toLowerCase();
+  const filtered = React.useMemo(() => rows.filter(r =>
+    reportInRange(r.date, f.from, f.to) &&
+    (f.therapist === "all" || r.therapist === f.therapist) &&
+    (f.doctor === "all" || r.doctor === f.doctor) &&
+    (f.patient === "all" || r.patient_id === f.patient) &&
+    (!q || [r.patient, r.therapist, r.doctor, r.room, r.type, r.status].some(x => String(x || "").toLowerCase().includes(q)))
+  ).sort((a, b) => (String(b.date) + b.time).localeCompare(String(a.date) + a.time)), [rows, f.from, f.to, f.therapist, f.doctor, f.patient, q]);
+
+  const booked = filtered.length;
+  const completed = filtered.filter(a => a.status === "مكتمل").length;
+  const noShow = filtered.filter(a => a.status === "لم يحضر").length;
+  const attended = filtered.filter(a => a.status === "مكتمل" || a.status === "قيد التنفيذ").length;
+  const attendRate = booked ? Math.round(attended / booked * 100) : 0;
+  const noShowRate = booked ? (noShow / booked * 100).toFixed(1) : "0";
+  const completedRate = booked ? Math.round(completed / booked * 100) : 0;
+
+  const wd = ["الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
+  const byDay = wd.map(l => ({ label: l, v: 0, color: "#7BBDE8" }));
+  filtered.forEach(a => { if (a.date) { const d = new Date(a.date); if (!isNaN(d)) byDay[d.getDay()].v += 1; } });
   const byHourMap = {};
-  booked.forEach(a => {
-    const h = parseInt(String(a.time||"").split(":")[0], 10);
-    if (Number.isFinite(h)) byHourMap[h] = (byHourMap[h]||0) + 1;
-  });
-  const byHour = Object.keys(byHourMap).map(Number).sort((a,b)=>a-b).map(h => ({ label:`${h}:00`, v: byHourMap[h] }));
+  filtered.forEach(a => { const h = parseInt(String(a.time || "").split(":")[0], 10); if (Number.isFinite(h)) byHourMap[h] = (byHourMap[h] || 0) + 1; });
+  const byHour = Object.keys(byHourMap).map(Number).sort((a, b) => a - b).map(h => ({ label: `${h}:00`, v: byHourMap[h] }));
 
-  const funnel = [
-    {l:"مجدول", v: booked.length, c:"#BDD8E9"},
-    {l:"مؤكد", v: confirmed.length, c:"#7BBDE8"},
-    {l:"مكتمل", v: completed.length, c:"#1E4A6E"},
-    {l:"لم يحضر", v: noShow.length, c:"#D8665A"},
+  const columns = [
+    { key: "date", label: "التاريخ", type: "date", width: 12 },
+    { key: "time", label: "الوقت", type: "text", width: 8 },
+    { key: "patient", label: "المريض", type: "text", width: 20 },
+    { key: "therapist", label: "الأخصائي", type: "text", width: 18 },
+    { key: "doctor", label: "الطبيب", type: "text", width: 16 },
+    { key: "room", label: "الغرفة", type: "text", width: 10 },
+    { key: "type", label: "النوع", type: "text", width: 14 },
+    { key: "status", label: "الحالة", type: "text", width: 12 },
   ];
-  const funnelMax = Math.max(1, booked.length);
+  function doExport() {
+    const ok = exportReportExcel({
+      filename: `تقرير-تشغيلي-${reportToday()}.xlsx`, sheetName: "التقرير التشغيلي",
+      title: "التقرير التشغيلي", filters: reportActiveFilters(f, show, opts), columns, rows: filtered,
+    });
+    if (ok && window.showToast) window.showToast(`تم تصدير ${filtered.length} صفًا إلى Excel`, "success");
+  }
 
   return (
     <div>
-      <div className="grid-4" style={{marginBottom:18}}>
-        <StatCard label="مواعيد مسجلة"   value={booked.length.toLocaleString()} accent="#7BBDE8" icon={<I.Calendar size={15}/>}/>
-        <StatCard label="معدّل الحضور"     value={`${attendRate}%`} accent="#3FA984" icon={<I.Check size={15}/>}/>
-        <StatCard label="معدل عدم الحضور"         value={`${noShowRate}%`} accent="#D49044" icon={<I.X size={15}/>}/>
-        <StatCard label="استخدام الفترات"    value={`${utilization}%`} accent="#7E6BD3" icon={<I.MapPin size={15}/>}/>
+      <ReportFilterBar f={f} set={set} opts={opts} show={show} onExport={doExport} searchPlaceholder="بحث بالمريض أو الغرفة…" />
+
+      <div className="grid-4" style={{ marginBottom: 18 }}>
+        <StatCard label="مواعيد مسجلة" value={booked.toLocaleString()} accent="#7BBDE8" icon={<I.Calendar size={15} />} />
+        <StatCard label="معدّل الحضور" value={`${attendRate}%`} accent="#3FA984" icon={<I.Check size={15} />} />
+        <StatCard label="معدل عدم الحضور" value={`${noShowRate}%`} accent="#D49044" icon={<I.X size={15} />} />
+        <StatCard label="نسبة الإكمال" value={`${completedRate}%`} accent="#7E6BD3" icon={<I.Activity size={15} />} />
       </div>
 
-      <div className="rgrid c-lg" style={{"--gtc":"1fr 1fr",marginBottom:18}}>
+      <div className="rgrid c-lg" style={{ "--gtc": "1fr 1fr", marginBottom: 18 }}>
         <div className="card card-pad">
-          <div className="h2" style={{marginBottom:14}}>Appointments بواسطة day من week</div>
-          <BarChart data={byDay.some(d=>d.v>0) ? byDay : []} height={220}/>
+          <div className="h2" style={{ marginBottom: 14 }}>المواعيد حسب يوم الأسبوع</div>
+          {byDay.some(d => d.v > 0) ? <BarChart data={byDay} height={220} /> : <div className="muted" style={{ fontSize: 13, padding: "40px 0", textAlign: "center" }}>لا مواعيد ضمن الفترة المحددة.</div>}
         </div>
         <div className="card card-pad">
-          <div className="h2" style={{marginBottom:14}}>Appointments بواسطة hour</div>
-          <AreaChart data={byHour} height={220}/>
+          <div className="h2" style={{ marginBottom: 14 }}>المواعيد حسب الساعة</div>
+          {byHour.length ? <AreaChart data={byHour} height={220} /> : <div className="muted" style={{ fontSize: 13, padding: "40px 0", textAlign: "center" }}>لا مواعيد ضمن الفترة المحددة.</div>}
         </div>
       </div>
 
-      <div className="card card-pad">
-        <div className="h2" style={{marginBottom:14}}>قمع الحضور</div>
-        {funnel.map((f,i)=>{
-          const w = f.v/funnelMax*100;
-          return (
-            <div key={i} style={{padding:"8px 0"}}>
-              <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
-                <span style={{fontSize:13,fontWeight:500}}>{f.l}</span>
-                <span className="mono" style={{fontSize:12.5}}>{f.v.toLocaleString()}</span>
-              </div>
-              <div style={{height:18,background:"var(--ink-100)",borderRadius:5,overflow:"hidden"}}>
-                <div style={{height:"100%",width:`${w}%`,background:f.c}}/>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      <ReportTable columns={columns} rows={filtered} page={page} setPage={setPage} empty="لا مواعيد ضمن عوامل التصفية الحالية." />
     </div>
   );
 }
@@ -3750,6 +4028,31 @@ const ROLE_OPTIONS = [
 ];
 const roleBadgeClass = (slug) => slug==="admin" ? "b-violet" : slug==="doctor" ? "b-blue" : slug==="therapist" ? "b-green" : "b-grey";
 
+// Styled confirmation dialog (used before destructive / sensitive admin
+// actions). Two-button footer, busy spinner, optional danger styling.
+function ConfirmModal({ title, message, confirmLabel="تأكيد", cancelLabel="إلغاء", danger=false, busy=false, onConfirm, onClose }) {
+  return (
+    <Modal title={title} onClose={busy?undefined:onClose} width={440}
+      footer={<>
+        <button className="btn btn-ghost" onClick={onClose} disabled={busy}>{cancelLabel}</button>
+        <button className={"btn " + (danger?"btn-secondary":"btn-blue")} style={danger?{color:"var(--red)",borderColor:"var(--red-bg)"}:undefined} disabled={busy} onClick={onConfirm}>
+          {busy ? <span className="spin" style={{width:14,height:14,border:"2px solid currentColor",borderTopColor:"transparent",borderRadius:"50%"}}/> : <><I.Check size={13}/> {confirmLabel}</>}
+        </button>
+      </>}>
+      <div style={{fontSize:13.5,color:"var(--ink-700)",lineHeight:1.7}}>{message}</div>
+    </Modal>
+  );
+}
+
+// Staff account status → badge metadata. Anything other than an explicit
+// 'inactive' reads as active (matches the DB default).
+function staffStatusMeta(s) {
+  const active = String((s && s.status) || "active") !== "inactive";
+  return active
+    ? { active:true,  label:"نشط",   cls:"b-green" }
+    : { active:false, label:"معطّل", cls:"b-grey"  };
+}
+
 function UsersPanel() {
   const me = window.ME || {};
   const staff = DATA.staff || [];
@@ -3757,14 +4060,12 @@ function UsersPanel() {
   const [editRow, setEditRow] = React.useState(null);   // staff row being edited
   const [pwOpen, setPwOpen] = React.useState(false);     // change MY password
   const [profileOpen, setProfileOpen] = React.useState(false); // edit MY name
+  const [resetRow, setResetRow] = React.useState(null);  // admin reset a teammate's pw
+  const [statusRow, setStatusRow] = React.useState(null);// { row, active } pending status change
+  const [statusBusy, setStatusBusy] = React.useState(false);
 
   const isMe = (s) => me.email && (s.email || "").toLowerCase() === (me.email || "").toLowerCase();
 
-  async function resetFor(email) {
-    const res = await window.sendPasswordReset(email);
-    if (res.ok) window.showToast && window.showToast(res.demo ? "وضع تجريبي: لا إرسال فعلي" : `تم إرسال رابط إعادة التعيين إلى ${email}`, "success");
-    else window.showToast && window.showToast(res.error || "تعذّر الإرسال", "error");
-  }
   async function removeMember(s) {
     if (!window.confirm(`إزالة ${s.name}؟ (يزيل صف الموظف؛ حساب الدخول يُحذف من Supabase)`)) return;
     try {
@@ -3773,13 +4074,24 @@ function UsersPanel() {
     } catch (e) { console.warn(e); window.showToast && window.showToast("تعذّر الإزالة", "error"); }
   }
 
+  async function applyStatus() {
+    if (!statusRow) return;
+    const { row, active } = statusRow;
+    setStatusBusy(true);
+    const res = await window.adminSetStaffStatus({ staff_id: row.staff_id || row.id, active });
+    setStatusBusy(false);
+    if (res.ok) window.showToast && window.showToast(active ? `تم تفعيل حساب ${row.name}` : `تم تعطيل حساب ${row.name}`, "success");
+    else window.showToast && window.showToast(res.error || "تعذّر تنفيذ العملية", "error");
+    setStatusRow(null);
+  }
+
   return (
     <div>
       {/* My account */}
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,gap:12,flexWrap:"wrap"}}>
         <div>
           <div className="h2">المستخدمون والأدوار</div>
-          <div className="muted" style={{fontSize:12.5,marginTop:2}}>أنشئ حسابات الدخول، عيّن الأدوار، وأعد تعيين كلمات المرور.</div>
+          <div className="muted" style={{fontSize:12.5,marginTop:2}}>أنشئ حسابات الدخول، عيّن الأدوار، أعد تعيين كلمات المرور، وفعّل أو عطّل الحسابات.</div>
         </div>
         <button className="btn btn-blue" onClick={()=>setCreateOpen(true)}><I.Plus size={14}/> إنشاء مستخدم</button>
       </div>
@@ -3797,31 +4109,39 @@ function UsersPanel() {
       {/* Team table */}
       <div className="tbl-scroll">
       <table className="tbl">
-        <thead><tr><th>الاسم</th><th>البريد الإلكتروني</th><th>الدور</th><th></th></tr></thead>
+        <thead><tr><th>الاسم</th><th>البريد الإلكتروني</th><th>الدور</th><th>حالة الحساب</th><th></th></tr></thead>
         <tbody>
           {staff.length===0 && (
-            <tr><td colSpan={4}><EmptyState icon={<I.Users size={22}/>} title="لا مستخدمين بعد" body="أنشئ أول حساب دخول من زر «إنشاء مستخدم»."/></td></tr>
+            <tr><td colSpan={5}><EmptyState icon={<I.Users size={22}/>} title="لا مستخدمين بعد" body="أنشئ أول حساب دخول من زر «إنشاء مستخدم»."/></td></tr>
           )}
-          {staff.map((s,i)=>(
-            <tr key={s.staff_id||s.id||i}>
+          {staff.map((s,i)=>{
+            const st = staffStatusMeta(s);
+            const mine = isMe(s);
+            return (
+            <tr key={s.staff_id||s.id||i} data-selected={st.active?undefined:"true"} style={st.active?undefined:{opacity:.85}}>
               <td><div style={{display:"flex",alignItems:"center",gap:10}}>
                 <div className="av sm">{(s.name||"?").split(" ").map(x=>x[0]||"").join("").slice(0,2)}</div>
-                {s.name}{isMe(s) && <span className="muted" style={{fontSize:11}}>(أنا)</span>}
+                {s.name}{mine && <span className="muted" style={{fontSize:11}}>(أنا)</span>}
               </div></td>
               <td className="mono" style={{fontSize:12}}>{s.email || "—"}</td>
               <td><span className={"badge " + roleBadgeClass(s.role)}><span className="dot"></span>{ROLE_AR[s.role] || s.role || "—"}</span></td>
+              <td><span className={"badge " + st.cls}><span className="dot"></span>{st.label}</span></td>
               <td>
                 <RowMenu size={13} items={[
-                  isMe(s)
+                  mine
                     ? { label:"تغيير كلمة المرور", icon:<I.Lock size={13}/>, onClick:()=>setPwOpen(true) }
-                    : { label:"إرسال رابط إعادة تعيين", icon:<I.Mail size={13}/>, onClick:()=>resetFor(s.email) },
-                  { label:"تعديل", icon:<I.Edit size={13}/>, onClick:()=>setEditRow(s) },
+                    : { label:"إعادة تعيين كلمة المرور", icon:<I.Lock size={13}/>, onClick:()=>setResetRow(s) },
+                  { label:"تعديل البيانات", icon:<I.Edit size={13}/>, onClick:()=>setEditRow(s) },
+                  ...(mine ? [] : [ st.active
+                    ? { label:"تعطيل الحساب", icon:<I.Lock size={13}/>, danger:true, onClick:()=>setStatusRow({ row:s, active:false }) }
+                    : { label:"إعادة تفعيل الحساب", icon:<I.Check size={13}/>, onClick:()=>setStatusRow({ row:s, active:true }) }
+                  ]),
                   { label:"نسخ البريد", icon:<I.Mail size={13}/>, onClick:()=>{ try{ navigator.clipboard.writeText(s.email||""); window.showToast&&window.showToast("تم نسخ البريد","success"); }catch(_){} } },
-                  ...(isMe(s) ? [] : [{ label:"إزالة", icon:<I.Trash size={13}/>, danger:true, onClick:()=>removeMember(s) }]),
+                  ...(mine ? [] : [{ label:"إزالة الموظف", icon:<I.Trash size={13}/>, danger:true, onClick:()=>removeMember(s) }]),
                 ]}/>
               </td>
             </tr>
-          ))}
+          );})}
         </tbody>
       </table>
       </div>
@@ -3830,7 +4150,81 @@ function UsersPanel() {
       {editRow && <EditUserModal row={editRow} onClose={()=>setEditRow(null)}/>}
       {pwOpen && <ChangePasswordModal onClose={()=>setPwOpen(false)}/>}
       {profileOpen && <EditProfileModal onClose={()=>setProfileOpen(false)}/>}
+      {resetRow && <AdminResetPasswordModal row={resetRow} onClose={()=>setResetRow(null)}/>}
+      {statusRow && (
+        <ConfirmModal
+          title={statusRow.active ? "إعادة تفعيل الحساب" : "تعطيل الحساب"}
+          danger={!statusRow.active}
+          busy={statusBusy}
+          confirmLabel={statusRow.active ? "تفعيل" : "تعطيل"}
+          onConfirm={applyStatus}
+          onClose={()=>setStatusRow(null)}
+          message={statusRow.active
+            ? <>سيتمكّن <b>{statusRow.row.name}</b> ({statusRow.row.email || "—"}) من تسجيل الدخول مجددًا بنفس البريد وكلمة المرور. لا يتأثر أي من بياناته.</>
+            : <>سيُمنع <b>{statusRow.row.name}</b> ({statusRow.row.email || "—"}) من تسجيل الدخول وستُنهى جلساته الحالية فورًا. تبقى جميع بياناته ومواعيده وجلساته وسجل التدقيق كما هي، ويمكن إعادة التفعيل لاحقًا.</>}
+        />
+      )}
     </div>
+  );
+}
+
+// Admin: force-set a teammate's password without knowing the current one.
+// Collects a new password, then requires an explicit confirmation step
+// before calling the admin-reset-password Edge Function. Never displays or
+// transmits any password hash.
+function AdminResetPasswordModal({ row, onClose }) {
+  const [pw, setPw] = React.useState("");
+  const [pw2, setPw2] = React.useState("");
+  const [showPw, setShowPw] = React.useState(false);
+  const [confirming, setConfirming] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+
+  function proceed() {
+    if (pw.length < 6) { window.showToast && window.showToast("كلمة المرور 6 أحرف على الأقل", "error"); return; }
+    if (pw !== pw2) { window.showToast && window.showToast("كلمتا المرور غير متطابقتين", "error"); return; }
+    setConfirming(true);
+  }
+  async function submit() {
+    setBusy(true);
+    const res = await window.adminResetPassword({ staff_id: row.staff_id || row.id, auth_uid: row.auth_uid, password: pw });
+    setBusy(false);
+    if (res.ok) { window.showToast && window.showToast(res.demo ? "وضع تجريبي: لم تُحفظ" : `تم تغيير كلمة مرور ${row.name}`, "success"); onClose(); }
+    else { window.showToast && window.showToast(res.error || "تعذّر التغيير", "error"); setConfirming(false); }
+  }
+
+  if (confirming) {
+    return (
+      <ConfirmModal
+        title="تأكيد إعادة التعيين"
+        busy={busy}
+        confirmLabel="تأكيد وتغيير"
+        onConfirm={submit}
+        onClose={()=>setConfirming(false)}
+        message={<>سيتم تعيين كلمة مرور جديدة للموظف <b>{row.name}</b> ({row.email || "—"}). سيستخدم كلمة المرور الجديدة في تسجيل الدخول القادم. لا يلزم إدخال كلمة المرور الحالية.</>}
+      />
+    );
+  }
+
+  return (
+    <Modal title={`إعادة تعيين كلمة مرور — ${row.name}`} onClose={onClose}
+      footer={<>
+        <button className="btn btn-ghost" onClick={onClose}>إلغاء</button>
+        <button className="btn btn-blue" onClick={proceed}><I.Lock size={13}/> متابعة</button>
+      </>}>
+      <div className="muted" style={{fontSize:12,marginBottom:14,padding:"10px 12px",background:"var(--ink-50)",borderRadius:8,lineHeight:1.6}}>
+        <I.Lock size={11} style={{marginInlineEnd:4}}/> بصفتك مديرًا، يمكنك تعيين كلمة مرور جديدة لهذا الموظف دون معرفة كلمته الحالية. تُنفَّذ العملية عبر Supabase Auth الآمن.
+      </div>
+      <Field label="كلمة المرور الجديدة" required hint="6 أحرف على الأقل">
+        <div style={{position:"relative"}}>
+          <input className="input" type={showPw?"text":"password"} value={pw} onChange={e=>setPw(e.target.value)} style={{paddingRight:38}} autoFocus/>
+          <button type="button" onClick={()=>setShowPw(s=>!s)} style={{position:"absolute",right:6,top:5,padding:6,border:"none",background:"transparent",cursor:"pointer",color:"var(--ink-500)"}}><I.Eye size={15}/></button>
+        </div>
+      </Field>
+      <div style={{height:12}}/>
+      <Field label="تأكيد كلمة المرور" required>
+        <input className="input" type={showPw?"text":"password"} value={pw2} onChange={e=>setPw2(e.target.value)}/>
+      </Field>
+    </Modal>
   );
 }
 
@@ -4455,6 +4849,34 @@ function App() {
     if (user) localStorage.setItem("kinetic.user", JSON.stringify(user));
     else localStorage.removeItem("kinetic.user");
   },[user]);
+
+  // Re-validate the restored session against the server. A deactivated
+  // account (or a revoked / expired token) is forced to log out
+  // immediately — its localStorage identity is stale and its data access
+  // is already denied by RLS (app_role() → null). Skips demo/mock logins,
+  // which have no Supabase session. Runs on mount + whenever the tab
+  // regains focus, so deactivation takes effect the next time the user
+  // touches the app.
+  React.useEffect(() => {
+    if (!user || user.role === "مريض") return;
+    if (!window.getAuthStaff || isDemoMode()) return;
+    let cancelled = false;
+    async function check() {
+      try {
+        const res = await window.getAuthStaff();
+        if (cancelled || res.ok) return;
+        if (["account-inactive", "invalid-session", "no-session"].includes(res.reason)) {
+          if (window.showToast) window.showToast(res.error || "انتهت الجلسة — سجّل الدخول من جديد", "error");
+          try { window.signOut && window.signOut(); } catch {}
+          setUser(null); setRoute("dashboard");
+        }
+      } catch {}
+    }
+    check();
+    const onFocus = () => check();
+    window.addEventListener("focus", onFocus);
+    return () => { cancelled = true; window.removeEventListener("focus", onFocus); };
+  }, [user]);
 
   function go(r) {
     if (r === "logout") {
@@ -6511,7 +6933,7 @@ function TemplateEditorModal({ templateId, onClose, onSaved }) {
               <input className="input" value={state.name} onChange={e=>up('name',e.target.value)}/>
             </Field>
             <Field label="الفئة">
-              <input className="input" value={state.category} onChange={e=>up('category',e.target.value)} placeholder="مثال: تأهيل الركبة"/>
+              <CategoryCombobox value={state.category} onChange={v=>up('category',v)}/>
             </Field>
             <Field label="التشخيص">
               <input className="input" value={state.diagnosis} onChange={e=>up('diagnosis',e.target.value)}/>
@@ -7086,6 +7508,18 @@ function TemplateCategoriesModal({ cats, perms, onClose }) {
       : (res.error || 'تعذّر التنفيذ'),
       res.ok ? 'success' : 'error');
   }
+  const [deletingId, setDeletingId] = React.useState(null);   // two-step delete confirm
+  async function doDelete(c) {
+    const res = await window.TplCategories.remove(c.category_id);
+    if (res.ok) {
+      if (window.showToast) window.showToast('تم حذف الفئة', 'success');
+      if (editingId === c.category_id) resetForm();
+    } else if (window.showToast) {
+      // Usually "in use" — surface the server's explanation verbatim.
+      window.showToast(res.error || 'تعذّر الحذف', 'error');
+    }
+    setDeletingId(null);
+  }
 
   const visible = showArchived ? cats : cats.filter(c => c.status !== 'archived');
 
@@ -7114,6 +7548,14 @@ function TemplateCategoriesModal({ cats, perms, onClose }) {
                     <button className="btn btn-ghost" style={{fontSize:11.5,padding:'4px 8px',color: archived ? 'var(--green)' : 'var(--amber-700, #b45309)'}} onClick={()=>doArchiveToggle(c)}>
                       {archived ? 'استعادة' : 'أرشفة'}
                     </button>
+                    {deletingId === c.category_id ? (
+                      <>
+                        <button className="btn btn-ghost" style={{fontSize:11.5,padding:'4px 8px',color:'var(--red)',fontWeight:600}} onClick={()=>doDelete(c)}>تأكيد</button>
+                        <button className="btn btn-ghost" style={{fontSize:11.5,padding:'4px 8px'}} onClick={()=>setDeletingId(null)}>إلغاء</button>
+                      </>
+                    ) : (
+                      <button className="btn btn-ghost" style={{fontSize:11.5,padding:'4px 8px',color:'var(--red)'}} onClick={()=>setDeletingId(c.category_id)}>حذف</button>
+                    )}
                   </>
                 )}
               </div>

@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────
-# Deploys the admin-create-user Edge Function so admins can create
-# employee accounts without limits (no signup rate limit, no email
-# confirmation). Run from the repo root.
+# Deploys the admin Edge Functions:
+#   • admin-create-user   — create employee accounts without limits
+#                           (no signup rate limit, no email confirmation)
+#   • admin-reset-password — admin sets a new password for any staff
+#                            member without knowing the current one
+#   • admin-set-status     — admin activates / deactivates staff accounts
+# Run from the repo root.
 #
 # You need two things from https://supabase.com/dashboard :
 #   1. Your PROJECT REF — the subdomain of your project URL
@@ -26,9 +30,12 @@ if [ -z "${SUPABASE_ACCESS_TOKEN:-}" ]; then
   export SUPABASE_ACCESS_TOKEN
 fi
 
-npx -y supabase functions deploy admin-create-user \
-  --project-ref "$PROJECT_REF" \
-  --no-verify-jwt
+for fn in admin-create-user admin-reset-password admin-set-status; do
+  echo "→ Deploying $fn …"
+  npx -y supabase functions deploy "$fn" \
+    --project-ref "$PROJECT_REF" \
+    --no-verify-jwt
+done
 
 echo
 echo "✔ Deployed. No secrets to configure — SUPABASE_URL / SUPABASE_ANON_KEY /"
