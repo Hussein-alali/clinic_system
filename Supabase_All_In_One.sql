@@ -1022,6 +1022,20 @@ create table if not exists treatment_methods (
   created_at       timestamptz default now(),
   updated_at       timestamptz default now()
 );
+-- self-heal: backfill columns on pre-existing (older-schema) treatment_methods so later indexes/constraints/policies resolve
+alter table treatment_methods add column if not exists method_id text;
+alter table treatment_methods add column if not exists name text;
+alter table treatment_methods add column if not exists category text;
+alter table treatment_methods add column if not exists description text;
+alter table treatment_methods add column if not exists duration_minutes int;
+alter table treatment_methods add column if not exists notes text;
+alter table treatment_methods add column if not exists status text default 'active';
+alter table treatment_methods add column if not exists created_by uuid;
+alter table treatment_methods add column if not exists created_by_name text;
+alter table treatment_methods add column if not exists created_at timestamptz default now();
+alter table treatment_methods add column if not exists updated_at timestamptz default now();
+create unique index if not exists treatment_methods_name_uidx on treatment_methods(name);
+
 create index if not exists tx_methods_status_idx   on treatment_methods(status);
 create index if not exists tx_methods_category_idx on treatment_methods(category);
 
@@ -1382,6 +1396,23 @@ create table if not exists payment_receipts (
   deleted_at       timestamptz,
   deleted_by       uuid
 );
+-- self-heal: backfill columns on pre-existing (older-schema) payment_receipts so later indexes/constraints/policies resolve
+alter table payment_receipts add column if not exists receipt_id text;
+alter table payment_receipts add column if not exists payment_id text;
+alter table payment_receipts add column if not exists invoice_id text;
+alter table payment_receipts add column if not exists patient_id text;
+alter table payment_receipts add column if not exists file_name text;
+alter table payment_receipts add column if not exists stored_name text;
+alter table payment_receipts add column if not exists storage_path text;
+alter table payment_receipts add column if not exists file_url text;
+alter table payment_receipts add column if not exists file_type text;
+alter table payment_receipts add column if not exists file_size int;
+alter table payment_receipts add column if not exists uploaded_by uuid;
+alter table payment_receipts add column if not exists uploaded_by_name text;
+alter table payment_receipts add column if not exists uploaded_at timestamptz default now();
+alter table payment_receipts add column if not exists deleted_at timestamptz;
+alter table payment_receipts add column if not exists deleted_by uuid;
+
 create index if not exists payment_receipts_payment_idx  on payment_receipts(payment_id);
 create index if not exists payment_receipts_invoice_idx  on payment_receipts(invoice_id);
 create index if not exists payment_receipts_patient_idx  on payment_receipts(patient_id);
@@ -1470,6 +1501,35 @@ create table if not exists treatment_templates (
   created_at             timestamptz default now(),
   updated_at             timestamptz default now()
 );
+-- self-heal: backfill columns on pre-existing (older-schema) treatment_templates so later indexes/constraints/policies resolve
+alter table treatment_templates add column if not exists template_id text;
+alter table treatment_templates add column if not exists name text;
+alter table treatment_templates add column if not exists category text;
+alter table treatment_templates add column if not exists diagnosis text;
+alter table treatment_templates add column if not exists body_part text;
+alter table treatment_templates add column if not exists goals jsonb default '[]'::jsonb;
+alter table treatment_templates add column if not exists exercises jsonb default '[]'::jsonb;
+alter table treatment_templates add column if not exists methods jsonb default '[]'::jsonb;
+alter table treatment_templates add column if not exists home_instructions text;
+alter table treatment_templates add column if not exists notes text;
+alter table treatment_templates add column if not exists warnings text;
+alter table treatment_templates add column if not exists followup_instructions text;
+alter table treatment_templates add column if not exists estimated_sessions int;
+alter table treatment_templates add column if not exists weekly_frequency int;
+alter table treatment_templates add column if not exists expected_recovery_days int;
+alter table treatment_templates add column if not exists status text default 'active';
+alter table treatment_templates add column if not exists version int default 1;
+alter table treatment_templates add column if not exists usage_count int default 0;
+alter table treatment_templates add column if not exists last_used_at timestamptz;
+alter table treatment_templates add column if not exists avg_recovery_days numeric;
+alter table treatment_templates add column if not exists completion_rate numeric;
+alter table treatment_templates add column if not exists created_by uuid;
+alter table treatment_templates add column if not exists created_by_name text;
+alter table treatment_templates add column if not exists updated_by uuid;
+alter table treatment_templates add column if not exists updated_by_name text;
+alter table treatment_templates add column if not exists created_at timestamptz default now();
+alter table treatment_templates add column if not exists updated_at timestamptz default now();
+
 create index if not exists tx_templates_status_idx    on treatment_templates(status);
 create index if not exists tx_templates_category_idx  on treatment_templates(category);
 create index if not exists tx_templates_creator_idx   on treatment_templates(created_by);
@@ -1509,6 +1569,16 @@ create table if not exists template_versions (
   snapshot       jsonb not null,
   created_at     timestamptz default now()
 );
+-- self-heal: backfill columns on pre-existing (older-schema) template_versions so later indexes/constraints/policies resolve
+alter table template_versions add column if not exists version_id text;
+alter table template_versions add column if not exists template_id text;
+alter table template_versions add column if not exists version_num int;
+alter table template_versions add column if not exists editor_uid uuid;
+alter table template_versions add column if not exists editor_name text;
+alter table template_versions add column if not exists change_summary text;
+alter table template_versions add column if not exists snapshot jsonb;
+alter table template_versions add column if not exists created_at timestamptz default now();
+
 create index if not exists tx_ver_template_idx on template_versions(template_id, version_num desc);
 
 alter table template_versions enable row level security;
@@ -1530,6 +1600,17 @@ create table if not exists template_usage (
   completed_at    timestamptz,
   recovery_days   int
 );
+-- self-heal: backfill columns on pre-existing (older-schema) template_usage so later indexes/constraints/policies resolve
+alter table template_usage add column if not exists use_id text;
+alter table template_usage add column if not exists template_id text;
+alter table template_usage add column if not exists patient_id text;
+alter table template_usage add column if not exists plan_id text;
+alter table template_usage add column if not exists applied_by uuid;
+alter table template_usage add column if not exists applied_by_name text;
+alter table template_usage add column if not exists applied_at timestamptz default now();
+alter table template_usage add column if not exists completed_at timestamptz;
+alter table template_usage add column if not exists recovery_days int;
+
 create index if not exists tx_use_template_idx on template_usage(template_id);
 create index if not exists tx_use_patient_idx  on template_usage(patient_id);
 
@@ -2116,6 +2197,17 @@ create table if not exists template_categories (
   created_at      timestamptz default now(),
   updated_at      timestamptz default now()
 );
+-- self-heal: backfill columns on pre-existing (older-schema) template_categories so later indexes/constraints/policies resolve
+alter table template_categories add column if not exists category_id text;
+alter table template_categories add column if not exists name text;
+alter table template_categories add column if not exists description text;
+alter table template_categories add column if not exists status text default 'active';
+alter table template_categories add column if not exists sort_order int;
+alter table template_categories add column if not exists created_by uuid;
+alter table template_categories add column if not exists created_by_name text;
+alter table template_categories add column if not exists created_at timestamptz default now();
+alter table template_categories add column if not exists updated_at timestamptz default now();
+
 create unique index if not exists tpl_cat_name_uniq
   on template_categories(lower(trim(name)));
 create index if not exists tpl_cat_status_idx  on template_categories(status);
@@ -2843,6 +2935,41 @@ create table if not exists treatments (
   created_at             timestamptz default now(),
   updated_at             timestamptz default now()
 );
+-- self-heal: backfill columns on pre-existing (older-schema) treatments so later indexes/constraints/policies resolve
+alter table treatments add column if not exists treatment_id text;
+alter table treatments add column if not exists patient_id text;
+alter table treatments add column if not exists therapist_id text;
+alter table treatments add column if not exists therapist_name text;
+alter table treatments add column if not exists template_id text;
+alter table treatments add column if not exists template_version int;
+alter table treatments add column if not exists template_name text;
+alter table treatments add column if not exists template_snapshot jsonb;
+alter table treatments add column if not exists name text;
+alter table treatments add column if not exists category text;
+alter table treatments add column if not exists diagnosis text;
+alter table treatments add column if not exists body_part text;
+alter table treatments add column if not exists goals jsonb default '[]'::jsonb;
+alter table treatments add column if not exists exercises jsonb default '[]'::jsonb;
+alter table treatments add column if not exists methods jsonb default '[]'::jsonb;
+alter table treatments add column if not exists home_instructions text;
+alter table treatments add column if not exists notes text;
+alter table treatments add column if not exists warnings text;
+alter table treatments add column if not exists followup_instructions text;
+alter table treatments add column if not exists estimated_sessions int;
+alter table treatments add column if not exists weekly_frequency int;
+alter table treatments add column if not exists expected_recovery_days int;
+alter table treatments add column if not exists attachments jsonb default '[]'::jsonb;
+alter table treatments add column if not exists extra_fields jsonb default '{}'::jsonb;
+alter table treatments add column if not exists treatment_date date default current_date;
+alter table treatments add column if not exists start_date date;
+alter table treatments add column if not exists status text default 'active';
+alter table treatments add column if not exists created_by uuid;
+alter table treatments add column if not exists created_by_name text;
+alter table treatments add column if not exists updated_by uuid;
+alter table treatments add column if not exists updated_by_name text;
+alter table treatments add column if not exists created_at timestamptz default now();
+alter table treatments add column if not exists updated_at timestamptz default now();
+
 create index if not exists treatments_patient_idx   on treatments(patient_id);
 create index if not exists treatments_therapist_idx on treatments(therapist_id);
 create index if not exists treatments_template_idx  on treatments(template_id);
@@ -3180,6 +3307,19 @@ create table if not exists patient_schedules (
   created_at        timestamptz default now(),
   updated_at        timestamptz default now()
 );
+-- self-heal: backfill columns on pre-existing (older-schema) patient_schedules so later indexes/constraints/policies resolve
+alter table patient_schedules add column if not exists schedule_id text;
+alter table patient_schedules add column if not exists patient_id text;
+alter table patient_schedules add column if not exists therapist_id text;
+alter table patient_schedules add column if not exists days jsonb default '[]'::jsonb;
+alter table patient_schedules add column if not exists time text;
+alter table patient_schedules add column if not exists sessions_per_week int default 0;
+alter table patient_schedules add column if not exists allow_consecutive boolean default false;
+alter table patient_schedules add column if not exists active boolean default true;
+alter table patient_schedules add column if not exists notes text;
+alter table patient_schedules add column if not exists created_at timestamptz default now();
+alter table patient_schedules add column if not exists updated_at timestamptz default now();
+
 create index if not exists patient_schedules_patient_idx   on patient_schedules(patient_id);
 create index if not exists patient_schedules_therapist_idx on patient_schedules(therapist_id);
 
@@ -3268,6 +3408,17 @@ create table if not exists receptionists (
   created_at  timestamptz default now(),
   updated_at  timestamptz default now()
 );
+-- self-heal: backfill columns on pre-existing (older-schema) receptionists so later indexes/constraints/policies resolve
+alter table receptionists add column if not exists id text;
+alter table receptionists add column if not exists name text;
+alter table receptionists add column if not exists phone text;
+alter table receptionists add column if not exists email text;
+alter table receptionists add column if not exists notes text;
+alter table receptionists add column if not exists active boolean default true;
+alter table receptionists add column if not exists auth_uid uuid;
+alter table receptionists add column if not exists created_at timestamptz default now();
+alter table receptionists add column if not exists updated_at timestamptz default now();
+
 create index if not exists receptionists_auth_uid_idx on receptionists(auth_uid);
 
 alter table receptionists enable row level security;
