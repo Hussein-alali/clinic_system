@@ -883,15 +883,30 @@ async function upsertRow(name, row) {
 
 async function removeRow(name, id) {
   const cfg = DATA_TABLES[name];
-  if (!cfg) return;
+  if (!cfg) throw new Error("unknown table: " + name);
   const list = (window.DATA && window.DATA[name]) || readLS(cfg.ls, []);
+
+  // Delete on the SERVER first — the database is the source of truth. If the
+  // server rejects the delete (RLS 42501, FK 23503, missing row, network…)
+  // we must NOT drop the row locally, or the UI would falsely show success
+  // while the record still exists. Surface the full PostgreSQL error instead.
+  if (sb) {
+    const { error } = await sb.from(cfg.key).delete().eq(cfg.pk, id);
+    if (error) {
+      console.warn(`removeRow ${name} failed`, { table: cfg.key, error });
+      throw new Error(
+        [error.code, error.message, error.details, error.hint].filter(Boolean).join(" · ")
+        || "تعذّر الحذف"
+      );
+    }
+  } else {
+    throw new Error("لا يوجد اتصال بقاعدة البيانات");
+  }
+
+  // Server delete succeeded — now mirror it into local state + LS cache.
   const next = list.filter(r => pkOf(cfg, r) !== id);
   if (window.DATA) window.DATA[name] = next;
   writeLS(cfg.ls, next);
-  if (sb) {
-    const { error } = await sb.from(cfg.key).delete().eq(cfg.pk, id);
-    if (error) console.warn(`removeRow ${name} failed`, error.message || error);
-  }
   window.dispatchEvent(new CustomEvent("kinetic:data-updated", { detail: { table: name } }));
 }
 
@@ -2470,6 +2485,25 @@ async function getTreatment(treatmentId) {
   } catch (e) { console.warn('get_treatment failed', e); return null; }
 }
 
+// Permanently delete one treatment plan. Linked sessions are unlinked
+// server-side (FK on delete set null) — never deleted. Returns the RPC
+// payload ({ deleted, sessions_unlinked }). Throws on any server error so
+// the UI can show a real failure toast instead of a false success.
+async function deleteTreatment(treatmentId) {
+  if (!treatmentId) throw new Error('معرّف السجل مفقود');
+  if (!sb) throw new Error('لا يوجد اتصال بقاعدة البيانات');
+  const { data, error } = await sb.rpc('delete_treatment', { p_treatment_id: treatmentId });
+  if (error) {
+    console.warn('delete_treatment failed', error);
+    throw new Error([error.code, error.message, error.details, error.hint].filter(Boolean).join(' · ') || 'تعذّر حذف السجل');
+  }
+  // Notify every listener (plans list, patient plan view, stats) to reload
+  // from the database — never trust local state as the source of truth.
+  window.dispatchEvent(new CustomEvent('kinetic:treatments-updated'));
+  window.dispatchEvent(new CustomEvent('kinetic:data-updated', { detail: { table: 'sessions' } }));
+  return data || { treatment_id: treatmentId, deleted: true };
+}
+
 // The patient's active treatment plan (خطة العلاج) — the single source the
 // session screen populates itself from. Latest active plan wins.
 async function activeTreatmentFor(patientId) {
@@ -2483,6 +2517,7 @@ const TreatmentsAPI = {
   get:       getTreatment,
   create:    createTreatment,
   update:    updateTreatment,
+  delete:    deleteTreatment,
   activeFor: activeTreatmentFor,
 };
 window.TreatmentsAPI = TreatmentsAPI;

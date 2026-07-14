@@ -67,7 +67,33 @@ function Treatments({ go }) {
   });
   const avgProgress = plans.length ? Math.round(plans.reduce((s, x) => s + x.progress, 0) / plans.length) : 0;
 
-  if (view === "detail" && selected) return <TreatmentPlanDetail plan={selected} onBack={()=>setView("list")}/>;
+  // Only admins and doctors may delete a plan (mirrors the delete_treatment RPC).
+  const role = (window.ME && window.ME.role) || "";
+  const canDelete = role === "مدير" || role === "admin" || role === "طبيب" || role === "doctor";
+
+  // Permanently delete a plan: confirm → delete on the server → toast → the
+  // 'kinetic:treatments-updated' event fired by the RPC wrapper reloads the
+  // list and its stats. Linked sessions are unlinked server-side, not lost.
+  async function onDeletePlan(plan) {
+    if (!window.TreatmentsAPI || !window.TreatmentsAPI.delete) return;
+    const msg = `حذف خطة العلاج «${plan.diag}» للمريض ${plan.patient}؟\n`
+      + "لن تُحذف الجلسات المرتبطة — سيُلغى ربطها فقط. لا يمكن التراجع عن هذا الإجراء.";
+    if (!window.confirm(msg)) return;
+    try {
+      const res = await window.TreatmentsAPI.delete(plan.id);
+      const n = res && res.sessions_unlinked ? res.sessions_unlinked : 0;
+      window.showToast && window.showToast(
+        n > 0 ? `تم حذف الخطة وإلغاء ربط ${n} جلسة` : "تم حذف الخطة", "success");
+      if (view === "detail") setView("list");
+      setSelected(null);
+      reload();
+    } catch (e) {
+      console.warn("delete treatment failed", e);
+      window.showToast && window.showToast(e.message || "تعذّر حذف الخطة", "error");
+    }
+  }
+
+  if (view === "detail" && selected) return <TreatmentPlanDetail plan={selected} onBack={()=>setView("list")} canDelete={canDelete} onDelete={()=>onDeletePlan(selected)}/>;
   if (view === "create") return <TreatmentPlanCreate template={template} onCancel={()=>{setTemplate(null);setView("list");}} onSave={()=>{
     if (window.showToast) window.showToast("تم نشر خطة العلاج", "success");
     setTemplate(null);
@@ -97,10 +123,10 @@ function Treatments({ go }) {
       <div className="card" style={{overflow:"hidden"}}>
         <div className="tbl-scroll">
         <table className="tbl">
-          <thead><tr><th>الخطة</th><th>المريض</th><th>التشخيص</th><th>الأخصائي</th><th>التقدّم</th><th>الجلسات</th><th>الحالة</th><th>آخر تحديث</th></tr></thead>
+          <thead><tr><th>الخطة</th><th>المريض</th><th>التشخيص</th><th>الأخصائي</th><th>التقدّم</th><th>الجلسات</th><th>الحالة</th><th>آخر تحديث</th>{canDelete && <th></th>}</tr></thead>
           <tbody>
             {plans.length===0 && !loadingRecords && (
-              <tr><td colSpan={8}><EmptyState icon={<I.Clipboard size={22}/>} title="لا خطط علاج بعد" body="أنشئ خطة جديدة أو استخدم أحد القوالب لتظهر هنا."/></td></tr>
+              <tr><td colSpan={canDelete?9:8}><EmptyState icon={<I.Clipboard size={22}/>} title="لا خطط علاج بعد" body="أنشئ خطة جديدة أو استخدم أحد القوالب لتظهر هنا."/></td></tr>
             )}
             {plans.map(p=>(
               <tr key={p.id} data-clickable="true" tabIndex={0} onClick={()=>{setSelected(p);setView("detail")}} onKeyDown={e=>{ if(e.key==="Enter"||e.key===" "){e.preventDefault();setSelected(p);setView("detail");} }}>
@@ -123,6 +149,14 @@ function Treatments({ go }) {
                   </span>
                 </td>
                 <td className="muted">{p.updated}</td>
+                {canDelete && (
+                  <td style={{textAlign:"left"}} onClick={e=>e.stopPropagation()}>
+                    <button className="btn btn-ghost btn-icon" title="حذف الخطة"
+                      onClick={(e)=>{e.stopPropagation();onDeletePlan(p);}}>
+                      <I.Trash size={13}/>
+                    </button>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
@@ -152,7 +186,7 @@ function Treatments({ go }) {
   );
 }
 
-function TreatmentPlanDetail({ plan, onBack }) {
+function TreatmentPlanDetail({ plan, onBack, canDelete, onDelete }) {
   // Editing happens inside PatientTreatmentPlan (which persists to the
   // patient's treatments row) — the old header button opened a blank
   // CREATE form and produced duplicate plans.
@@ -166,6 +200,11 @@ function TreatmentPlanDetail({ plan, onBack }) {
         </div>
         <div className="page-actions">
           <button className="btn btn-secondary" onClick={()=>window.print()}><I.Print size={13}/> طباعة</button>
+          {canDelete && onDelete && (
+            <button className="btn btn-secondary" style={{color:"var(--red)"}} onClick={onDelete}>
+              <I.Trash size={13}/> حذف الخطة
+            </button>
+          )}
         </div>
       </div>
 
@@ -845,7 +884,31 @@ function SessionHistoryList() {
 }
 
 function SessionTimeline({ mini, p }) {
+  window.useDataVersion && window.useDataVersion();
   const [notesModal, setNotesModal] = React.useState(null);
+  // Only admins and the owning therapist may delete a session (the sessions
+  // RLS policy enforces "own" server-side; the button is hidden for roles
+  // that never pass it).
+  const role = (window.ME && window.ME.role) || "";
+  const canDelete = role === "مدير" || role === "admin" || role === "الأخصائي" || role === "therapist";
+
+  // Permanently delete one session. removeRow deletes on the server first and
+  // throws on any rejection (RLS/FK/network) — no false success. The DB
+  // trigger recomputes the parent plan's completed-session count, and the
+  // 'kinetic:data-updated' event (via useDataVersion) refreshes this list and
+  // every stat derived from DATA.sessions.
+  async function onDeleteSession(s) {
+    const n = s.session ?? s.session_number ?? "";
+    if (!window.confirm(`حذف الجلسة ${n ? "#"+n : ""} للمريض ${(p && p.name) || s.patient || ""}؟ لا يمكن التراجع.`)) return;
+    try {
+      await window.KineticData.remove("sessions", s.session_id ?? s.id);
+      window.showToast && window.showToast("تم حذف الجلسة", "success");
+    } catch (e) {
+      console.warn("delete session failed", e);
+      window.showToast && window.showToast(e.message || "تعذّر حذف الجلسة", "error");
+    }
+  }
+
   // Scope to one patient when rendered inside a patient profile. Running
   // sessions live in the "الجلسات الجارية" tab — history shows completed.
   const pid = p ? (p.patient_id || p.id) : null;
@@ -884,8 +947,11 @@ function SessionTimeline({ mini, p }) {
             <div className="mono" style={{fontSize:18,fontWeight:600, color: s.pain<=3?"var(--green)":s.pain<=6?"var(--amber)":"var(--red)"}}>{s.pain}/10</div>
             <div style={{fontSize:11,color:"var(--ink-500)"}}>{s.mood}</div>
           </div>
-          <div style={{textAlign:"right"}}>
+          <div style={{textAlign:"right",display:"flex",gap:6,justifyContent:"flex-end",alignItems:"center"}}>
             <button className="btn btn-secondary" style={{fontSize:12}} onClick={()=>setNotesModal(s)}>عرض الملاحظات <I.ArrowRight size={11}/></button>
+            {canDelete && (
+              <button className="btn btn-ghost btn-icon" title="حذف الجلسة" onClick={()=>onDeleteSession(s)}><I.Trash size={13}/></button>
+            )}
           </div>
         </div>
       ))}
