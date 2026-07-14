@@ -48,6 +48,207 @@ begin
 end $$;
 
 -- ── Clinic branding (singleton row) ─────────────────────────
+-- ══════════════════════════════════════════════════════════════
+-- Schema reconciliation — idempotency for pre-existing databases
+-- ══════════════════════════════════════════════════════════════
+-- `create table if not exists` is a no-op when a table already
+-- exists, so any column later added to a table's definition would
+-- be MISSING on an older deployment — and the first index or policy
+-- that references it fails (e.g. ERROR 42703: column "auth_uid"
+-- does not exist). These ALTERs add every base-schema column when
+-- absent. `alter table if exists` makes them a clean no-op on a
+-- fresh project (the tables are created just below) and a column
+-- backfill on an existing one. Safe to run any number of times.
+
+-- clinic_settings
+alter table if exists clinic_settings add column if not exists "id" int default 1;
+alter table if exists clinic_settings add column if not exists "name" text default 'كينيتك';
+alter table if exists clinic_settings add column if not exists "subtitle" text default 'نظام العيادة';
+alter table if exists clinic_settings add column if not exists "logo" text;
+alter table if exists clinic_settings add column if not exists "primary_color" text default '#7BBDE8';
+alter table if exists clinic_settings add column if not exists "updated_at" timestamptz default now();
+
+-- custom_sections
+alter table if exists custom_sections add column if not exists "id" text;
+alter table if exists custom_sections add column if not exists "slug" text;
+alter table if exists custom_sections add column if not exists "label" text;
+alter table if exists custom_sections add column if not exists "icon" text default 'Layers';
+alter table if exists custom_sections add column if not exists "group" text default 'مخصص';
+alter table if exists custom_sections add column if not exists "description" text;
+alter table if exists custom_sections add column if not exists "content" text;
+alter table if exists custom_sections add column if not exists "position" int default 0;
+alter table if exists custom_sections add column if not exists "visible" boolean default true;
+alter table if exists custom_sections add column if not exists "created_at" timestamptz default now();
+alter table if exists custom_sections add column if not exists "updated_at" timestamptz default now();
+
+-- patients
+alter table if exists patients add column if not exists "patient_id" text;
+alter table if exists patients add column if not exists "name" text;
+alter table if exists patients add column if not exists "phone" text;
+alter table if exists patients add column if not exists "age" int;
+alter table if exists patients add column if not exists "gender" text;
+alter table if exists patients add column if not exists "diagnosis" text;
+alter table if exists patients add column if not exists "notes" text;
+alter table if exists patients add column if not exists "therapist_id" text;
+alter table if exists patients add column if not exists "created_at" timestamptz default now();
+
+-- bookings
+alter table if exists bookings add column if not exists "booking_id" text;
+alter table if exists bookings add column if not exists "patient_id" text;
+alter table if exists bookings add column if not exists "therapist_id" text;
+alter table if exists bookings add column if not exists "doctor_id" text;
+alter table if exists bookings add column if not exists "department_id" text;
+alter table if exists bookings add column if not exists "date" date;
+alter table if exists bookings add column if not exists "time" text;
+alter table if exists bookings add column if not exists "status" text default 'pending';
+alter table if exists bookings add column if not exists "notes" text;
+alter table if exists bookings add column if not exists "created_at" timestamptz default now();
+
+-- sessions
+alter table if exists sessions add column if not exists "session_id" text;
+alter table if exists sessions add column if not exists "patient_id" text;
+alter table if exists sessions add column if not exists "therapist_id" text;
+alter table if exists sessions add column if not exists "date" date;
+alter table if exists sessions add column if not exists "pain_score" int;
+alter table if exists sessions add column if not exists "session_notes" text;
+alter table if exists sessions add column if not exists "session_number" int;
+alter table if exists sessions add column if not exists "created_at" timestamptz default now();
+
+-- invoices
+alter table if exists invoices add column if not exists "invoice_id" text;
+alter table if exists invoices add column if not exists "patient_id" text;
+alter table if exists invoices add column if not exists "amount" numeric;
+alter table if exists invoices add column if not exists "paid" numeric default 0;
+alter table if exists invoices add column if not exists "payment_method" text;
+alter table if exists invoices add column if not exists "status" text default 'pending';
+alter table if exists invoices add column if not exists "created_at" timestamptz default now();
+
+-- packages
+alter table if exists packages add column if not exists "id" text;
+alter table if exists packages add column if not exists "name" text;
+
+-- patient_subscriptions
+alter table if exists patient_subscriptions add column if not exists "subscription_id" text;
+alter table if exists patient_subscriptions add column if not exists "patient_id" text;
+alter table if exists patient_subscriptions add column if not exists "package_id" text;
+alter table if exists patient_subscriptions add column if not exists "package_name" text;
+alter table if exists patient_subscriptions add column if not exists "total_sessions" int default 0;
+alter table if exists patient_subscriptions add column if not exists "used_sessions" int default 0;
+alter table if exists patient_subscriptions add column if not exists "price" numeric default 0;
+alter table if exists patient_subscriptions add column if not exists "paid" numeric default 0;
+alter table if exists patient_subscriptions add column if not exists "status" text default 'active';
+alter table if exists patient_subscriptions add column if not exists "expires_at" date;
+alter table if exists patient_subscriptions add column if not exists "created_at" timestamptz default now();
+alter table if exists patient_subscriptions add column if not exists "updated_at" timestamptz default now();
+
+-- payments
+alter table if exists payments add column if not exists "payment_id" text;
+alter table if exists payments add column if not exists "patient_id" text;
+alter table if exists payments add column if not exists "cashier_id" text;
+alter table if exists payments add column if not exists "cashier_name" text;
+alter table if exists payments add column if not exists "amount" numeric;
+alter table if exists payments add column if not exists "method" text;
+alter table if exists payments add column if not exists "reference" text;
+alter table if exists payments add column if not exists "transaction_id" text;
+alter table if exists payments add column if not exists "notes" text;
+alter table if exists payments add column if not exists "receipt_no" text;
+alter table if exists payments add column if not exists "allocations" jsonb default '[]'::jsonb;
+alter table if exists payments add column if not exists "ip_address" text;
+alter table if exists payments add column if not exists "status" text default 'completed';
+alter table if exists payments add column if not exists "created_at" timestamptz default now();
+
+-- staff
+alter table if exists staff add column if not exists "staff_id" text;
+alter table if exists staff add column if not exists "name" text;
+alter table if exists staff add column if not exists "role" text;
+alter table if exists staff add column if not exists "phone" text;
+alter table if exists staff add column if not exists "email" text;
+alter table if exists staff add column if not exists "auth_uid" uuid;
+
+-- therapists
+alter table if exists therapists add column if not exists "id" text;
+alter table if exists therapists add column if not exists "name" text;
+alter table if exists therapists add column if not exists "spec" text;
+alter table if exists therapists add column if not exists "load" int default 0;
+alter table if exists therapists add column if not exists "max" int default 8;
+alter table if exists therapists add column if not exists "color" text default '#7BBDE8';
+alter table if exists therapists add column if not exists "auth_uid" uuid;
+alter table if exists therapists add column if not exists "created_at" timestamptz default now();
+
+-- departments
+alter table if exists departments add column if not exists "id" text;
+alter table if exists departments add column if not exists "name_ar" text;
+alter table if exists departments add column if not exists "name_en" text;
+alter table if exists departments add column if not exists "description" text;
+alter table if exists departments add column if not exists "icon" text default 'Layers';
+alter table if exists departments add column if not exists "color" text default '#7BBDE8';
+alter table if exists departments add column if not exists "sort_order" int default 0;
+alter table if exists departments add column if not exists "active" boolean default true;
+alter table if exists departments add column if not exists "created_at" timestamptz default now();
+
+-- doctors
+alter table if exists doctors add column if not exists "id" text;
+alter table if exists doctors add column if not exists "name" text;
+alter table if exists doctors add column if not exists "department_id" text;
+alter table if exists doctors add column if not exists "specialization" text;
+alter table if exists doctors add column if not exists "experience_years" int default 0;
+alter table if exists doctors add column if not exists "photo" text;
+alter table if exists doctors add column if not exists "schedule" text;
+alter table if exists doctors add column if not exists "status" text default 'available';
+alter table if exists doctors add column if not exists "color" text default '#7BBDE8';
+alter table if exists doctors add column if not exists "active" boolean default true;
+alter table if exists doctors add column if not exists "created_at" timestamptz default now();
+
+-- packages
+alter table if exists packages add column if not exists "sessions" int default 1;
+alter table if exists packages add column if not exists "price" numeric default 0;
+alter table if exists packages add column if not exists "active" boolean default true;
+alter table if exists packages add column if not exists "popular" boolean default false;
+alter table if exists packages add column if not exists "color" text default '#7BBDE8';
+alter table if exists packages add column if not exists "sold" int default 0;
+alter table if exists packages add column if not exists "created_at" timestamptz default now();
+
+-- campaigns
+alter table if exists campaigns add column if not exists "id" text;
+alter table if exists campaigns add column if not exists "name" text;
+alter table if exists campaigns add column if not exists "audience" int default 0;
+alter table if exists campaigns add column if not exists "sent" int default 0;
+alter table if exists campaigns add column if not exists "read" int default 0;
+alter table if exists campaigns add column if not exists "replied" int default 0;
+alter table if exists campaigns add column if not exists "status" text default 'draft';
+alter table if exists campaigns add column if not exists "template" text;
+alter table if exists campaigns add column if not exists "schedule" text;
+alter table if exists campaigns add column if not exists "best" boolean default false;
+alter table if exists campaigns add column if not exists "created_at" timestamptz default now();
+
+-- branches
+alter table if exists branches add column if not exists "id" text;
+alter table if exists branches add column if not exists "name" text;
+alter table if exists branches add column if not exists "therapists" int default 0;
+alter table if exists branches add column if not exists "rooms" int default 0;
+alter table if exists branches add column if not exists "address" text;
+alter table if exists branches add column if not exists "phone" text;
+alter table if exists branches add column if not exists "created_at" timestamptz default now();
+alter table if exists branches add column if not exists "updated_at" timestamptz;
+
+-- patient_files
+alter table if exists patient_files add column if not exists "file_id" text;
+alter table if exists patient_files add column if not exists "patient_id" text;
+alter table if exists patient_files add column if not exists "file_name" text;
+alter table if exists patient_files add column if not exists "file_type" text;
+alter table if exists patient_files add column if not exists "file_url" text;
+alter table if exists patient_files add column if not exists "uploaded_by" uuid;
+alter table if exists patient_files add column if not exists "uploaded_at" timestamptz default now();
+
+-- audit_events
+alter table if exists audit_events add column if not exists "actor_uid" uuid;
+alter table if exists audit_events add column if not exists "actor_role" text;
+alter table if exists audit_events add column if not exists "action" text;
+alter table if exists audit_events add column if not exists "table_name" text;
+alter table if exists audit_events add column if not exists "row_pk" text;
+alter table if exists audit_events add column if not exists "payload" jsonb;
+alter table if exists audit_events add column if not exists "created_at" timestamptz default now();
+
 create table if not exists clinic_settings (
   id            int primary key default 1,
   name          text not null default 'كينيتك',
