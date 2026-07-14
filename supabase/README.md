@@ -27,10 +27,14 @@ supabase/
     ├── 20260713020000_drop_modalities.sql   # drop removed `modalities` column
     ├── 20260713030000_calendar_hours.sql    # configurable calendar working
     │                                        # hours (calendar_start/_end)
-    └── 20260713040000_sessions_plan_link.sql
-                                             # sessions ↔ treatment plans link,
-                                             # completed-session counters,
-                                             # packages column repair
+    ├── 20260713040000_sessions_plan_link.sql
+    │                                        # sessions ↔ treatment plans link,
+    │                                        # completed-session counters,
+    │                                        # packages column repair
+    └── 20260713050000_session_status_drop_versions.sql
+                                             # durable in-progress sessions
+                                             # (status/started_at) + remove
+                                             # template version history
 ```
 
 Every statement is **idempotent** (`create ... if not exists`,

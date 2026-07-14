@@ -38,17 +38,91 @@ function planMethodsOf(plan){
   return raw.map(m => typeof m === "string" ? m : (m.name || "")).filter(Boolean);
 }
 
+// Resolve the therapist id to stamp on a session row.
+function sessionTherapistId(plan){
+  return (plan && plan.therapist_id)
+    || (window.ME && ((DATA.therapists || []).find(t => t.name === window.ME.match) || {}).id)
+    || (window.ME && window.ME.match) || null;
+}
+
 // ── ConcurrentSessions ────────────────────────────────────────
 function ConcurrentSessions(){
-  window.useDataVersion && window.useDataVersion();
+  const tick = window.useDataVersion ? window.useDataVersion() : 0;
 
-  // ── State — starts EMPTY: sessions exist only when the therapist
-  // actually starts them. No fabricated/demo sessions.
+  // ── State — starts EMPTY, then RESTORES from the database: a session
+  // row is inserted the moment it starts (status 'in_progress'), so
+  // navigating away, refreshing, or re-logging never loses a running
+  // session. No fabricated/demo sessions.
   const [sessions, setSessions] = React.useState([]);
   const [selId, setSelId] = React.useState(null);
   const [now, setNow] = React.useState(Date.now());
   const [picker, setPicker] = React.useState(false);
   const [starting, setStarting] = React.useState(null); // patient_id being loaded
+
+  // Rebuild cards for DB rows that are in progress but not on screen —
+  // this is what makes running sessions survive navigation/refresh.
+  React.useEffect(() => {
+    const running = (DATA.sessions || []).filter(r => r.status === "in_progress");
+    const have = new Set(sessions.map(x => x.id));
+    const missing = running.filter(r => !have.has(r.session_id || r.id));
+    if (!missing.length) return;
+    let alive = true;
+    (async () => {
+      const restored = [];
+      for (const r of missing) {
+        const p = (DATA.patients || []).find(x => (x.patient_id || x.id) === r.patient_id)
+          || { patient_id: r.patient_id, id: r.patient_id, name: r.patient || r.patient_id || "—" };
+        let plan = null;
+        try { if (r.treatment_id && window.TreatmentsAPI) plan = await window.TreatmentsAPI.get(r.treatment_id); } catch {}
+        const doneEx = new Set(Array.isArray(r.completed_exercises) ? r.completed_exercises : (Array.isArray(r.done) ? r.done : []));
+        const exercises = planExercisesOf(plan).map(e => ({ ...e, done: doneEx.has(e.name) }));
+        const goals = (Array.isArray(r.goals) && r.goals.length)
+          ? r.goals.map(g => typeof g === "string" ? { g, done:false } : { g: g.g || "", done: !!g.done }).filter(x=>x.g)
+          : planGoalsOf(plan);
+        restored.push({
+          id: r.session_id || r.id, p, plan,
+          bookingId: r.booking_id || null,
+          room: "",
+          type: (plan && (plan.name || plan.category)) || "جلسة علاج طبيعي",
+          start: r.started_at ? Date.parse(r.started_at) : (r.created_at ? Date.parse(r.created_at) : Date.now()),
+          paused: false, frozen: 0,
+          pain: r.pain_score ?? r.pain ?? null, mood: (typeof r.mood === "number" ? r.mood : 2), signed: false,
+          num: r.session_number || ((plan ? Number(plan.completed_sessions) || 0 : 0) + 1),
+          total: plan ? Number(plan.estimated_sessions) || 0 : 0,
+          notes: r.session_notes || r.notes || "",
+          goals, exercises,
+        });
+      }
+      if (alive && restored.length) setSessions(ss => {
+        const haveNow = new Set(ss.map(x => x.id));
+        const add = restored.filter(r => !haveNow.has(r.id));
+        return add.length ? [...ss, ...add] : ss;
+      });
+    })();
+    return () => { alive = false; };
+  }, [tick]);
+
+  // Autosave the in-progress payload (pain, mood, notes, check-offs) a few
+  // seconds after the last change, so a mid-session refresh loses nothing.
+  const saveTimer = React.useRef(null);
+  React.useEffect(() => {
+    if (!sessions.length || !window.KineticData) return;
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      for (const s of sessions) {
+        window.KineticData.upsert("sessions", {
+          session_id: s.id,
+          patient_id: s.p.patient_id || s.p.id,
+          pain_score: s.pain, mood: s.mood,
+          goals: s.goals || [],
+          completed_exercises: (s.exercises || []).filter(e=>e.done).map(e=>e.name),
+          session_notes: s.notes || "",
+          status: "in_progress",
+        }).catch(() => {});
+      }
+    }, 4000);
+    return () => clearTimeout(saveTimer.current);
+  }, [sessions]);
 
   // Today's active appointments (mine) — the natural way to start a session,
   // and the link that keeps the calendar in sync with the session room.
@@ -97,28 +171,49 @@ function ConcurrentSessions(){
       if (window.TreatmentsAPI) plan = await window.TreatmentsAPI.activeFor(pid);
     } catch (e) { console.warn("activeTreatmentFor failed", e); }
     const completedBefore = plan ? (Number(plan.completed_sessions) || 0)
-      : (DATA.sessions || []).filter(s => s.patient_id === pid).length;
+      : (DATA.sessions || []).filter(s => s.patient_id === pid && s.status !== "in_progress").length;
     const total = plan ? (Number(plan.estimated_sessions) || 0) : 0;
     const id = "S-"+pid+"-"+Date.now();
+    const startedAt = new Date().toISOString();
+    const goals = planGoalsOf(plan);
     setSessions(ss=>[...ss, {
       id, p, plan,
       bookingId: appt ? (appt.booking_id || appt.id) : null,
       room: (appt && appt.room) || "",
       type: (plan && (plan.name || plan.category)) || (appt && appt.type) || "جلسة علاج طبيعي",
-      start: Date.now(), paused:false, frozen:0,
+      start: Date.parse(startedAt), paused:false, frozen:0,
       pain: null, mood: 2, signed:false,
       num: completedBefore + 1, total,
       notes: "",
-      goals: planGoalsOf(plan),
+      goals,
       exercises: planExercisesOf(plan),
     }]);
-    // Mirror onto the calendar: the linked appointment goes "in progress".
-    if (appt && window.KineticData) {
-      window.KineticData.upsert("appts", {
-        booking_id: appt.booking_id || appt.id,
+    // Persist IMMEDIATELY: the session exists in the database from the
+    // moment it starts, fully linked to patient/plan/appointment/therapist.
+    if (window.KineticData) {
+      window.KineticData.upsert("sessions", {
+        session_id: id,
         patient_id: pid,
-        status: "قيد التنفيذ",
-      }).catch(e => console.warn("appt in-progress update failed", e));
+        therapist_id: sessionTherapistId(plan),
+        treatment_id: plan ? plan.treatment_id : null,
+        booking_id: appt ? (appt.booking_id || appt.id) : null,
+        date: startedAt.slice(0, 10),
+        session_number: completedBefore + 1,
+        goals,
+        completed_exercises: [],
+        session_notes: "",
+        status: "in_progress",
+        started_at: startedAt,
+        created_at: startedAt,
+      }).catch(e => console.warn("start session persist failed", e));
+      // Mirror onto the calendar: the linked appointment goes "in progress".
+      if (appt) {
+        window.KineticData.upsert("appts", {
+          booking_id: appt.booking_id || appt.id,
+          patient_id: pid,
+          status: "قيد التنفيذ",
+        }).catch(e => console.warn("appt in-progress update failed", e));
+      }
     }
     setStarting(null);
     setSelId(id); setPicker(false);
@@ -131,13 +226,12 @@ function ConcurrentSessions(){
     if (done && done.p && window.KineticData) {
       const pid = done.p.patient_id || done.p.id;
       const secs = done.paused ? (done.frozen||0) : Math.max(0, Math.floor((Date.now() - done.start)/1000));
-      const therapistId = (done.plan && done.plan.therapist_id)
-        || (window.ME && (DATA.therapists || []).find(t => t.name === window.ME.match)?.id)
-        || (window.ME && window.ME.match) || null;
+      // Complete the SAME row that was inserted at start — the upsert flips
+      // status to 'completed' and the DB trigger bumps the plan counter.
       window.KineticData.upsert("sessions", {
-        session_id: "S-" + (pid || "X") + "-" + Date.now(),
+        session_id: done.id,
         patient_id: pid,
-        therapist_id: therapistId,
+        therapist_id: sessionTherapistId(done.plan),
         treatment_id: done.plan ? done.plan.treatment_id : null,
         booking_id: done.bookingId || null,
         date: new Date().toISOString().slice(0,10),
@@ -148,7 +242,7 @@ function ConcurrentSessions(){
         completed_exercises: (done.exercises || []).filter(e=>e.done).map(e=>e.name),
         session_notes: done.notes || "",
         session_number: done.num || null,
-        created_at: new Date().toISOString(),
+        status: "completed",
       }).then(() => {
         // The trigger bumped treatments.completed_sessions — tell the
         // treatments screens to re-fetch.
@@ -314,9 +408,10 @@ function SessionDetail({ s, elapsed, update, onEnd, onTogglePause }){
   const exercises = Array.isArray(s.exercises) ? s.exercises : [];
   const methods = planMethodsOf(plan);
   const pid = p.patient_id || p.id;
-  // Trend from THIS patient's recorded sessions only.
+  // Trend from THIS patient's completed sessions only.
   const patientSessions = (DATA.sessions || []).filter(x =>
-    x.patient_id === pid || (!x.patient_id && x.patient === p.name));
+    (x.status || "completed") !== "in_progress"
+    && (x.patient_id === pid || (!x.patient_id && x.patient === p.name)));
   const trend = patientSessions.slice().reverse().map((x,i)=>({label:`S${i+1}`, v:11-(x.pain ?? x.pain_score ?? 0)}));
   const firstPain = patientSessions.length
     ? (patientSessions[patientSessions.length-1].pain ?? patientSessions[patientSessions.length-1].pain_score)

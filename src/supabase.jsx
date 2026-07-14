@@ -758,7 +758,8 @@ const DATA_TABLES = {
                        "allow_consecutive","active","notes","created_at","updated_at"] },
   sessions:   { key: "sessions",   pk: "session_id",  ls: "kinetic.sessions",
                 cols: ["session_id","patient_id","therapist_id","treatment_id","booking_id","date","pain_score",
-                       "mood","duration_minutes","goals","completed_exercises","session_notes","session_number","created_at"] },
+                       "mood","duration_minutes","goals","completed_exercises","session_notes","session_number",
+                       "status","started_at","created_at"] },
   payments:   { key: "invoices",   pk: "invoice_id",  ls: "kinetic.invoices",
                 cols: ["invoice_id","patient_id","amount","paid","payment_method","status","created_at"] },
   paymentHistory: { key: "payments", pk: "payment_id", ls: "kinetic.payment_history",
@@ -2106,7 +2107,6 @@ async function getPatientFileUrl(row, expiresSeconds = 3600) {
 // the UI works identically without a Supabase connection.
 // ══════════════════════════════════════════════════════════════
 const LS_TEMPLATES         = 'kinetic.treatment_templates.v1';
-const LS_TEMPLATE_VERSIONS = 'kinetic.template_versions.v1';
 const LS_TEMPLATE_USAGE    = 'kinetic.template_usage.v1';
 
 function __tplId() {
@@ -2202,12 +2202,10 @@ async function getTreatmentTemplate(templateId) {
   const all = readLS(LS_TEMPLATES, []);
   const template = all.find(t => t.template_id === templateId);
   if (!template) return null;
-  const versions = readLS(LS_TEMPLATE_VERSIONS, []).filter(v => v.template_id === templateId)
-                     .sort((a, b) => (b.version_num || 0) - (a.version_num || 0));
   const uses = readLS(LS_TEMPLATE_USAGE, []).filter(u => u.template_id === templateId);
   const completed = uses.filter(u => u.completed_at).length;
   return {
-    template, versions,
+    template,
     stats: {
       usage_count:     uses.length,
       completion_rate: uses.length ? Math.round(completed / uses.length * 1000) / 10 : 0,
@@ -2244,11 +2242,6 @@ async function createTreatmentTemplate(input) {
     created_at: now, updated_at: now,
   };
   writeLS(LS_TEMPLATES, [...readLS(LS_TEMPLATES, []), row]);
-  writeLS(LS_TEMPLATE_VERSIONS, [...readLS(LS_TEMPLATE_VERSIONS, []), {
-    version_id: `TV-${template_id}-1`, template_id, version_num: 1,
-    editor_name: payload.created_by_name, change_summary: 'إنشاء',
-    snapshot: row, created_at: now,
-  }]);
   __tplDispatch('create', template_id);
   return { ok: true, template_id };
 }
@@ -2278,11 +2271,6 @@ async function updateTreatmentTemplate(templateId, input, changeSummary) {
   const updated = { ...all[idx], ...payload, version: nextVersion, updated_at: now, updated_by_name: payload.updated_by_name };
   all[idx] = updated;
   writeLS(LS_TEMPLATES, all);
-  writeLS(LS_TEMPLATE_VERSIONS, [...readLS(LS_TEMPLATE_VERSIONS, []), {
-    version_id: `TV-${templateId}-${nextVersion}`, template_id: templateId, version_num: nextVersion,
-    editor_name: payload.updated_by_name, change_summary: changeSummary || 'تعديل',
-    snapshot: updated, created_at: now,
-  }]);
   __tplDispatch('update', templateId);
   return { ok: true, template_id: templateId };
 }
@@ -2313,11 +2301,6 @@ async function duplicateTreatmentTemplate(templateId, newName) {
     created_at: now, updated_at: now,
   };
   writeLS(LS_TEMPLATES, [...all, copy]);
-  writeLS(LS_TEMPLATE_VERSIONS, [...readLS(LS_TEMPLATE_VERSIONS, []), {
-    version_id: `TV-${new_id}-1`, template_id: new_id, version_num: 1,
-    editor_name: copy.created_by_name, change_summary: `نسخة من ${templateId}`,
-    snapshot: copy, created_at: now,
-  }]);
   __tplDispatch('duplicate', new_id);
   return { ok: true, template_id: new_id };
 }
@@ -2362,7 +2345,6 @@ async function deleteTreatmentTemplate(templateId) {
     return { ok: false, error: 'لا يمكن حذف قالب مستخدم — استخدم الأرشفة بدلاً منه' };
   }
   writeLS(LS_TEMPLATES, all.filter(t => t.template_id !== templateId));
-  writeLS(LS_TEMPLATE_VERSIONS, readLS(LS_TEMPLATE_VERSIONS, []).filter(v => v.template_id !== templateId));
   __tplDispatch('delete', templateId);
   return { ok: true, template_id: templateId };
 }
@@ -2397,39 +2379,6 @@ async function applyTreatmentTemplate(templateId, patientId, planId) {
   return { ok: true, use_id };
 }
 
-async function restoreTreatmentTemplateVersion(versionId) {
-  if (!versionId) return { ok: false, error: 'معرّف الإصدار مفقود' };
-  if (sb) {
-    try {
-      const { data, error } = await sb.rpc('restore_template_version', { p_version_id: versionId });
-      if (error) return { ok: false, error: error.message || 'تعذّرت الاستعادة' };
-      const tId = data && data.template_id;
-      __tplDispatch('restore_version', tId);
-      return { ok: true, template_id: tId };
-    } catch (e) { return { ok: false, error: e.message || 'تعذّرت الاستعادة' }; }
-  }
-  const versions = readLS(LS_TEMPLATE_VERSIONS, []);
-  const v = versions.find(x => x.version_id === versionId);
-  if (!v) return { ok: false, error: 'الإصدار غير موجود' };
-  const all = readLS(LS_TEMPLATES, []);
-  const idx = all.findIndex(t => t.template_id === v.template_id);
-  if (idx < 0) return { ok: false, error: 'القالب غير موجود' };
-  const now = new Date().toISOString();
-  const nextVersion = (all[idx].version || 1) + 1;
-  const restored = { ...v.snapshot, version: nextVersion, updated_at: now };
-  all[idx] = restored;
-  writeLS(LS_TEMPLATES, all);
-  writeLS(LS_TEMPLATE_VERSIONS, [...versions, {
-    version_id: `TV-${v.template_id}-${nextVersion}`,
-    template_id: v.template_id, version_num: nextVersion,
-    editor_name: __currentEditorName(),
-    change_summary: `استعادة الإصدار ${v.version_num}`,
-    snapshot: restored, created_at: now,
-  }]);
-  __tplDispatch('restore_version', v.template_id);
-  return { ok: true, template_id: v.template_id };
-}
-
 const Templates = {
   list:            listTreatmentTemplates,
   get:             getTreatmentTemplate,
@@ -2440,7 +2389,6 @@ const Templates = {
   restore:         (id) => setTreatmentTemplateStatus(id, 'active'),
   remove:          deleteTreatmentTemplate,
   apply:           applyTreatmentTemplate,
-  restoreVersion:  restoreTreatmentTemplateVersion,
 };
 window.Templates = Templates;
 

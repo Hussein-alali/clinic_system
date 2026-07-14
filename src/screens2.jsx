@@ -43,7 +43,8 @@ function Treatments({ go }) {
     // treatment_id, so fall back to the old per-patient heuristic.
     const linkedDone = Number(t.completed_sessions) || 0;
     const heuristicDone = DATA.sessions.filter(s =>
-      s.patient_id === t.patient_id
+      (s.status || "completed") !== "in_progress"
+      && s.patient_id === t.patient_id
       && (!t.treatment_date || !s.date || s.date >= t.treatment_date)).length;
     const done = linkedDone > 0 ? linkedDone : heuristicDone;
     const progress = total ? Math.min(100, Math.round(done / total * 100)) : 0;
@@ -66,7 +67,7 @@ function Treatments({ go }) {
   });
   const avgProgress = plans.length ? Math.round(plans.reduce((s, x) => s + x.progress, 0) / plans.length) : 0;
 
-  if (view === "detail" && selected) return <TreatmentPlanDetail plan={selected} onBack={()=>setView("list")} onEdit={()=>{setView("create");}}/>;
+  if (view === "detail" && selected) return <TreatmentPlanDetail plan={selected} onBack={()=>setView("list")}/>;
   if (view === "create") return <TreatmentPlanCreate template={template} onCancel={()=>{setTemplate(null);setView("list");}} onSave={()=>{
     if (window.showToast) window.showToast("تم نشر خطة العلاج", "success");
     setTemplate(null);
@@ -151,7 +152,10 @@ function Treatments({ go }) {
   );
 }
 
-function TreatmentPlanDetail({ plan, onBack, onEdit }) {
+function TreatmentPlanDetail({ plan, onBack }) {
+  // Editing happens inside PatientTreatmentPlan (which persists to the
+  // patient's treatments row) — the old header button opened a blank
+  // CREATE form and produced duplicate plans.
   return (
     <Page>
       <div className="crumb" style={{cursor:"pointer"}} onClick={onBack}><span>خطط العلاج</span><I.Chevron size={11}/><span style={{color:"var(--ink-700)"}}>{plan.id}</span></div>
@@ -162,7 +166,6 @@ function TreatmentPlanDetail({ plan, onBack, onEdit }) {
         </div>
         <div className="page-actions">
           <button className="btn btn-secondary" onClick={()=>window.print()}><I.Print size={13}/> طباعة</button>
-          <button className="btn btn-blue" onClick={()=>onEdit&&onEdit()}><I.Edit size={13}/> تعديل الخطة</button>
         </div>
       </div>
 
@@ -843,11 +846,13 @@ function SessionHistoryList() {
 
 function SessionTimeline({ mini, p }) {
   const [notesModal, setNotesModal] = React.useState(null);
-  // Scope to one patient when rendered inside a patient profile.
+  // Scope to one patient when rendered inside a patient profile. Running
+  // sessions live in the "الجلسات الجارية" tab — history shows completed.
   const pid = p ? (p.patient_id || p.id) : null;
+  const completed = (DATA.sessions || []).filter(s => (s.status || "completed") !== "in_progress");
   const rows = p
-    ? DATA.sessions.filter(s => s.patient_id === pid || s.patient === p.name)
-    : DATA.sessions;
+    ? completed.filter(s => s.patient_id === pid || s.patient === p.name)
+    : completed;
   if (rows.length === 0) {
     return <EmptyState icon={<I.Activity size={22}/>} title="لا جلسات مسجلة بعد" body="ستظهر الجلسات هنا بعد تسجيلها من شاشة الجلسات."/>;
   }
@@ -6599,7 +6604,6 @@ function TemplatePreviewModal({ templateId, onClose, onUse }) {
   window.useDataVersion && window.useDataVersion();
   const [loading, setLoading] = React.useState(true);
   const [data, setData]       = React.useState(null);
-  const [restoring, setRestoring] = React.useState('');
 
   const reload = React.useCallback(async () => {
     setLoading(true);
@@ -6614,16 +6618,8 @@ function TemplatePreviewModal({ templateId, onClose, onUse }) {
     return () => window.removeEventListener('kinetic:templates-updated', onUpd);
   }, [reload]);
 
-  async function doRestoreVersion(v) {
-    setRestoring(v.version_id);
-    const res = await window.Templates.restoreVersion(v.version_id);
-    setRestoring('');
-    if (window.showToast) window.showToast(res.ok ? 'تمت الاستعادة' : (res.error || 'تعذّرت الاستعادة'), res.ok ? 'success' : 'error');
-  }
-
   const t = data && data.template;
   const stats = data && data.stats || {};
-  const versions = (data && data.versions) || [];
 
   return (
     <Modal
@@ -6641,11 +6637,10 @@ function TemplatePreviewModal({ templateId, onClose, onUse }) {
       {!loading && !t && <div className="muted" style={{fontSize:13,padding:14,textAlign:'center'}}>القالب غير موجود</div>}
       {t && (
         <div style={{display:'grid',gap:14,maxHeight:'68vh',overflowY:'auto',paddingLeft:4}}>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:8}}>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8}}>
             <PreviewStat label="عدد الجلسات" value={t.estimated_sessions || '—'}/>
             <PreviewStat label="التكرار الأسبوعي" value={t.weekly_frequency || '—'}/>
             <PreviewStat label="مدّة التعافي" value={t.expected_recovery_days ? `${t.expected_recovery_days} يوم` : '—'}/>
-            <PreviewStat label="الإصدار" value={t.version || 1}/>
           </div>
           <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:8}}>
             <PreviewStat label="عدد الاستخدامات" value={stats.usage_count ?? 0}/>
@@ -6705,23 +6700,6 @@ function TemplatePreviewModal({ templateId, onClose, onUse }) {
             <PreviewLine k="تاريخ التعديل" v={t.updated_at && new Date(t.updated_at).toLocaleString('ar-EG')}/>
           </PreviewSection>
 
-          {versions.length > 0 && (
-            <PreviewSection title={`سِجل الإصدارات (${versions.length})`}>
-              {versions.map(v=>(
-                <div key={v.version_id} style={{display:'flex',alignItems:'center',gap:8,padding:8,background:'#fff',border:'1px solid var(--ink-200)',borderRadius:8,marginBottom:6,fontSize:12}}>
-                  <span className="badge b-grey" style={{fontSize:10.5}}>v{v.version_num}</span>
-                  <span style={{flex:1}}>{v.change_summary || '—'}</span>
-                  <span className="muted" style={{fontSize:11}}>{v.editor_name || '—'}</span>
-                  <span className="muted" style={{fontSize:11}}>{v.created_at && new Date(v.created_at).toLocaleDateString('ar-EG')}</span>
-                  {__tplPerms().canEdit && (
-                    <button className="btn btn-ghost" style={{fontSize:11,padding:'3px 7px'}} disabled={restoring===v.version_id} onClick={()=>doRestoreVersion(v)}>
-                      {restoring === v.version_id ? '…' : 'استعادة'}
-                    </button>
-                  )}
-                </div>
-              ))}
-            </PreviewSection>
-          )}
         </div>
       )}
     </Modal>

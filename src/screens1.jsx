@@ -1330,84 +1330,167 @@ function PatientHistory({ p }) {
   );
 }
 
-function PatientTreatmentPlan({ p, t }) {
-  // Initialized from the saved treatment record when one is passed
-  // (`t` — a row from the treatments table, values copied from the
-  // template at creation time); otherwise from the patient's record
-  // with empty goals/methods for the clinician to fill in.
-  const [plan, setPlan] = React.useState(() => {
-    if (t) {
-      const thName = t.therapist_name || t.therapist_id || "—";
-      const thRow = (DATA.therapists || []).find(x => x.name === thName || x.id === t.therapist_id);
-      return {
-        goals: (Array.isArray(t.goals) ? t.goals : []).map(g =>
-          typeof g === "string" ? { g, done: false } : { g: g.g || "", done: !!g.done }),
-        modalities: (Array.isArray(t.methods) ? t.methods.map(m => m.name || m) : []).filter(Boolean),
-        notes: t.notes || "",
-        therapist: { initials: thName !== "—" ? initialsOf(thName) : "—", name: thName, spec: (thRow && thRow.spec) || "" },
-        diagnosis: t.diagnosis || "—",
-        schedule: {
-          frequency: t.weekly_frequency ? `${t.weekly_frequency}× أسبوعيًا` : "—",
-          duration: "—",
-          total: Number(t.estimated_sessions) || 0,
-        },
-      };
-    }
-    const th = p && p.th && p.th !== "—" ? p.th : "";
-    const thRow = (DATA.therapists || []).find(x => x.name === th);
-    const total = Number(((p && p.pkg || "").match(/(\d+)/) || [])[1]) || 0;
-    return {
-      goals: [],
-      modalities: [],
-      notes: (p && p.notes) || "",
-      therapist: { initials: th ? initialsOf(th) : "—", name: th || "—", spec: (thRow && thRow.spec) || "" },
-      diagnosis: (p && (p.diag || p.diagnosis)) || "—",
-      schedule: { frequency: "—", duration: "—", total },
-    };
-  });
+function PatientTreatmentPlan({ p, t: tIn }) {
+  window.useDataVersion && window.useDataVersion();
+  // The saved treatments row is the ONLY source of truth. When rendered
+  // from the patient profile without a record, fetch the patient's active
+  // plan from the database. Nothing here is placeholder data — a missing
+  // plan renders an honest empty state.
+  const pid = (p && (p.patient_id || p.id)) || (tIn && tIn.patient_id) || null;
+  const [t, setT] = React.useState(tIn || null);
+  const [loading, setLoading] = React.useState(true);
   const [editing, setEditing] = React.useState(null);
   const [thPick, setThPick] = React.useState(false);
+  const [saving, setSaving] = React.useState(false);
 
-  function toggleGoal(i) {
-    setPlan(p => ({ ...p, goals: p.goals.map((g,idx)=> idx===i ? {...g, done:!g.done} : g) }));
+  const reload = React.useCallback(async () => {
+    if (!window.TreatmentsAPI) { setLoading(false); return; }
+    try {
+      if (tIn && tIn.treatment_id) {
+        const fresh = await window.TreatmentsAPI.get(tIn.treatment_id);
+        if (fresh) setT(fresh);
+      } else if (pid) {
+        const active = await window.TreatmentsAPI.activeFor(pid);
+        setT(active || null);
+      }
+    } catch (e) { console.warn("load treatment failed", e); }
+    setLoading(false);
+  }, [tIn && tIn.treatment_id, pid]);
+  React.useEffect(() => {
+    reload();
+    const onUpd = () => reload();
+    window.addEventListener("kinetic:treatments-updated", onUpd);
+    return () => window.removeEventListener("kinetic:treatments-updated", onUpd);
+  }, [reload]);
+
+  // Persist a partial payload onto THIS treatment record only — templates
+  // and other patients' plans are never touched (update_treatment RPC
+  // updates a single treatments row by primary key).
+  async function persist(payload, okMsg) {
+    if (!t || !window.TreatmentsAPI) return false;
+    const res = await window.TreatmentsAPI.update(t.treatment_id, payload);
+    if (res && res.ok === false) {
+      window.showToast && window.showToast(res.error || "تعذّر الحفظ", "error");
+      return false;
+    }
+    window.dispatchEvent(new CustomEvent("kinetic:treatments-updated"));
+    if (okMsg && window.showToast) window.showToast(okMsg, "success");
+    return true;
   }
 
-  // Assign the treating therapist — updates the plan and persists onto the
-  // patient record so the care team / lists reflect it everywhere.
-  async function chooseTherapist(t) {
-    setPlan(pl => ({ ...pl, therapist: { initials: initialsOf(t.name), name: t.name, spec: t.spec || "" } }));
+  const goals = (t && Array.isArray(t.goals) ? t.goals : []).map(g =>
+    typeof g === "string" ? { g, done: false } : { g: g.g || g.text || "", done: !!g.done });
+  const methods = (t && Array.isArray(t.methods) ? t.methods : []).map(m => (m && (m.name || m)) || "").filter(Boolean);
+  const exercises = (t && Array.isArray(t.exercises) ? t.exercises : []);
+  const total = t ? (Number(t.estimated_sessions) || 0) : 0;
+  const completed = t ? (Number(t.completed_sessions) || 0) : 0;
+  const remaining = Math.max(0, total - completed);
+  const progress = total ? Math.min(100, Math.round(completed / total * 100)) : 0;
+  const thName = (t && (t.therapist_name || t.therapist_id)) || (p && p.th && p.th !== "—" ? p.th : "") || "—";
+  const thRow = (DATA.therapists || []).find(x => x.name === thName || (t && x.id === t.therapist_id));
+  const doctorName = (p && p.dr && p.dr !== "—") ? p.dr : null;
+
+  async function toggleGoal(i) {
+    const next = goals.map((g, idx) => idx === i ? { ...g, done: !g.done } : g);
+    setT(prev => prev ? { ...prev, goals: next } : prev);
+    await persist({ goals: next });
+  }
+
+  // Assign the treating therapist — persists onto the treatment record AND
+  // the patient record so lists and the care team reflect it everywhere.
+  async function chooseTherapist(row) {
     setThPick(false);
-    const pid = p && (p.patient_id || p.id);
+    if (t) await persist({ therapist_id: row.id }, "تم تعيين الأخصائي");
     if (pid && window.KineticData) {
-      try { await window.KineticData.upsert("patients", { patient_id: pid, id: pid, therapist_id: t.id, th: t.name }); }
+      try { await window.KineticData.upsert("patients", { patient_id: pid, id: pid, therapist_id: row.id, th: row.name }); }
       catch (e) { console.warn("assign therapist failed", e); }
     }
-    if (window.showToast) window.showToast("تم تعيين الأخصائي", "success");
   }
+
   function openEditor() {
-    setEditing(JSON.parse(JSON.stringify(plan)));
+    if (!t) return;
+    setEditing({
+      diagnosis: t.diagnosis || "",
+      body_part: t.body_part || "",
+      goals: goals.map(g => ({ ...g })),
+      methods: methods.slice(),
+      notes: t.notes || "",
+      home_instructions: t.home_instructions || "",
+      warnings: t.warnings || "",
+      followup_instructions: t.followup_instructions || "",
+      estimated_sessions: String(total || ""),
+      weekly_frequency: t.weekly_frequency != null ? String(t.weekly_frequency) : "",
+    });
   }
-  function saveEditor() {
-    const clean = {
-      ...editing,
-      goals: editing.goals.map(g => ({ ...g, g: g.g.trim() })).filter(g => g.g),
-      modalities: editing.modalities.map(m => m.trim()).filter(Boolean),
-      schedule: { ...editing.schedule, total: Number(editing.schedule.total) || 0 },
-    };
-    setPlan(clean);
-    setEditing(null);
-    if (window.showToast) window.showToast("تم حفظ خطة العلاج","success");
+  async function saveEditor() {
+    if (!editing || !t) return;
+    setSaving(true);
+    const ok = await persist({
+      diagnosis: editing.diagnosis,
+      body_part: editing.body_part,
+      goals: editing.goals.map(g => ({ g: g.g.trim(), done: !!g.done })).filter(g => g.g),
+      methods: editing.methods.map(m => m.trim()).filter(Boolean),
+      notes: editing.notes,
+      home_instructions: editing.home_instructions,
+      warnings: editing.warnings,
+      followup_instructions: editing.followup_instructions,
+      estimated_sessions: editing.estimated_sessions === "" ? "" : String(parseInt(editing.estimated_sessions, 10) || 0),
+      weekly_frequency: editing.weekly_frequency === "" ? "" : String(parseInt(editing.weekly_frequency, 10) || 0),
+    }, "تم حفظ خطة العلاج");
+    setSaving(false);
+    if (ok) setEditing(null);
+  }
+
+  if (loading && !t) {
+    return <div className="muted" style={{fontSize:13,padding:"20px 0"}}>جارٍ تحميل خطة العلاج…</div>;
+  }
+  if (!t) {
+    return (
+      <EmptyState icon={<I.Clipboard size={22}/>} title="لا خطة علاج نشطة"
+        body="أنشئ خطة علاج للمريض من شاشة «خطط العلاج» (يدويًا أو من قالب) لتظهر تفاصيلها هنا وتُستخدم في الجلسات."/>
+    );
   }
 
   return (
     <div>
-      <div className="h3" style={{marginBottom:14}}>خطة العلاج النشطة</div>
+      <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:14}}>
+        <div className="h3" style={{margin:0}}>{t.name || "خطة العلاج النشطة"}</div>
+        <span className={"badge " + (t.status==="completed"?"b-green":t.status==="cancelled"?"b-grey":"b-blue")}>
+          <span className="dot"></span>{t.status==="completed"?"مكتملة":t.status==="cancelled"?"ملغاة":t.status==="draft"?"مسودة":"نشطة"}
+        </span>
+        {t.template_name && (
+          <span className="muted" style={{fontSize:11.5}}>
+            نسخة مستقلة من قالب «{t.template_name}» — تعديلها لا يغيّر القالب.
+          </span>
+        )}
+      </div>
+
+      {/* Sessions progress — completed_sessions is maintained by the DB
+          trigger from the linked sessions. */}
+      <div className="card" style={{padding:14,marginBottom:16,display:"flex",alignItems:"center",gap:18,flexWrap:"wrap"}}>
+        <div style={{flex:"1 1 220px"}}>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:6}}>
+            <span className="muted">تقدّم الجلسات</span>
+            <span className="mono">{progress}%</span>
+          </div>
+          <div style={{height:7,background:"var(--ink-100)",borderRadius:999,overflow:"hidden"}}>
+            <div style={{height:"100%",width:`${progress}%`,background:progress>=100?"var(--green)":"var(--blue-500)"}}/>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:18,fontSize:12.5}}>
+          <div><div className="muted" style={{fontSize:11}}>الإجمالي</div><div className="mono" style={{fontWeight:600}}>{total || "—"}</div></div>
+          <div><div className="muted" style={{fontSize:11}}>مكتملة</div><div className="mono" style={{fontWeight:600,color:"var(--green)"}}>{completed}</div></div>
+          <div><div className="muted" style={{fontSize:11}}>متبقية</div><div className="mono" style={{fontWeight:600,color:"var(--blue-700)"}}>{total ? remaining : "—"}</div></div>
+          <div><div className="muted" style={{fontSize:11}}>التكرار</div><div className="mono" style={{fontWeight:600}}>{t.weekly_frequency ? `${t.weekly_frequency}/أسبوع` : "—"}</div></div>
+        </div>
+      </div>
+
       <div className="rgrid c-lg" style={{"--gtc":"1.4fr 1fr"}}>
         <div>
           <div className="label">أهداف الخطة</div>
           <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:18}}>
-            {plan.goals.length===0 && <div className="muted" style={{fontSize:12.5,padding:"6px 0"}}>لا أهداف بعد — أضفها من «تعديل الخطة».</div>}
-            {plan.goals.map((g,i)=>(
+            {goals.length===0 && <div className="muted" style={{fontSize:12.5,padding:"6px 0"}}>لا أهداف بعد — أضفها من «تعديل الخطة».</div>}
+            {goals.map((g,i)=>(
               <label key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",border:"1px solid var(--ink-200)",borderRadius:10,fontSize:13,cursor:"pointer"}}>
                 <input type="checkbox" checked={g.done} onChange={()=>toggleGoal(i)}/>
                 <span style={{flex:1,textDecoration:g.done?"line-through":"none",color:g.done?"var(--ink-500)":"var(--ink-900)"}}>{g.g}</span>
@@ -1416,48 +1499,107 @@ function PatientTreatmentPlan({ p, t }) {
           </div>
 
           <div className="label">طرق العلاج</div>
-          <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:14}}>
-            {plan.modalities.length===0 && <span className="muted" style={{fontSize:12.5}}>—</span>}
-            {plan.modalities.map(m=>(
+          <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:18}}>
+            {methods.length===0 && <span className="muted" style={{fontSize:12.5}}>—</span>}
+            {methods.map(m=>(
               <span key={m} className="pill tag-blue">{m}</span>
             ))}
           </div>
 
-          <div className="label">ملاحظات</div>
+          {exercises.length > 0 && (
+            <>
+              <div className="label">التمارين ({exercises.length})</div>
+              <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:18}}>
+                {exercises.map((e,i)=>(
+                  <div key={i} style={{padding:"8px 10px",border:"1px solid var(--ink-200)",borderRadius:10,fontSize:12.5}}>
+                    <strong>{i+1}. {e.name || e.title || (typeof e === "string" ? e : "—")}</strong>
+                    {e.description && <div className="muted" style={{fontSize:11.5,marginTop:2}}>{e.description}</div>}
+                    <div className="muted" style={{fontSize:11.5,marginTop:2}}>
+                      {[e.sets && `${e.sets} مجموعات`, e.reps && `${e.reps} عدّات`, e.duration && `مدّة ${e.duration}`,
+                        e.hold_time && `ثبات ${e.hold_time}`, e.rest_time && `راحة ${e.rest_time}`, e.equipment].filter(Boolean).join(" · ")}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {t.home_instructions && (
+            <>
+              <div className="label">البرنامج المنزلي</div>
+              <div style={{padding:14,background:"var(--blue-50)",border:"1px solid var(--blue-100)",borderRadius:12,fontSize:13,lineHeight:1.55,whiteSpace:"pre-wrap",marginBottom:18}}>
+                {t.home_instructions}
+              </div>
+            </>
+          )}
+          {t.warnings && (
+            <>
+              <div className="label" style={{color:"var(--red)"}}>تحذيرات</div>
+              <div style={{padding:14,background:"#FDF1F0",border:"1px solid #F2CBC7",borderRadius:12,fontSize:13,lineHeight:1.55,whiteSpace:"pre-wrap",marginBottom:18}}>
+                {t.warnings}
+              </div>
+            </>
+          )}
+          {t.followup_instructions && (
+            <>
+              <div className="label">تعليمات المتابعة</div>
+              <div style={{padding:14,background:"var(--ink-50)",borderRadius:12,fontSize:13,lineHeight:1.55,whiteSpace:"pre-wrap",marginBottom:18}}>
+                {t.followup_instructions}
+              </div>
+            </>
+          )}
+
+          <div className="label">ملاحظات إكلينيكية</div>
           <div style={{padding:14,background:"var(--ink-50)",borderRadius:12,fontSize:13,lineHeight:1.55,whiteSpace:"pre-wrap"}}>
-            {plan.notes || "—"}
+            {t.notes || "—"}
           </div>
         </div>
         <div>
-          <div className="label">الأخصائي</div>
+          <div className="label">الأخصائي المسؤول</div>
           <div style={{display:"flex",alignItems:"center",gap:10,padding:12,border:"1px solid var(--ink-200)",borderRadius:10,marginBottom:14}}>
-            <div className="av md" style={{background:"var(--blue-100)",color:"var(--blue-700)"}}>{plan.therapist.initials}</div>
+            <div className="av md" style={{background:"var(--blue-100)",color:"var(--blue-700)"}}>{thName !== "—" ? initialsOf(thName) : "—"}</div>
             <div style={{flex:1}}>
-              <div style={{fontSize:13,fontWeight:500}}>{plan.therapist.name}</div>
-              <div className="muted" style={{fontSize:11.5}}>{plan.therapist.spec}</div>
+              <div style={{fontSize:13,fontWeight:500}}>{thName}</div>
+              <div className="muted" style={{fontSize:11.5}}>{(thRow && thRow.spec) || ""}</div>
             </div>
             <button className="btn btn-ghost btn-icon" onClick={()=>setThPick(true)} aria-label="تغيير الأخصائي" title="تغيير الأخصائي"><I.Edit size={13}/></button>
           </div>
+          {doctorName && (
+            <>
+              <div className="label">الطبيب</div>
+              <div style={{padding:12,border:"1px solid var(--ink-200)",borderRadius:10,fontSize:13,marginBottom:14}}>{doctorName}</div>
+            </>
+          )}
 
           <div className="label">التشخيص</div>
-          <div style={{padding:12,border:"1px solid var(--ink-200)",borderRadius:10,fontSize:13,marginBottom:14}}>{plan.diagnosis}</div>
+          <div style={{padding:12,border:"1px solid var(--ink-200)",borderRadius:10,fontSize:13,marginBottom:14}}>
+            {t.diagnosis || "—"}
+            {t.body_part && <div className="muted" style={{fontSize:11.5,marginTop:4}}>الجزء المستهدف: {t.body_part}</div>}
+            {t.category && <div className="muted" style={{fontSize:11.5,marginTop:2}}>الفئة: {t.category}</div>}
+          </div>
 
-          <div className="label">الجدولة</div>
-          <div style={{padding:14,border:"1px solid var(--ink-200)",borderRadius:10,marginBottom:14}}>
-            <div style={{display:"flex",justifyContent:"space-between",fontSize:12.5,marginBottom:6}}>
-              <span className="muted">التكرار</span><span>{plan.schedule.frequency}</span>
-            </div>
-            <div style={{display:"flex",justifyContent:"space-between",fontSize:12.5,marginBottom:6}}>
-              <span className="muted">المدة</span><span>{plan.schedule.duration}</span>
-            </div>
-            <div style={{display:"flex",justifyContent:"space-between",fontSize:12.5}}>
-              <span className="muted">الإجمالي Sessions</span><span className="mono">{plan.schedule.total}</span>
-            </div>
+          {/* Session timing lives on the APPOINTMENTS — a session simply
+              starts when its appointment starts. No fixed session time. */}
+          <div className="label">مواعيد الجلسات</div>
+          <div style={{padding:12,border:"1px solid var(--ink-200)",borderRadius:10,fontSize:12.5,lineHeight:1.6,marginBottom:14,color:"var(--ink-500)"}}>
+            توقيت كل جلسة يأتي من موعدها في التقويم — الجلسة تبدأ ببداية الموعد.
+            {t.start_date ? <div style={{marginTop:4}}>بداية الخطة: <span className="mono">{t.start_date}</span></div> : null}
+          </div>
+
+          <div className="label">سجل الإنشاء</div>
+          <div style={{padding:12,border:"1px solid var(--ink-200)",borderRadius:10,fontSize:12,lineHeight:1.7,marginBottom:14}}>
+            <div><span className="muted">أنشأها: </span>{t.created_by_name || "—"}
+              {t.created_at ? <span className="muted"> · {new Date(t.created_at).toLocaleDateString("ar-EG")}</span> : null}</div>
+            <div><span className="muted">آخر تحديث: </span>{t.updated_by_name || "—"}
+              {t.updated_at ? <span className="muted"> · {new Date(t.updated_at).toLocaleDateString("ar-EG")}</span> : null}</div>
           </div>
 
           <button className="btn btn-blue" style={{width:"100%",justifyContent:"center"}} onClick={openEditor}>
-            <I.Edit size={13}/> تعديل treatment plan
+            <I.Edit size={13}/> تعديل الخطة
           </button>
+          <div className="muted" style={{fontSize:11,marginTop:6,textAlign:"center"}}>
+            التعديل يخص خطة هذا المريض فقط — لا يغيّر القالب ولا خطط المرضى الآخرين.
+          </div>
         </div>
       </div>
 
@@ -1467,16 +1609,16 @@ function PatientTreatmentPlan({ p, t }) {
           {(DATA.therapists||[]).length===0
             ? <EmptyState icon={<I.Users size={22}/>} title="لا أخصائيين بعد" body="أضف الأخصائيين من الإعدادات."/>
             : <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                {(DATA.therapists||[]).map(t=>{
-                  const on = plan.therapist.name === t.name;
+                {(DATA.therapists||[]).map(row=>{
+                  const on = thName === row.name;
                   return (
-                    <button key={t.id||t.name} onClick={()=>chooseTherapist(t)}
+                    <button key={row.id||row.name} onClick={()=>chooseTherapist(row)}
                       style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",borderRadius:12,cursor:"pointer",
                         border:`1px solid ${on?"var(--blue-500)":"var(--ink-200)"}`,background:on?"var(--blue-50)":"#fff",textAlign:"start"}}>
-                      <div className="av md" style={{background:(t.color||"#7BBDE8")+"33",color:t.color||"var(--blue-700)"}}>{initialsOf(t.name)}</div>
+                      <div className="av md" style={{background:(row.color||"#7BBDE8")+"33",color:row.color||"var(--blue-700)"}}>{initialsOf(row.name)}</div>
                       <div style={{flex:1,minWidth:0}}>
-                        <div style={{fontSize:13,fontWeight:600}}>{t.name}</div>
-                        <div className="muted" style={{fontSize:11.5}}>{t.spec}{t.max!=null?` · حمل ${t.load}/${t.max}`:""}</div>
+                        <div style={{fontSize:13,fontWeight:600}}>{row.name}</div>
+                        <div className="muted" style={{fontSize:11.5}}>{row.spec}{row.max!=null?` · حمل ${row.load}/${row.max}`:""}</div>
                       </div>
                       {on && <I.Check size={16} style={{color:"var(--blue-700)"}}/>}
                     </button>
@@ -1487,14 +1629,19 @@ function PatientTreatmentPlan({ p, t }) {
       )}
 
       {editing && (
-        <Modal title="تعديل خطة العلاج" onClose={()=>setEditing(null)} width={640}
+        <Modal title="تعديل خطة العلاج (نسخة المريض فقط)" onClose={()=>setEditing(null)} width={640}
           footer={<>
             <button className="btn btn-ghost" onClick={()=>setEditing(null)}>إلغاء</button>
-            <button className="btn btn-blue" onClick={saveEditor}><I.Check size={13}/> حفظ</button>
+            <button className="btn btn-blue" disabled={saving} onClick={saveEditor}><I.Check size={13}/> {saving ? "جارٍ الحفظ…" : "حفظ"}</button>
           </>}>
-          <Field label="التشخيص">
-            <input className="input" value={editing.diagnosis} onChange={e=>setEditing({...editing, diagnosis:e.target.value})}/>
-          </Field>
+          <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:10}}>
+            <Field label="التشخيص">
+              <input className="input" value={editing.diagnosis} onChange={e=>setEditing({...editing, diagnosis:e.target.value})}/>
+            </Field>
+            <Field label="الجزء المستهدف">
+              <input className="input" value={editing.body_part} onChange={e=>setEditing({...editing, body_part:e.target.value})}/>
+            </Field>
+          </div>
 
           <div style={{height:14}}/>
           <div className="label">أهداف الخطة</div>
@@ -1519,30 +1666,40 @@ function PatientTreatmentPlan({ p, t }) {
 
           <div className="label">طرق العلاج</div>
           <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:8}}>
-            {editing.modalities.map((m,i)=>(
+            {editing.methods.map((m,i)=>(
               <span key={i} className="pill tag-blue" style={{gap:4}}>
                 {m}
-                <button type="button" onClick={()=>setEditing({...editing, modalities: editing.modalities.filter((_,ix)=>ix!==i)})}
+                <button type="button" onClick={()=>setEditing({...editing, methods: editing.methods.filter((_,ix)=>ix!==i)})}
                   style={{background:"none",border:"none",color:"inherit",cursor:"pointer",padding:0,display:"inline-flex"}} aria-label="إزالة">
                   <I.X size={12}/>
                 </button>
               </span>
             ))}
           </div>
-          <ModalityAdder onAdd={m=>setEditing({...editing, modalities:[...editing.modalities, m]})}/>
+          <ModalityAdder onAdd={m=>setEditing({...editing, methods:[...editing.methods, m]})}/>
 
           <div style={{height:14}}/>
-          <div className="rgrid c-sm" style={{"--gtc":"repeat(3,1fr)",gap:10}}>
-            <Field label="التكرار"><input className="input" value={editing.schedule.frequency}
-              onChange={e=>setEditing({...editing, schedule:{...editing.schedule, frequency:e.target.value}})}/></Field>
-            <Field label="المدة"><input className="input" value={editing.schedule.duration}
-              onChange={e=>setEditing({...editing, schedule:{...editing.schedule, duration:e.target.value}})}/></Field>
-            <Field label="الإجمالي Sessions"><input className="input" type="number" min="0" value={editing.schedule.total}
-              onChange={e=>setEditing({...editing, schedule:{...editing.schedule, total:e.target.value}})}/></Field>
+          <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:10}}>
+            <Field label="إجمالي الجلسات"><input className="input" type="number" min="0" value={editing.estimated_sessions}
+              onChange={e=>setEditing({...editing, estimated_sessions:e.target.value})}/></Field>
+            <Field label="التكرار الأسبوعي"><input className="input" type="number" min="0" value={editing.weekly_frequency}
+              onChange={e=>setEditing({...editing, weekly_frequency:e.target.value})}/></Field>
           </div>
 
           <div style={{height:14}}/>
-          <Field label="ملاحظات">
+          <Field label="البرنامج المنزلي">
+            <textarea className="input" rows={3} style={{padding:10,resize:"vertical"}}
+              value={editing.home_instructions} onChange={e=>setEditing({...editing, home_instructions:e.target.value})}/>
+          </Field>
+          <Field label="تحذيرات">
+            <textarea className="input" rows={2} style={{padding:10,resize:"vertical"}}
+              value={editing.warnings} onChange={e=>setEditing({...editing, warnings:e.target.value})}/>
+          </Field>
+          <Field label="تعليمات المتابعة">
+            <textarea className="input" rows={2} style={{padding:10,resize:"vertical"}}
+              value={editing.followup_instructions} onChange={e=>setEditing({...editing, followup_instructions:e.target.value})}/>
+          </Field>
+          <Field label="ملاحظات إكلينيكية">
             <textarea className="input" rows={4} style={{padding:10,resize:"vertical"}}
               value={editing.notes} onChange={e=>setEditing({...editing, notes:e.target.value})}/>
           </Field>
