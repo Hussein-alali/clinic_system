@@ -507,7 +507,7 @@ function Patients({ go }) {
   });
 
   if (view === "add") return <PatientAdd onCancel={()=>setView("list")} onSave={()=>setView("list")}/>;
-  if (view === "detail" && selected) return <PatientDetail p={selected} onBack={()=>setView("list")} go={go} onEdit={()=>setView("add")}/>;
+  if (view === "detail" && selected) return <PatientDetail p={selected} onBack={()=>setView("list")} go={go}/>;
 
   return (
     <Page>
@@ -838,14 +838,16 @@ function PatientEditModal({ patient, onClose, onSaved }) {
       try {
         if (window.sb || (typeof sb !== "undefined" && sb)) {
           const client = window.sb || sb;
-          const uid = (window.ME && window.ME.id) || null;
+          const uid  = (window.ME && window.ME.id) || null;
+          const name = (window.ME && window.ME.name) || null;
           await client.from("audit_events").insert({
             actor_uid:  uid,
             actor_role: role,
             action:     "patient.edit",
             table_name: "patients",
             row_pk:     pid,
-            payload:    { changed, at: new Date().toISOString() },
+            // actor_name lives in payload — audit_events has no name column.
+            payload:    { actor_name: name, patient_id: pid, changed, at: new Date().toISOString() },
           });
         }
       } catch (auditErr) {
@@ -1065,10 +1067,22 @@ function normalizePatientForForm(p) {
   };
 }
 
+// Roles allowed to open the "تعديل" (edit patient) action. Client-side UX
+// gate only — Supabase RLS ("staff update patients") is the real
+// enforcement. Every staff role can edit at least one section; the modal
+// itself disables the individual fields a given role may not touch.
+function canEditPatient(role) {
+  return ["مدير", "موظف استقبال", "طبيب", "الأخصائي"].includes(role);
+}
+
 // ── PatientDetail ──────────────────────────────────────────────
-function PatientDetail({ p: pIn, onBack, go, onEdit }) {
+function PatientDetail({ p: pIn, onBack, go }) {
   const [tab, setTab] = React.useState("نظرة عامة");
   const [schedOpen, setSchedOpen] = React.useState(false);
+  // The edit modal is owned here so it renders over the profile page (the
+  // Patients-list copy at line ~668 is unreachable from the detail view).
+  const [editOpen, setEditOpen] = React.useState(false);
+  const mayEdit = canEditPatient((window.ME && window.ME.role) || "");
   // Resolve the live record from DATA so edits (therapist, profile, …) reflect
   // across every section immediately; fall back to the passed snapshot.
   const pid = pIn.patient_id || pIn.id;
@@ -1092,7 +1106,7 @@ function PatientDetail({ p: pIn, onBack, go, onEdit }) {
           background:"#FBF3E6",border:"1px solid #F0D9A8",borderRadius:12,color:"#8A5A00"}}>
           <I.Bell size={16}/>
           <div style={{flex:1,fontSize:13,fontWeight:500}}>معلومات المريض غير مكتملة — أُنشئ هذا الملف عبر الحجز السريع. أكمل البيانات الناقصة.</div>
-          {onEdit && <button className="btn btn-secondary" style={{fontSize:12}} onClick={onEdit}>إكمال البيانات</button>}
+          {mayEdit && <button className="btn btn-secondary" style={{fontSize:12}} onClick={()=>setEditOpen(true)}>إكمال البيانات</button>}
         </div>
       )}
 
@@ -1123,6 +1137,7 @@ function PatientDetail({ p: pIn, onBack, go, onEdit }) {
               <button className="btn btn-secondary" onClick={()=>setSchedOpen(true)}><I.Calendar size={13}/> الجدول الثابت</button>
               <button className="btn btn-blue" onClick={()=>go("appointments")}><I.Plus size={13}/> حجز</button>
               <RowMenu size={15} items={[
+                ...(mayEdit ? [{ label:"تعديل", icon:<I.Edit size={13}/>, onClick:()=>setEditOpen(true) }] : []),
                 { label:"طباعة الملف", icon:<I.Print size={13}/>, onClick:()=>window.print() },
                 { label:"تصدير CSV", icon:<I.Download size={13}/>, onClick:()=>{
                   const rows=["ID,الاسم,الهاتف,العمر,التشخيص,الحالة",`${p.id},${p.name},${p.phone},${p.age},${p.diag||""},${p.status||""}`];
@@ -1221,6 +1236,14 @@ function PatientDetail({ p: pIn, onBack, go, onEdit }) {
       </div>
 
       {schedOpen && <RecurringScheduleModal patient={p} onClose={()=>setSchedOpen(false)}/>}
+
+      {editOpen && (
+        <PatientEditModal
+          patient={p}
+          onClose={()=>setEditOpen(false)}
+          onSaved={()=>setEditOpen(false)}
+        />
+      )}
     </Page>
   );
 }
