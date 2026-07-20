@@ -999,7 +999,15 @@ on conflict (template_id) do nothing;"""
     return out
 
 
-def main():
+def main(embed=False):
+    """Emit the seed SQL.
+
+    embed=False → a standalone script (begin/commit + trailing notify),
+                  written to seed-treatment-templates.sql.
+    embed=True  → the same statements with NO begin/commit and no header
+                  banner, suitable for appending inside Supabase_All_In_One.sql
+                  (which manages its own transaction / final notify).
+    """
     lines = []
     lines.append("-- ═══════════════════════════════════════════════════════════════")
     lines.append("-- SEED: treatment-plan template categories + diagnosis templates")
@@ -1014,8 +1022,9 @@ def main():
     lines.append("-- which is how the template picker in the app resolves them.")
     lines.append("-- ═══════════════════════════════════════════════════════════════")
     lines.append("")
-    lines.append("begin;")
-    lines.append("")
+    if not embed:
+        lines.append("begin;")
+        lines.append("")
     lines.append("-- ── Categories (idempotent by name) ──────────────────────────")
     for cid, cname, order in [
         ("TPC-SEED-SPINE", SPINE_CAT, 10),
@@ -1035,8 +1044,9 @@ where not exists (
     lines.append("-- ── Shoulder templates (%d) ───────────────────────────────────" % len(SHOULDER))
     lines += emit_templates(SHOULDER_CAT, "الكتف", "SHD", SHOULDER)
     lines.append("")
-    lines.append("commit;")
-    lines.append("")
+    if not embed:
+        lines.append("commit;")
+        lines.append("")
     lines.append("-- Refresh PostgREST so the seeded rows are immediately queryable.")
     lines.append("notify pgrst, 'reload schema';")
     lines.append("")
@@ -1044,4 +1054,5 @@ where not exists (
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    main(embed=("--embed" in sys.argv[1:]))
