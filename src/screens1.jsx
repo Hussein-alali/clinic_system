@@ -638,6 +638,9 @@ function Patients({ go }) {
                   <div className="mono">{p.remain} Sessions</div>
                 </div>
               </div>
+              <div style={{marginTop:12,display:"flex"}}>
+                <WaReminderButton patient={p} style={{width:"100%",justifyContent:"center"}}/>
+              </div>
             </div>
           ))}
         </div>
@@ -1134,6 +1137,7 @@ function PatientDetail({ p: pIn, onBack, go }) {
             <div style={{display:"flex",gap:8,position:"relative",flexWrap:"wrap"}}>
               <button className="btn btn-secondary" onClick={()=>window.open(buildTelUrl(p.phone))}><I.Phone size={13}/> اتصال</button>
               <button className="btn btn-secondary" onClick={()=>window.open(buildWhatsAppUrl(p.phone, `مرحبًا+${p.name}`),"_blank")}><I.WhatsApp size={13}/> واتساب</button>
+              <WaReminderButton patient={p}/>
               <button className="btn btn-secondary" onClick={()=>setSchedOpen(true)}><I.Calendar size={13}/> الجدول الثابت</button>
               <button className="btn btn-blue" onClick={()=>go("appointments")}><I.Plus size={13}/> حجز</button>
               <RowMenu size={15} items={[
@@ -3307,6 +3311,7 @@ function AppointmentActionsModal({ appt, onClose, onEdit, onStatus }) {
         {patient && (
           <button className="btn btn-ghost" onClick={()=>setSchedOpen(true)}><I.Clock size={13}/> الجدول الثابت</button>
         )}
+        <WaReminderButton patient={patient} appt={appt} className="btn btn-ghost"/>
         <button className="btn btn-secondary" onClick={()=>onStatus("ملغي")}><I.X size={13}/> إلغاء</button>
         <button className="btn btn-secondary" onClick={()=>onStatus("مكتمل")}><I.Check size={13}/> إنهاء</button>
         <button className="btn btn-blue" onClick={onEdit}><I.Edit size={13}/> نقل / تعديل</button>
@@ -3647,7 +3652,8 @@ function AppointmentList() {
                 <td>{a.room}</td>
                 <td>{a.type}</td>
                 <td><ApptBadge s={a.status}/></td>
-                <td>
+                <td style={{whiteSpace:"nowrap"}}>
+                  <WaReminderButton appt={a} iconOnly/>
                   <RowMenu size={14} items={[
                     { label:"تأكيد الموعد", icon:<I.Check size={13}/>, onClick:async ()=>{
                       try {

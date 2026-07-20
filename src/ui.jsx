@@ -498,6 +498,159 @@ function RowMenu({ items = [], size = 13, stopRowClick = true }) {
 }
 window.RowMenu = RowMenu;
 
+// ── WhatsApp appointment reminder ──────────────────────────────
+// Builds the reminder from live DB-backed data only: patient name/phone
+// from DATA.patients, date/time/therapist from DATA.appts, clinic name
+// from the clinic_settings singleton (window.CLINIC). The message opens
+// pre-filled in a new WhatsApp tab — the receptionist reviews it and
+// presses Send manually; nothing is sent automatically.
+
+// Country code used to convert local numbers ("010…" → "2010…").
+// Matches the clinic locale used across the app (ar-EG).
+const WA_COUNTRY_CODE = "20";
+
+// Sanitize + convert to international format. Removes spaces, dashes and
+// punctuation, handles "00"/"+" prefixes, and prefixes the country code
+// for local numbers ("0…" or a bare 10-digit mobile). Returns the wa.me
+// digit string, or null when the number can't be a valid phone.
+function waNormalizePhone(raw) {
+  let s = String(raw == null ? "" : raw).trim().replace(/[\s\-().]/g, "");
+  if (!s) return null;
+  if (s.startsWith("00")) s = "+" + s.slice(2);
+  const intl = s.startsWith("+");
+  s = s.replace(/\D/g, "");
+  if (!s) return null;
+  if (!intl) {
+    if (s.startsWith("0")) s = WA_COUNTRY_CODE + s.replace(/^0+/, "");
+    else if (/^1\d{9}$/.test(s)) s = WA_COUNTRY_CODE + s; // mobile typed without the leading 0
+  }
+  return /^[1-9]\d{9,14}$/.test(s) ? s : null; // E.164: 10–15 digits, no leading zero
+}
+
+// Default reminder template. The therapist line is omitted entirely when
+// no therapist/doctor is attached — never rendered empty.
+function waReminderMessage({ patientName, clinicName, date, time, therapistName }) {
+  const lines = [
+    `السلام عليكم ${patientName}`,
+    `نذكركم بموعدكم في ${clinicName}.`,
+    `📅 التاريخ: ${date}`,
+    `🕒 الوقت: ${time}`,
+  ];
+  if (therapistName && String(therapistName).trim() && therapistName !== "—") {
+    lines.push(`👨‍⚕️ المعالج: ${therapistName}`);
+  }
+  lines.push("في حال الرغبة بتعديل الموعد، يرجى التواصل معنا.");
+  lines.push("شكراً لكم ونتمنى لكم دوام الصحة.");
+  return lines.join("\n");
+}
+
+// Valid ISO date of a booking row, "" when missing/unparseable.
+function waApptDateIso(a) {
+  const s = String((a && (a.date || a.appointment_date || a.start_date)) || "").slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : "";
+}
+
+// Re-resolve the live patient row from the DB mirror so the reminder
+// always reads the current phone/name, not a stale render snapshot.
+function waLivePatient(patient) {
+  if (!patient) return null;
+  const pid = patient.patient_id || patient.id;
+  return ((window.DATA && window.DATA.patients) || [])
+    .find(x => (x.patient_id || x.id) === pid) || patient;
+}
+
+// Patient row a booking belongs to (by id, falling back to name for
+// legacy rows) — same matching rule as AppointmentActionsModal.
+function waPatientOfAppt(appt) {
+  if (!appt) return null;
+  return ((window.DATA && window.DATA.patients) || []).find(p =>
+    (p.patient_id || p.id) === (appt.patient_id || appt.pid)
+    || (appt.patient && p.name === appt.patient)) || null;
+}
+
+// The patient's next reminder-worthy appointment: the earliest active
+// (not completed/cancelled/free-slot) booking from today onward. Falls
+// back to an undated active booking so the button can explain exactly
+// why it is disabled instead of silently hiding.
+function waNextAppt(patient) {
+  const p = waLivePatient(patient);
+  if (!p) return null;
+  const pid = p.patient_id || p.id;
+  const done = new Set(["مكتمل", "ملغي", "ملغى", "cancelled", "متاح"]);
+  const mine = ((window.DATA && window.DATA.appts) || []).filter(a =>
+    ((a.patient_id || a.pid) === pid || (p.name && a.patient === p.name)) && !done.has(a.status));
+  const t = new Date();
+  const todayIso = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+  const upcoming = mine
+    .filter(a => waApptDateIso(a) >= todayIso)
+    .sort((a, b) => (waApptDateIso(a) + (a.time || "")).localeCompare(waApptDateIso(b) + (b.time || "")));
+  return upcoming[0] || mine.find(a => !waApptDateIso(a)) || null;
+}
+
+// Why the reminder can't be built from this booking (null when it can).
+// Doubles as the disabled-state tooltip.
+function waReminderDisabledReason(appt) {
+  if (!appt) return "لا يمكن إرسال التذكير — لا يوجد موعد قادم لهذا المريض";
+  if (!waApptDateIso(appt)) return "لا يمكن إرسال التذكير — تاريخ الموعد غير محدد";
+  if (!appt.time) return "لا يمكن إرسال التذكير — وقت الموعد غير محدد";
+  return null;
+}
+
+// Validate, build and open the wa.me link in a new tab.
+function sendWaApptReminder(patient, appt) {
+  const toast = window.showToast || (() => {});
+  const p = waLivePatient(patient) || waPatientOfAppt(appt);
+  if (!p) return toast("تعذّر العثور على بيانات المريض لهذا الموعد", "error");
+  const reason = waReminderDisabledReason(appt);
+  if (reason) return toast(reason, "error");
+  const raw = p.phone || p.whatsapp;
+  if (!raw || !String(raw).trim()) return toast("رقم هاتف المريض غير مسجل — أضِف رقم الهاتف من ملف المريض أولًا", "error");
+  const phone = waNormalizePhone(raw);
+  if (!phone) return toast(`رقم هاتف المريض غير صالح (${raw}) — صحّح الرقم من ملف المريض أولًا`, "error");
+  const msg = waReminderMessage({
+    patientName: p.name || "",
+    clinicName: (window.CLINIC && window.CLINIC.name) || "العيادة",
+    date: waApptDateIso(appt),
+    time: appt.time,
+    therapistName: appt.th || appt.dr || "",
+  });
+  window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, "_blank", "noopener");
+}
+
+// «إرسال تذكير واتساب» button. Pass `appt` on appointment surfaces; omit
+// it on patient surfaces and the next upcoming appointment is resolved
+// live. Disabled (with an explanatory tooltip) when the date or time is
+// missing. `iconOnly` renders the compact table-row variant.
+function WaReminderButton({ patient, appt, iconOnly = false, className = "btn btn-secondary", style }) {
+  window.useDataVersion && window.useDataVersion();
+  const target = appt !== undefined ? appt : waNextAppt(patient);
+  const reason = waReminderDisabledReason(target);
+  const label = "إرسال تذكير واتساب";
+  return (
+    // The title lives on a wrapper so the tooltip still shows over a
+    // disabled button (disabled elements swallow hover in some browsers).
+    <span title={reason || label}
+      style={{ display: "inline-flex", width: style && style.width ? style.width : undefined }}
+      onClick={e => e.stopPropagation()}>
+      <button
+        className={iconOnly ? "btn btn-ghost btn-icon" : className}
+        disabled={!!reason}
+        aria-label={label}
+        style={{ ...(reason ? { opacity: .5, cursor: "not-allowed" } : null), ...style }}
+        onClick={() => sendWaApptReminder(patient || waPatientOfAppt(target), target)}
+      >
+        <I.WhatsApp size={14} style={!reason ? { color: "#25D366" } : null}/>
+        {!iconOnly && <span>{label}</span>}
+      </button>
+    </span>
+  );
+}
+
+Object.assign(window, {
+  waNormalizePhone, waReminderMessage, waNextAppt, waPatientOfAppt,
+  waReminderDisabledReason, sendWaApptReminder, WaReminderButton,
+});
+
 // ── Searchable combobox ────────────────────────────────────────
 // Modern healthcare-SaaS style entity picker. Drop-in replacement for a
 // native <select> that renders two-line cards, filters with Arabic
