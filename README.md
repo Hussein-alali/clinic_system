@@ -1,4 +1,4 @@
-# كينيتك (Kinetic) — Physical Therapy Clinic Management System
+# Physical Therapy Clinic Management System
 
 An Arabic-first (RTL), single-branch clinic management system for physical
 therapy practices. It digitises the full front-desk and clinical workflow —
