@@ -119,36 +119,74 @@ function Treatments({ go }) {
     return () => window.removeEventListener('kinetic:treatments-updated', onUpd);
   }, [reload]);
 
-  const plans = records.map(t => {
-    const total = Number(t.estimated_sessions) || 0;
-    // completed_sessions is maintained by the DB trigger from linked
-    // sessions. Legacy sessions logged before linking existed carry no
-    // treatment_id, so fall back to the old per-patient heuristic.
-    const linkedDone = Number(t.completed_sessions) || 0;
-    const heuristicDone = DATA.sessions.filter(s =>
-      (s.status || "completed") !== "in_progress"
-      && s.patient_id === t.patient_id
-      && (!t.treatment_date || !s.date || s.date >= t.treatment_date)).length;
-    const done = linkedDone > 0 ? linkedDone : heuristicDone;
-    const progress = total ? Math.min(100, Math.round(done / total * 100)) : 0;
-    const patientRow = (DATA.patients || []).find(p => (p.patient_id || p.id) === t.patient_id);
-    const updatedAt = t.updated_at || t.created_at;
-    return {
-      id: t.treatment_id,
-      patient: t.patient_name || (patientRow && patientRow.name) || t.patient_id,
-      diag: t.diagnosis || "—",
-      therapist: t.therapist_name || t.therapist_id || "—",
-      goals: Array.isArray(t.goals) ? t.goals.length : 0,
-      progress,
-      sessions: total ? `${done}/${total}` : String(done),
-      status: t.status === "completed" || (progress >= 100 && total) ? "مكتمل"
-            : t.status === "draft" ? "مسودة" : "نشط",
-      updated: updatedAt ? new Date(updatedAt).toLocaleDateString("ar-EG") : "—",
-      p: patientRow || { patient_id: t.patient_id, name: t.patient_name || t.patient_id },
-      t,
-    };
-  });
-  const avgProgress = plans.length ? Math.round(plans.reduce((s, x) => s + x.progress, 0) / plans.length) : 0;
+  // Derive the plan rows in one memoized pass. Two indices are built once
+  // per data change so each record's session-heuristic and patient lookup
+  // are O(1) instead of O(N) — a big win when the DB fills up (used to be
+  // records×sessions + records×patients on every kinetic:data-updated tick).
+  const plans = React.useMemo(() => {
+    const sessions = DATA.sessions || [];
+    const patients = DATA.patients || [];
+    const sessionsByPatient = new Map();
+    for (const s of sessions) {
+      if ((s.status || "completed") === "in_progress") continue;
+      let arr = sessionsByPatient.get(s.patient_id);
+      if (!arr) { arr = []; sessionsByPatient.set(s.patient_id, arr); }
+      arr.push(s);
+    }
+    const patientsById = new Map();
+    for (const p of patients) patientsById.set(p.patient_id || p.id, p);
+    return records.map(t => {
+      const total = Number(t.estimated_sessions) || 0;
+      // completed_sessions is maintained by the DB trigger from linked
+      // sessions. Legacy sessions logged before linking existed carry no
+      // treatment_id, so fall back to the old per-patient heuristic.
+      const linkedDone = Number(t.completed_sessions) || 0;
+      let heuristicDone = 0;
+      if (linkedDone <= 0) {
+        const bucket = sessionsByPatient.get(t.patient_id);
+        if (bucket) {
+          if (t.treatment_date) {
+            for (const s of bucket) if (!s.date || s.date >= t.treatment_date) heuristicDone++;
+          } else {
+            heuristicDone = bucket.length;
+          }
+        }
+      }
+      const done = linkedDone > 0 ? linkedDone : heuristicDone;
+      const progress = total ? Math.min(100, Math.round(done / total * 100)) : 0;
+      const patientRow = patientsById.get(t.patient_id);
+      const updatedAt = t.updated_at || t.created_at;
+      return {
+        id: t.treatment_id,
+        patient: t.patient_name || (patientRow && patientRow.name) || t.patient_id,
+        diag: t.diagnosis || "—",
+        therapist: t.therapist_name || t.therapist_id || "—",
+        goals: Array.isArray(t.goals) ? t.goals.length : 0,
+        progress,
+        sessions: total ? `${done}/${total}` : String(done),
+        status: t.status === "completed" || (progress >= 100 && total) ? "مكتمل"
+              : t.status === "draft" ? "مسودة" : "نشط",
+        updated: updatedAt ? new Date(updatedAt).toLocaleDateString("ar-EG") : "—",
+        p: patientRow || { patient_id: t.patient_id, name: t.patient_name || t.patient_id },
+        t,
+      };
+    });
+  }, [records, DATA.sessions, DATA.patients]);
+
+  // Single pass for the header/stat counts — previously plans.filter ran
+  // four separate times over the whole array on every render.
+  const planStats = React.useMemo(() => {
+    let active = 0, drafts = 0, done = 0, progressSum = 0;
+    for (const p of plans) {
+      if (p.status === "نشط") active++;
+      else if (p.status === "مسودة") drafts++;
+      else if (p.status === "مكتمل") done++;
+      progressSum += p.progress;
+    }
+    const avgProgress = plans.length ? Math.round(progressSum / plans.length) : 0;
+    return { active, drafts, done, avgProgress };
+  }, [plans]);
+  const avgProgress = planStats.avgProgress;
 
   // Only admins and doctors may delete a plan (mirrors the delete_treatment RPC).
   const role = (window.ME && window.ME.role) || "";
@@ -189,7 +227,7 @@ function Treatments({ go }) {
         <div>
           <div className="crumb"><span>الرئيسية</span><I.Chevron size={11}/><span>خطط العلاج</span></div>
           <div className="h1">خطط العلاج</div>
-          <div className="muted" style={{fontSize:13.5,marginTop:4}}>{plans.filter(p=>p.status==="نشط").length} نشط · {plans.filter(p=>p.status==="مسودة").length} مسودات · متوسط التقدم {avgProgress}%</div>
+          <div className="muted" style={{fontSize:13.5,marginTop:4}}>{planStats.active} نشط · {planStats.drafts} مسودات · متوسط التقدم {avgProgress}%</div>
         </div>
         <div className="page-actions">
           <button className="btn btn-secondary" onClick={()=>setTemplatesOpen(true)}><I.FileText size={14}/> القوالب</button>
@@ -198,8 +236,8 @@ function Treatments({ go }) {
       </div>
 
       <div className="grid-3" style={{marginBottom:18}}>
-        <StatCard label="خطط نشطة" value={plans.filter(p=>p.status==="نشط").length} accent="#7BBDE8" icon={<I.Clipboard size={15}/>}/>
-        <StatCard label="خطط مكتملة" value={String(plans.filter(p=>p.status==="مكتمل").length)} accent="#3FA984" icon={<I.Check size={15}/>}/>
+        <StatCard label="خطط نشطة" value={planStats.active} accent="#7BBDE8" icon={<I.Clipboard size={15}/>}/>
+        <StatCard label="خطط مكتملة" value={String(planStats.done)} accent="#3FA984" icon={<I.Check size={15}/>}/>
         <StatCard label="متوسط التقدّم" value={`${avgProgress}%`} accent="#7E6BD3" icon={<I.Activity size={15}/>}/>
       </div>
 

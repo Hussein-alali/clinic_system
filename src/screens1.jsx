@@ -499,12 +499,24 @@ function Patients({ go }) {
   const [layout, setLayout] = React.useState("table"); // table | grid
   const csvRef = React.useRef(null);
 
-  const myPatients = (window.scopePatients ? window.scopePatients(DATA.patients) : DATA.patients);
-  const filtered = myPatients.filter(p => {
-    if (statusFilter !== "الكل" && p.status !== statusFilter) return false;
-    if (search && !(p.name + p.id + p.diag).toLowerCase().includes(search.toLowerCase())) return false;
-    return true;
-  });
+  // Stable reference so unrelated re-renders (data-updated ticks that
+  // don't touch patients) don't force filtered/child memos to recompute.
+  const myPatients = React.useMemo(
+    () => window.scopePatients ? window.scopePatients(DATA.patients) : DATA.patients,
+    [DATA.patients]
+  );
+  const activeCount = React.useMemo(
+    () => myPatients.filter(p => p.status === "نشط").length,
+    [myPatients]
+  );
+  const filtered = React.useMemo(() => {
+    const q = search ? search.toLowerCase() : "";
+    return myPatients.filter(p => {
+      if (statusFilter !== "الكل" && p.status !== statusFilter) return false;
+      if (q && !((p.name || "") + (p.id || "") + (p.diag || "")).toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [myPatients, statusFilter, search]);
 
   if (view === "add") return <PatientAdd onCancel={()=>setView("list")} onSave={()=>setView("list")}/>;
   if (view === "detail" && selected) return <PatientDetail p={selected} onBack={()=>setView("list")} go={go}/>;
@@ -515,7 +527,7 @@ function Patients({ go }) {
         <div>
           <div className="crumb"><span>الرئيسية</span><I.Chevron size={11}/><span>المرضى</span></div>
           <div className="h1">المرضى</div>
-          <div className="muted" style={{fontSize:13.5,marginTop:4}}>{myPatients.length} سجل · {myPatients.filter(p=>p.status==="نشط").length} نشط</div>
+          <div className="muted" style={{fontSize:13.5,marginTop:4}}>{myPatients.length} سجل · {activeCount} نشط</div>
         </div>
         <div className="page-actions">
           <input ref={csvRef} type="file" accept=".csv" style={{display:"none"}} onChange={e=>{
