@@ -747,7 +747,10 @@ function EntityCombobox({
   }, []);
 
   // Open lifecycle: focus input, seed active index to the selection,
-  // wire outside-click / scroll / resize dismissal.
+  // wire outside-click dismissal, and REPOSITION (not dismiss) on
+  // viewport reflow. iOS Safari fires window "resize" and page "scroll"
+  // when the on-screen keyboard opens; dismissing on those events used
+  // to instantly close the panel and kill the keyboard on iPad/iPhone.
   React.useEffect(() => {
     if (!open) { setQuery(""); setActiveIndex(0); setScrollTop(0); return; }
     updateRect();
@@ -757,17 +760,22 @@ function EntityCombobox({
 
     const onDoc = e => { if (rootRef.current && !rootRef.current.contains(e.target)) setOpen(false); };
     const onKey = e => { if (e.key === "Escape") setOpen(false); };
-    const onAway = () => setOpen(false);
+    const onReflow = e => {
+      // Ignore scrolls that originate inside our own subtree (the user
+      // scrolling the result list, not the outer page moving under us).
+      if (e && e.type === "scroll" && rootRef.current && rootRef.current.contains(e.target)) return;
+      updateRect();
+    };
     document.addEventListener("mousedown", onDoc);
     document.addEventListener("keydown", onKey);
-    window.addEventListener("resize", onAway);
-    window.addEventListener("scroll", onAway, true);
+    window.addEventListener("resize", onReflow);
+    window.addEventListener("scroll", onReflow, true);
     return () => {
       clearTimeout(t);
       document.removeEventListener("mousedown", onDoc);
       document.removeEventListener("keydown", onKey);
-      window.removeEventListener("resize", onAway);
-      window.removeEventListener("scroll", onAway, true);
+      window.removeEventListener("resize", onReflow);
+      window.removeEventListener("scroll", onReflow, true);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);

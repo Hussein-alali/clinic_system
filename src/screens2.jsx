@@ -370,9 +370,15 @@ function TreatmentPlanCreate({ onCancel, onSave, template }) {
     });
   }
 
-  const patients = (window.scopePatients ? window.scopePatients(DATA.patients) : DATA.patients) || [];
+  // Stable references so PatientCombobox / TherapistCombobox don't see a
+  // new prop object every render — otherwise every kinetic:data-updated
+  // tick would rerender them even when the underlying data hasn't moved.
+  const patients = React.useMemo(
+    () => (window.scopePatients ? window.scopePatients(DATA.patients) : DATA.patients) || [],
+    [DATA.patients]
+  );
   const [patientId, setPatientId] = React.useState("");
-  const therapists = (DATA.therapists || []);
+  const therapists = React.useMemo(() => DATA.therapists || [], [DATA.therapists]);
   const [therapistId, setTherapistId] = React.useState("");
 
   // Expected end — derived from the start date plus either the recovery
@@ -1522,7 +1528,10 @@ function InvoiceModal({ invoice, onClose }) {
 }
 
 function NewInvoiceModal({ onClose }) {
-  const patients = (window.scopePatients ? window.scopePatients(DATA.patients) : DATA.patients) || [];
+  const patients = React.useMemo(
+    () => (window.scopePatients ? window.scopePatients(DATA.patients) : DATA.patients) || [],
+    [DATA.patients]
+  );
   const today = new Date().toISOString().slice(0,10);
   const dueDefault = new Date(Date.now() + 14*86400000).toISOString().slice(0,10);
   const [items, setItems] = React.useState([{ name:"", qty:1, price:0 }]);

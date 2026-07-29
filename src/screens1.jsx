@@ -3899,7 +3899,10 @@ function BookingFlow({ onDone }) {
 // patients are created on confirm with status "ملف غير مكتمل" so the
 // receptionist completes the file later (same policy as Quick Booking).
 function PatientStep({ picks, update }) {
-  const patients = (window.scopePatients ? window.scopePatients(DATA.patients) : DATA.patients) || [];
+  const patients = React.useMemo(
+    () => (window.scopePatients ? window.scopePatients(DATA.patients) : DATA.patients) || [],
+    [DATA.patients]
+  );
   const isNew = picks.patientMode === "new";
   const matched = isNew ? findPatientByPhone(picks.newPhone) : null;
   const selected = patients.find(p => (p.patient_id || p.id) === picks.patientId);
