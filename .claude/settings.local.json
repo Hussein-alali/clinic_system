@@ -67,7 +67,12 @@
       "Bash(awk -F: '$1<=5083 && $1>=4900')",
       "Bash(sed 's/ \\(.*//')",
       "Bash(python3 *)",
-      "Bash(grep -n \"state\\\\\\\\.name.*state\\\\\\\\.category\\\\|setTreatment\\\\|createTreatment\" /c/Users/bdalr/Desktop/clinksys/src/screens2.jsx)"
+      "Bash(grep -n \"state\\\\\\\\.name.*state\\\\\\\\.category\\\\|setTreatment\\\\|createTreatment\" /c/Users/bdalr/Desktop/clinksys/src/screens2.jsx)",
+      "Bash(PORT=3123 node *)",
+      "Bash(PORT=3131 node *)",
+      "Bash(taskkill //F //FI \"WINDOWTITLE eq node*\")",
+      "PowerShell(Stop-Process *)",
+      "PowerShell(Start-Process \"http://localhost:3131/\")"
     ]
   }
 }

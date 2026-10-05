@@ -1015,8 +1015,9 @@ function PatientEditModal({ patient, onClose, onSaved }) {
           </select>
         </Field>
         <Field label="التشخيص" span={2}>
-          <input className="input" value={form.diagnosis || ""} onChange={e=>set("diagnosis", e.target.value)}
-                 {...dis(canEdit.medical)}/>
+          <window.DiagnosisAutocomplete value={form.diagnosis || ""}
+            onChange={e=>set("diagnosis", e.target.value)}
+            {...dis(canEdit.medical)}/>
         </Field>
         <Field label="التاريخ المرضي" span={2}>
           <textarea className="input" style={{minHeight:60,padding:10,resize:"vertical"}}
@@ -1402,9 +1403,9 @@ function PatientTreatmentPlan({ p, t: tIn }) {
     return () => window.removeEventListener("kinetic:treatments-updated", onUpd);
   }, [reload]);
 
-  // Persist a partial payload onto THIS treatment record only — templates
-  // and other patients' plans are never touched (update_treatment RPC
-  // updates a single treatments row by primary key).
+  // Persist a partial payload onto THIS treatment record only — other
+  // patients' plans are never touched (update_treatment RPC updates a
+  // single treatments row by primary key).
   async function persist(payload, okMsg) {
     if (!t || !window.TreatmentsAPI) return false;
     const res = await window.TreatmentsAPI.update(t.treatment_id, payload);
@@ -1675,7 +1676,8 @@ function PatientTreatmentPlan({ p, t: tIn }) {
           </>}>
           <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr",gap:10}}>
             <Field label="التشخيص">
-              <input className="input" value={editing.diagnosis} onChange={e=>setEditing({...editing, diagnosis:e.target.value})}/>
+              <window.DiagnosisAutocomplete value={editing.diagnosis}
+                onChange={e=>setEditing({...editing, diagnosis:e.target.value})}/>
             </Field>
             <Field label="الجزء المستهدف">
               <input className="input" value={editing.body_part} onChange={e=>setEditing({...editing, body_part:e.target.value})}/>
@@ -2132,7 +2134,7 @@ function FormMedical({ form, setField }) {
       <div className="h3" style={{marginBottom:14}}>البيانات MedicalInformation</div>
       <div className="rgrid c-sm" style={{"--gtc":"repeat(2,1fr)",gap:14}}>
         <Field label="الشكوى الرئيسية" required span={2}><textarea className="input" style={{height:70,padding:10,resize:"vertical"}} placeholder="e.g. ألم أسفل الظهر يمتد إلى الساق اليسرى, worse in AM" value={form.complaint} onChange={e=>setField("complaint", e.target.value)}/></Field>
-        <Field label="التشخيص" required span={2}><input className="input" placeholder="مثال: انزلاق غضروفي L4–L5" value={form.diagnosis} onChange={e=>setField("diagnosis", e.target.value)}/></Field>
+        <Field label="التشخيص" required span={2}><window.DiagnosisAutocomplete placeholder="e.g. L4–L5 disc herniation" value={form.diagnosis} onChange={e=>setField("diagnosis", e.target.value)}/></Field>
         <Field label="أمراض مزمنة diseases"><input className="input" placeholder="النوع to add tags" value={form.chronic} onChange={e=>setField("chronic", e.target.value)}/></Field>
         <Field label="عمليات سابقة"><input className="input" placeholder="النوع to add tags" value={form.surgeries} onChange={e=>setField("surgeries", e.target.value)}/></Field>
         <Field label="حساسية"><input className="input" placeholder="مثال: بنسلين" value={form.allergies} onChange={e=>setField("allergies", e.target.value)}/></Field>

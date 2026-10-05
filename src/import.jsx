@@ -357,8 +357,8 @@ function HistoricalImportPage() {
             </Field>
 
             <Field label="التشخيص / نوع الحالة" span={2}>
-              <input name="diagnosis" className="input" placeholder="مثال: انزلاق غضروفي L4–L5"
-                value={form.diagnosis} onChange={e => set("diagnosis", e.target.value)} autoComplete="off" />
+              <window.DiagnosisAutocomplete name="diagnosis" placeholder="e.g. L4–L5 disc herniation"
+                value={form.diagnosis} onChange={e => set("diagnosis", e.target.value)} />
             </Field>
 
             <Field label="الطبيب / الأخصائي المسؤول">

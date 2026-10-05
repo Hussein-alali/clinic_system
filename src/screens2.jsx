@@ -99,8 +99,6 @@ function Treatments({ go }) {
   window.useDataVersion && window.useDataVersion();
   const [view, setView] = React.useState("list");
   const [selected, setSelected] = React.useState(null);
-  const [templatesOpen, setTemplatesOpen] = React.useState(false);
-  const [template, setTemplate] = React.useState(null);
   const [records, setRecords] = React.useState([]);
   const [loadingRecords, setLoadingRecords] = React.useState(true);
 
@@ -215,11 +213,7 @@ function Treatments({ go }) {
   }
 
   if (view === "detail" && selected) return <TreatmentPlanDetail plan={selected} onBack={()=>setView("list")} canDelete={canDelete} onDelete={()=>onDeletePlan(selected)}/>;
-  if (view === "create") return <TreatmentPlanCreate template={template} onCancel={()=>{setTemplate(null);setView("list");}} onSave={()=>{
-    if (window.showToast) window.showToast("تم نشر خطة العلاج", "success");
-    setTemplate(null);
-    setView("list");
-  }}/>;
+  if (view === "physio-session") return <PhysioSessionForm onBack={()=>setView("list")}/>;
 
   return (
     <Page>
@@ -230,8 +224,7 @@ function Treatments({ go }) {
           <div className="muted" style={{fontSize:13.5,marginTop:4}}>{planStats.active} نشط · {planStats.drafts} مسودات · متوسط التقدم {avgProgress}%</div>
         </div>
         <div className="page-actions">
-          <button className="btn btn-secondary" onClick={()=>setTemplatesOpen(true)}><I.FileText size={14}/> القوالب</button>
-          <button className="btn btn-blue" onClick={()=>setView("create")}><I.Plus size={14}/> خطة جديدة</button>
+          <button className="btn btn-blue" onClick={()=>setView("physio-session")}><I.Activity size={14}/> تشخيص</button>
         </div>
       </div>
 
@@ -247,7 +240,7 @@ function Treatments({ go }) {
           <thead><tr><th>الخطة</th><th>المريض</th><th>التشخيص</th><th>الأخصائي</th><th>التقدّم</th><th>الجلسات</th><th>الحالة</th><th>آخر تحديث</th>{canDelete && <th></th>}</tr></thead>
           <tbody>
             {plans.length===0 && !loadingRecords && (
-              <tr><td colSpan={canDelete?9:8}><EmptyState icon={<I.Clipboard size={22}/>} title="لا خطط علاج بعد" body="أنشئ خطة جديدة أو استخدم أحد القوالب لتظهر هنا."/></td></tr>
+              <tr><td colSpan={canDelete?9:8}><EmptyState icon={<I.Clipboard size={22}/>} title="لا خطط علاج بعد" body="ستظهر خطط العلاج هنا بعد إنشائها."/></td></tr>
             )}
             {plans.map(p=>(
               <tr key={p.id} data-clickable="true" tabIndex={0} onClick={()=>{setSelected(p);setView("detail")}} onKeyDown={e=>{ if(e.key==="Enter"||e.key===" "){e.preventDefault();setSelected(p);setView("detail");} }}>
@@ -284,25 +277,6 @@ function Treatments({ go }) {
         </table>
         </div>
       </div>
-      {templatesOpen && (
-        <TemplatesLibraryModal
-          pickerOnly
-          onClose={()=>setTemplatesOpen(false)}
-          onUse={async (t)=>{
-            setTemplatesOpen(false);
-            // Fetch the FULL template row (all fields + current version) so
-            // the treatment form opens with every value pre-populated.
-            let full = t;
-            try {
-              const res = await window.Templates.get(t.template_id);
-              if (res && res.template) full = res.template;
-            } catch(_) {}
-            setTemplate(full);
-            setView("create");
-            if(window.showToast) window.showToast(`تم تحميل القالب: ${full.name}`, "success");
-          }}
-        />
-      )}
     </Page>
   );
 }
@@ -334,317 +308,375 @@ function TreatmentPlanDetail({ plan, onBack, canDelete, onDelete }) {
   );
 }
 
-function TreatmentPlanCreate({ onCancel, onSave, template }) {
+// ═══════════════════════════════════════════════════════════════════
+// PhysioSessionForm — self-contained physiotherapy session form added
+// inside خطط العلاج. Captures therapist/patient, diagnosis, traction
+// toggles, modalities, manual techniques, and interactive body
+// locations. Markers + form state are persisted per patient in
+// localStorage so reopening the form restores the last session.
+// ═══════════════════════════════════════════════════════════════════
+const PHYSIO_MODALITIES = [
+  "TENS / FS / IF",
+  "H.P / ICE",
+  "Dry / Wet Cupping",
+  "Chirogum",
+  "Dry Needling",
+  "Electro Needling",
+  "Massage Gun",
+  "Laser",
+];
+
+const PHYSIO_EMPTY = {
+  diagnosis: "",
+  cervical:  { on: false, mode: null },  // supine | sitting
+  thll:      { on: false, mode: null },  // unilat | Bilat
+  thpl:      { on: false, mode: null },  // flat   | 90/90
+  shortWave: false,
+  tractionNotes: "",
+  modalities: {},                        // { [name]: true }
+  modalitiesNotes: "",
+  nGlide: false,
+  nGlideNotes: "",
+  msRelease: "",
+  positioning: "",
+  exercises: "",
+  manualNotes: "",
+  markers: [],                           // [{ view, x, y }]
+};
+
+function physioStoreKey(patientId) {
+  return `physio-session:${patientId || "_draft"}`;
+}
+
+// Stable helpers at module scope — if these were defined inside
+// PhysioSessionForm, every state update would create new function refs
+// and React would unmount+remount every child (including the focused
+// textarea), kicking the user out of writing mode on each keystroke.
+const PhysioCard = ({ title, children }) => (
+  <div style={{
+    background: "var(--ink-50)",
+    border: "1px solid var(--ink-200)",
+    borderRadius: 14,
+    padding: 18,
+    marginBottom: 16,
+  }}>
+    <div style={{
+      fontSize: 15, fontWeight: 700, color: "var(--ink-900)",
+      textAlign: "right", marginBottom: 14,
+      borderBottom: "1px solid var(--ink-200)", paddingBottom: 8,
+    }}>{title}</div>
+    {children}
+  </div>
+);
+
+const PhysioLabelRow = ({ label, required, control }) => (
+  <div style={{display:"flex", alignItems:"center", gap:12, padding:"6px 0"}}>
+    <div style={{flex:1, textAlign:"right", fontSize:13, fontWeight:500, color:"var(--ink-900)"}}>
+      {label}{required && <span style={{color:"var(--red)", marginInlineStart:4}}>*</span>}
+    </div>
+    <div style={{display:"flex", gap:6, alignItems:"center"}}>{control}</div>
+  </div>
+);
+
+const PhysioPill = ({ on, disabled, children, onClick }) => (
+  <button type="button" onClick={onClick} disabled={disabled}
+    style={{
+      padding: "6px 14px", borderRadius: 999, fontSize: 12, fontWeight: 600,
+      border: "1px solid " + (on ? "var(--blue-500)" : "var(--ink-200)"),
+      background: on ? "var(--blue-500)" : "#fff",
+      color: on ? "#fff" : "var(--ink-700)",
+      cursor: disabled ? "not-allowed" : "pointer",
+      opacity: disabled ? 0.5 : 1,
+    }}>{children}</button>
+);
+
+const PhysioChk = ({ checked, onChange, children }) => (
+  <label style={{display:"flex", alignItems:"center", gap:10, cursor:"pointer", flex:1}}>
+    <input type="checkbox" checked={!!checked} onChange={e=>onChange(e.target.checked)}
+      style={{width:16, height:16, accentColor:"var(--blue-500)", cursor:"pointer", flexShrink:0}}/>
+    <span style={{flex:1, textAlign:"right", fontSize:13, fontWeight:500, color:"var(--ink-900)"}}>
+      {children}
+    </span>
+  </label>
+);
+
+const PhysioTA = (props) => (
+  <textarea {...props}
+    style={{
+      width:"100%", minHeight: props.rows ? undefined : 70,
+      padding: 10, borderRadius: 10, border: "1px solid var(--ink-200)",
+      background: "#fff", resize: "vertical", textAlign: "right",
+      direction: "rtl", fontFamily: "inherit", fontSize: 13,
+      outline: "none",
+      ...(props.style || {}),
+    }}/>
+);
+
+function PhysioSessionForm({ onBack }) {
   window.useDataVersion && window.useDataVersion();
-  // `template` may be a plain diagnosis string (legacy) or a full DB
-  // template object. EVERY template field is hydrated into editable
-  // state — the therapist reviews and optionally edits every value
-  // before saving. Only patient + therapist stay blank.
-  const tplObj = (template && typeof template === "object") ? template : null;
-  const [tplName, setTplName] = React.useState(
-    tplObj ? (tplObj.name || "") : (typeof template === "string" ? template : "")
-  );
-  const [category, setCategory] = React.useState((tplObj && tplObj.category) || "");
-  const [bodyPart, setBodyPart] = React.useState((tplObj && tplObj.body_part) || "");
-  const [diag, setDiag] = React.useState(
-    (tplObj && tplObj.diagnosis) || (typeof template === "string" ? template : "")
-  );
-  const [goalsText, setGoalsText] = React.useState(() =>
-    (tplObj && Array.isArray(tplObj.goals)) ? tplObj.goals.join("\n") : ""
-  );
-  const [exercises, setExercises] = React.useState(() =>
-    (tplObj && Array.isArray(tplObj.exercises))
-      ? tplObj.exercises.map(e => ({
-          name: e.name || '', description: e.description || '',
-          sets: e.sets || '', reps: e.reps || '', duration: e.duration || '',
-          hold_time: e.hold_time || '', rest_time: e.rest_time || '',
-          equipment: e.equipment || '', notes: e.notes || '',
-        }))
-      : []
-  );
-  const [methods, setMethods] = React.useState(() =>
-    (tplObj && Array.isArray(tplObj.methods))
-      ? tplObj.methods.map(m => (m && (m.name || m)) || '').filter(Boolean)
-      : []
-  );
-  const [homeInstr, setHomeInstr] = React.useState((tplObj && tplObj.home_instructions) || "");
-  const [notes, setNotes] = React.useState((tplObj && tplObj.notes) || "");
-  const [warnings, setWarnings] = React.useState((tplObj && tplObj.warnings) || "");
-  const [followupInstr, setFollowupInstr] = React.useState((tplObj && tplObj.followup_instructions) || "");
-  const [totalSessions, setTotalSessions] = React.useState(
-    tplObj && tplObj.estimated_sessions != null ? String(tplObj.estimated_sessions) : "10"
-  );
-  const [frequency, setFrequency] = React.useState(
-    tplObj && tplObj.weekly_frequency != null ? String(tplObj.weekly_frequency) : "2"
-  );
-  const [expectedRecoveryDays, setExpectedRecoveryDays] = React.useState(
-    tplObj && tplObj.expected_recovery_days != null ? String(tplObj.expected_recovery_days) : ""
-  );
-  const [startDate, setStartDate] = React.useState(() => new Date().toISOString().slice(0, 10));
-  const [saving, setSaving] = React.useState(false);
-  const [txModalOpen, setTxModalOpen] = React.useState(false);
 
-  const toggleMethod = (m) => setMethods(list => list.includes(m) ? list.filter(x=>x!==m) : [...list, m]);
-
-  function addExercise() {
-    setExercises(list => [...list, {
-      name:'', description:'', sets:'', reps:'', duration:'',
-      hold_time:'', rest_time:'', equipment:'', notes:'',
-    }]);
-  }
-  function setExercise(i, patch) {
-    setExercises(list => list.map((e,idx)=>idx===i?{...e,...patch}:e));
-  }
-  function removeExercise(i) {
-    setExercises(list => list.filter((_,idx)=>idx!==i));
-  }
-  function moveExercise(i, dir) {
-    setExercises(list => {
-      const arr = list.slice();
-      const j = i + dir;
-      if (j < 0 || j >= arr.length) return arr;
-      [arr[i], arr[j]] = [arr[j], arr[i]];
-      return arr;
-    });
-  }
-
-  // Stable references so PatientCombobox / TherapistCombobox don't see a
-  // new prop object every render — otherwise every kinetic:data-updated
-  // tick would rerender them even when the underlying data hasn't moved.
-  const patients = React.useMemo(
+  const patients   = React.useMemo(
     () => (window.scopePatients ? window.scopePatients(DATA.patients) : DATA.patients) || [],
     [DATA.patients]
   );
-  const [patientId, setPatientId] = React.useState("");
   const therapists = React.useMemo(() => DATA.therapists || [], [DATA.therapists]);
+
+  const [patientId, setPatientId]     = React.useState("");
   const [therapistId, setTherapistId] = React.useState("");
+  const [form, setForm] = React.useState(PHYSIO_EMPTY);
 
-  // Expected end — derived from the start date plus either the recovery
-  // window or the sessions/frequency pair. Display-only.
-  const expectedEnd = React.useMemo(() => {
-    const start = startDate ? new Date(startDate + "T00:00:00") : null;
-    if (!start || isNaN(start)) return "—";
-    let days = expectedRecoveryDays ? Number(expectedRecoveryDays) : 0;
-    if (!days) {
-      const total = Number(totalSessions) || 0;
-      const freq  = Number(frequency) || 0;
-      if (total && freq) days = Math.ceil(total / freq) * 7;
-    }
-    if (!days) return "—";
-    const end = new Date(start.getTime() + days * 86400000);
-    return end.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-  }, [startDate, totalSessions, frequency, expectedRecoveryDays]);
+  // Load any previously-saved session for this patient (markers +
+  // everything else). Blank patient falls back to a shared draft slot.
+  React.useEffect(() => {
+    try {
+      const raw = localStorage.getItem(physioStoreKey(patientId));
+      if (raw) {
+        const saved = JSON.parse(raw);
+        setForm({ ...PHYSIO_EMPTY, ...saved });
+        return;
+      }
+    } catch (_) {}
+    setForm(PHYSIO_EMPTY);
+  }, [patientId]);
 
-  // Save the treatment as a real PostgreSQL record. The doctor supplies
-  // patient + therapist; every other field is already filled (from the
-  // template or edited by hand). Saving NEVER touches the template —
-  // the RPC links back via template_id + template_version for audit.
-  async function doSaveTreatment(statusVal) {
-    if (saving) return;
-    if (!patientId)   { if (window.showToast) window.showToast("اختر المريض", "error"); return; }
-    if (!therapistId) { if (window.showToast) window.showToast("اختر الأخصائي المسؤول", "error"); return; }
-    if (!diag.trim()) { if (window.showToast) window.showToast("التشخيص مطلوب", "error"); return; }
-    setSaving(true);
-    const cleanExercises = exercises
-      .map(e => ({ ...e, name: String(e.name || '').trim() }))
-      .filter(e => e.name);
-    const payload = {
-      patient_id:   patientId,
-      therapist_id: therapistId,
-      template_id:  (tplObj && tplObj.template_id) || null,
-      name:         (tplName || diag.trim()),
-      category:     category.trim() || null,
-      body_part:    bodyPart.trim() || null,
-      diagnosis:    diag.trim(),
-      goals:        goalsText.split("\n").map(g => g.trim()).filter(Boolean),
-      exercises:    cleanExercises,
-      methods:      methods.map(name => ({ name })),
-      home_instructions:      homeInstr,
-      notes,
-      warnings,
-      followup_instructions:  followupInstr,
-      estimated_sessions:     totalSessions === "" ? null : Number(totalSessions),
-      weekly_frequency:       frequency === "" ? null : Number(frequency),
-      expected_recovery_days: expectedRecoveryDays === "" ? null : Number(expectedRecoveryDays),
-      start_date:   startDate || null,
-      status:       statusVal,
-    };
-    const res = await window.TreatmentsAPI.create(payload);
-    setSaving(false);
-    if (!res.ok) {
-      if (window.showToast) window.showToast(res.error || "تعذّر حفظ خطة العلاج", "error");
-      return;
-    }
-    if (statusVal === "draft") {
-      if (window.showToast) window.showToast("تم الحفظ كمسودة", "success");
-      onCancel();
-    } else {
-      onSave();
+  const update = (patch) => setForm(f => ({ ...f, ...patch }));
+
+  function toggleModality(name) {
+    setForm(f => {
+      const next = { ...f.modalities };
+      if (next[name]) delete next[name]; else next[name] = true;
+      return { ...f, modalities: next };
+    });
+  }
+
+  function setTractionRow(key, patch) {
+    setForm(f => ({ ...f, [key]: { ...f[key], ...patch } }));
+  }
+
+  function save() {
+    if (!therapistId) { window.showToast && window.showToast("اختر الأخصائي المسؤول", "error"); return; }
+    if (!patientId)   { window.showToast && window.showToast("اختر المريض", "error"); return; }
+    try {
+      localStorage.setItem(physioStoreKey(patientId), JSON.stringify(form));
+      window.showToast && window.showToast("تم حفظ نموذج الجلسة", "success");
+    } catch (_) {
+      window.showToast && window.showToast("تعذّر الحفظ محليًا", "error");
     }
   }
 
-  // Load the shared library on first mount. Idempotent — the API skips
-  // the network round-trip if DATA.treatmentMethods is already warm.
-  React.useEffect(() => {
-    if (window.TxMethods) window.TxMethods.list().catch(()=>{});
-  }, []);
+  const tractionRow = (key, label, options) => {
+    const row = form[key];
+    return (
+      <PhysioLabelRow label={<PhysioChk checked={row.on}
+        onChange={on => setTractionRow(key, { on, mode: on ? row.mode : null })}>{label}</PhysioChk>}
+        control={options.map(o => (
+          <PhysioPill key={o} disabled={!row.on} on={row.mode === o}
+            onClick={() => setTractionRow(key, { mode: row.mode === o ? null : o })}>
+            {o}
+          </PhysioPill>
+        ))}
+      />
+    );
+  };
 
-  // Library from DB (fallback to seed labels if hydration hasn't happened
-  // yet — those seed labels match the DB seed so selection stays stable).
-  const dbMethods = (DATA.treatmentMethods || []).filter(m => m.status !== "archived");
-  const FALLBACK = ["علاج يدوي","تدريبات قوة","تمارين إطالة","علاج حراري",
-                    "تحفيز كهربي","موجات فوق صوتية","علاج مائي","حجامة","وخز جاف"];
-  // Sort by display_order (nulls last) then name so the doctor gets a
-  // stable, curated chip order that matches the admin's library setup.
-  const sortedDbMethods = [...dbMethods].sort((a, b) => {
-    const ao = a.display_order, bo = b.display_order;
-    const av = (ao == null) ? Number.POSITIVE_INFINITY : Number(ao);
-    const bv = (bo == null) ? Number.POSITIVE_INFINITY : Number(bo);
-    if (av !== bv) return av - bv;
-    return String(a.name || "").localeCompare(String(b.name || ""), "ar");
-  });
-  const activeMethods = sortedDbMethods.length
-    ? sortedDbMethods.map(m => ({ id: m.method_id || m.id, name: m.name, category: m.category, icon: m.icon || null, color: m.color || null }))
-    : FALLBACK.map(n => ({ id: n, name: n }));
-
-  const canManageTx = ((window.ME && window.ME.role) === "مدير")
-                   || ((window.ME && window.ME.role) === "طبيب");
   return (
     <Page>
-      <div className="crumb" style={{cursor:"pointer"}} onClick={onCancel}><span>خطط العلاج</span><I.Chevron size={11}/><span style={{color:"var(--ink-700)"}}>خطة جديدة</span></div>
+      <div className="crumb" style={{cursor:"pointer"}} onClick={onBack}>
+        <span>خطط العلاج</span><I.Chevron size={11}/>
+        <span style={{color:"var(--ink-700)"}}>تشخيص</span>
+      </div>
       <div className="page-head">
-        <div className="h1">إنشاء خطة علاج{tplName ? ` — ${tplName}` : ""}</div>
+        <div className="h1">تشخيص</div>
         <div className="page-actions">
-          <button className="btn btn-ghost" onClick={onCancel} disabled={saving}>إلغاء</button>
-          <button className="btn btn-secondary" onClick={()=>doSaveTreatment("draft")} disabled={saving}>حفظ كمسودة</button>
-          <button className="btn btn-blue" onClick={()=>doSaveTreatment("active")} disabled={saving}><I.Check size={13}/> {saving ? "جارٍ الحفظ…" : "نشر الخطة"}</button>
+          <button className="btn btn-ghost" onClick={onBack}>رجوع</button>
+          <button className="btn btn-blue" onClick={save}><I.Check size={13}/> حفظ الجلسة</button>
         </div>
       </div>
 
-      <div className="rgrid c-lg" style={{"--gtc":"1.4fr 1fr"}}>
-        <div className="card card-pad">
-          <div className="h3" style={{marginBottom:14}}>تفاصيل الخطة</div>
-          <div className="rgrid c-sm" style={{"--gtc":"repeat(2,1fr)",gap:14}}>
-            <Field label="مريض" required>
-              <PatientCombobox value={patientId} onChange={setPatientId} patients={patients}/>
-            </Field>
-            <Field label="الأخصائي المسؤول" required>
-              <TherapistCombobox value={therapistId} onChange={setTherapistId} therapists={therapists}/>
-            </Field>
-            <Field label="اسم الخطة" span={2}>
-              <input className="input" value={tplName} onChange={e=>setTplName(e.target.value)} placeholder="اسم القالب أو التشخيص"/>
-            </Field>
-            <Field label="الفئة"><CategoryCombobox value={category} onChange={setCategory}/></Field>
-            <Field label="الجزء المستهدف"><input className="input" value={bodyPart} onChange={e=>setBodyPart(e.target.value)}/></Field>
-            <Field label="التشخيص" required span={2}><input className="input" value={diag} onChange={e=>setDiag(e.target.value)}/></Field>
-            <Field label="الأهداف (هدف بكل سطر)" span={2}><textarea className="input" style={{height:100,padding:10}} value={goalsText} onChange={e=>setGoalsText(e.target.value)}/></Field>
-            <Field label="طرق العلاج" span={2}>
-              <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-                {activeMethods.map(m=>{
-                  const on = methods.includes(m.name);
-                  const IconCmp = m.icon && I[m.icon];
-                  // When the method has a color, use it for selected background
-                  // and border. Otherwise fall back to the default blue accent.
-                  const bg = on
-                    ? (m.color ? `${m.color}22` : "var(--blue-50)")
-                    : "#fff";
-                  const bd = on
-                    ? (m.color || "var(--blue-500)")
-                    : "var(--ink-200)";
-                  const fg = on
-                    ? (m.color || "var(--blue-900)")
-                    : "var(--ink-700)";
-                  return (
-                    <button key={m.id} type="button" onClick={()=>toggleMethod(m.name)} className="btn btn-secondary"
-                      style={{fontSize:12,padding:"6px 10px",background:bg,borderColor:bd,color:fg,display:"inline-flex",alignItems:"center",gap:6}}>
-                      {on
-                        ? <span style={{fontWeight:600}}>✓</span>
-                        : (IconCmp ? <IconCmp size={12}/> : <span>+</span>)}
-                      {m.name}
-                    </button>
-                  );
-                })}
-                {methods.filter(n => !activeMethods.some(m => m.name === n)).map(n => (
-                  <span key={n} style={{fontSize:12,padding:"6px 10px",background:"#fff",border:"1px dashed var(--blue-500)",borderRadius:8,color:"var(--blue-900)",display:"inline-flex",alignItems:"center",gap:6}}>
-                    <span style={{fontWeight:600}}>✓</span>{n}
-                    <button type="button" className="btn btn-ghost" style={{padding:"0 2px"}} onClick={()=>toggleMethod(n)}><I.X size={10}/></button>
-                  </span>
-                ))}
-                {canManageTx && (
-                  <button
-                    type="button"
-                    onClick={()=>setTxModalOpen(true)}
-                    className="btn btn-secondary"
-                    style={{fontSize:12,padding:"6px 10px",borderStyle:"dashed",color:"var(--blue-700)"}}
-                  >
-                    <I.Plus size={12}/> طرق علاج أخرى
-                  </button>
-                )}
+      <div style={{maxWidth: 980, margin: "0 auto"}}>
+
+        {/* 1. Patient & Therapist */}
+        <PhysioCard title="المريض والأخصائي">
+          <div className="rgrid c-sm" style={{"--gtc":"repeat(2,1fr)", gap:14}}>
+            <div>
+              <div className="label" style={{color:"var(--ink-900)", textAlign:"right"}}>
+                الأخصائي المسؤول <span style={{color:"var(--red)"}}>*</span>
               </div>
-            </Field>
-            <div style={{gridColumn:"1 / -1"}}>
-              <TemplateExercises
-                list={exercises}
-                onAdd={addExercise} onChange={setExercise}
-                onRemove={removeExercise} onMove={moveExercise}
-              />
+              <TherapistCombobox value={therapistId} onChange={setTherapistId}
+                therapists={therapists} placeholder="Select therapist…"/>
             </div>
-            <Field label="تعليمات المريض في المنزل" span={2}>
-              <textarea className="input" style={{height:70,padding:10}} value={homeInstr} onChange={e=>setHomeInstr(e.target.value)}/>
-            </Field>
-            <Field label="تحذيرات" span={2}>
-              <textarea className="input" style={{height:60,padding:10}} value={warnings} onChange={e=>setWarnings(e.target.value)}/>
-            </Field>
-            <Field label="تعليمات المتابعة" span={2}>
-              <textarea className="input" style={{height:60,padding:10}} value={followupInstr} onChange={e=>setFollowupInstr(e.target.value)}/>
-            </Field>
-            <Field label="ملاحظات داخلية" span={2}>
-              <textarea className="input" style={{height:80,padding:10}} placeholder="ملاحظات لفريق الرعاية" value={notes} onChange={e=>setNotes(e.target.value)}/>
-            </Field>
+            <div>
+              <div className="label" style={{color:"var(--ink-900)", textAlign:"right"}}>
+                المريض <span style={{color:"var(--red)"}}>*</span>
+              </div>
+              <PatientCombobox value={patientId} onChange={setPatientId}
+                patients={patients} placeholder="Search patient by name or ID…"/>
+            </div>
           </div>
-        </div>
-        <div className="card card-pad">
-          <div className="h3" style={{marginBottom:14}}>الجدولة</div>
-          <Field label="إجمالي الجلسات"><input className="input" type="number" value={totalSessions} onChange={e=>setTotalSessions(e.target.value)}/></Field>
-          <div style={{height:12}}/>
-          <Field label="التكرار"><select className="input" value={frequency} onChange={e=>setFrequency(e.target.value)}>
-            <option value="2">2× per week</option>
-            <option value="1">1× per week</option>
-            <option value="3">3× per week</option>
-            {!["","1","2","3"].includes(frequency) && <option value={frequency}>{frequency}× per week</option>}
-          </select></Field>
-          <div style={{height:12}}/>
-          <Field label="مدّة التعافي المتوقعة (أيام)">
-            <input className="input" type="number" value={expectedRecoveryDays} onChange={e=>setExpectedRecoveryDays(e.target.value)}/>
-          </Field>
-          <div style={{height:12}}/>
-          <Field label="تاريخ البدء"><input className="input" type="date" value={startDate} onChange={e=>setStartDate(e.target.value)}/></Field>
-          <div style={{height:12}}/>
-          <Field label="النهاية المتوقعة"><input className="input" disabled value={expectedEnd}/></Field>
+        </PhysioCard>
 
-          <div style={{padding:14,background:"var(--blue-50)",border:"1px solid var(--blue-100)",borderRadius:12,marginTop:18,fontSize:12.5}}>
-            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
-              <I.Sparkle size={13} style={{color:"var(--blue-700)"}}/>
-              <strong style={{color:"var(--blue-900)"}}>اقتراح ذكي</strong>
-            </div>
-            المرضى ذوو التشخيصات المشابهة يحتاجون في المتوسط <strong>8.4 جلسة</strong> لبلوغ الهدف. ننصح بـ 10 جلسات كهامش أمان.
+        {/* 2. Diagnosis */}
+        <PhysioCard title="التشخيص">
+          <window.DiagnosisAutocomplete multiline value={form.diagnosis}
+            onChange={e=>update({diagnosis:e.target.value})}
+            placeholder="Clinical diagnosis" style={{minHeight:110, fontSize:13}}/>
+        </PhysioCard>
+
+        {/* 3. Traction */}
+        <PhysioCard title="Traction">
+          {tractionRow("cervical", "Cervical", ["supine", "sitting"])}
+          {tractionRow("thll",     "TH, LL",   ["unilat", "Bilat"])}
+          {tractionRow("thpl",     "TH, PL",   ["flat",   "90/90"])}
+          <PhysioLabelRow label={
+            <PhysioChk checked={form.shortWave}
+              onChange={v => update({shortWave:v})}>Short wave</PhysioChk>
+          } control={null}/>
+          <div style={{marginTop:10}}>
+            <div className="label" style={{color:"var(--ink-900)", textAlign:"right"}}>Traction notes</div>
+            <PhysioTA value={form.tractionNotes} onChange={e=>update({tractionNotes:e.target.value})}/>
           </div>
-        </div>
+        </PhysioCard>
+
+        {/* 4. Modalities */}
+        <PhysioCard title="Modalities">
+          <div style={{display:"flex", flexDirection:"column", gap:4}}>
+            {PHYSIO_MODALITIES.map(name => (
+              <PhysioLabelRow key={name} label={
+                <PhysioChk checked={!!form.modalities[name]}
+                  onChange={()=>toggleModality(name)}>{name}</PhysioChk>
+              } control={null}/>
+            ))}
+          </div>
+          <div style={{marginTop:12}}>
+            <div className="label" style={{color:"var(--ink-900)", textAlign:"right"}}>Modalities notes</div>
+            <PhysioTA value={form.modalitiesNotes} onChange={e=>update({modalitiesNotes:e.target.value})}/>
+          </div>
+        </PhysioCard>
+
+        {/* 5. Manual Techniques */}
+        <PhysioCard title="Manual Techniques">
+          <PhysioLabelRow
+            label={<PhysioChk checked={form.nGlide}
+              onChange={v=>update({nGlide:v})}>N. Glide</PhysioChk>}
+            control={
+              <input className="input" value={form.nGlideNotes}
+                onChange={e=>update({nGlideNotes:e.target.value})}
+                disabled={!form.nGlide}
+                placeholder="N. Glide notes"
+                style={{width:260, textAlign:"right", opacity: form.nGlide ? 1 : 0.5}}/>
+            }/>
+          <div style={{height:8}}/>
+          <div className="label" style={{color:"var(--ink-900)", textAlign:"right"}}>Ms Release</div>
+          <input className="input" value={form.msRelease}
+            onChange={e=>update({msRelease:e.target.value})}
+            style={{textAlign:"right"}}/>
+          <div style={{height:10}}/>
+          <div className="label" style={{color:"var(--ink-900)", textAlign:"right"}}>Positioning</div>
+          <input className="input" value={form.positioning}
+            onChange={e=>update({positioning:e.target.value})}
+            style={{textAlign:"right"}}/>
+          <div style={{height:10}}/>
+          <div className="label" style={{color:"var(--ink-900)", textAlign:"right"}}>
+            Ex's, Stretching, Mobilization, Manipulation
+          </div>
+          <PhysioTA value={form.exercises} onChange={e=>update({exercises:e.target.value})}/>
+          <div style={{height:10}}/>
+          <div className="label" style={{color:"var(--ink-900)", textAlign:"right"}}>Manual Techniques notes</div>
+          <PhysioTA value={form.manualNotes} onChange={e=>update({manualNotes:e.target.value})}/>
+        </PhysioCard>
+
+        {/* 6. Treatment Plans — Interactive Body Diagram */}
+        <PhysioCard title="Treatment Plans">
+          <div style={{fontSize:12.5, color:"var(--ink-500)", textAlign:"right", marginBottom:10}}>
+            اضغط على أي موضع لإضافة علامة. اضغط على علامة موجودة لإزالتها.
+          </div>
+          <BodyDiagram
+            markers={form.markers}
+            onChange={markers => update({ markers })}
+          />
+          <div style={{fontSize:12, color:"var(--ink-500)", textAlign:"right", marginTop:10}}>
+            المواضع المحددة: {form.markers.length}
+          </div>
+        </PhysioCard>
+
       </div>
-
-      {txModalOpen && (
-        <TxMethodModal
-          onClose={()=>setTxModalOpen(false)}
-          onSaved={(m) => {
-            // Auto-select the newly created method so it's already part of
-            // the plan when the doctor closes the modal.
-            if (m && m.name && !methods.includes(m.name)) {
-              setMethods(list => [...list, m.name]);
-            }
-          }}
-        />
-      )}
     </Page>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// BodyDiagram — single-image overlay with percentage-based markers.
+// The image contains 4 figures in a horizontal row; the x% band
+// determines `view`. Click/tap adds a marker; clicking near an
+// existing one (within HIT_RADIUS %) removes it.
+// ═══════════════════════════════════════════════════════════════════
+function BodyDiagram({ markers, onChange }) {
+  const wrapRef = React.useRef(null);
+  const HIT_RADIUS = 3; // percent of image dimension
+
+  function pointFromEvent(e) {
+    const el = wrapRef.current;
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    const pt = (e.changedTouches && e.changedTouches[0])
+            || (e.touches && e.touches[0])
+            || e;
+    if (pt.clientX == null) return null;
+    const x = ((pt.clientX - rect.left) / rect.width)  * 100;
+    const y = ((pt.clientY - rect.top)  / rect.height) * 100;
+    if (x < 0 || x > 100 || y < 0 || y > 100) return null;
+    return { x, y };
+  }
+
+  function handleTap(e) {
+    const p = pointFromEvent(e);
+    if (!p) return;
+    const hitIdx = markers.findIndex(m =>
+      Math.hypot((m.x - p.x), (m.y - p.y)) < HIT_RADIUS
+    );
+    if (hitIdx >= 0) {
+      onChange(markers.filter((_, i) => i !== hitIdx));
+      return;
+    }
+    const view = p.x < 25 ? "left"
+               : p.x < 50 ? "back"
+               : p.x < 75 ? "front"
+               : "right";
+    onChange([...markers, { view, x: p.x, y: p.y }]);
+  }
+
+  return (
+    <div ref={wrapRef}
+      onClick={handleTap}
+      onTouchEnd={(e)=>{ e.preventDefault(); handleTap(e); }}
+      style={{
+        position: "relative",
+        width: "100%",
+        background: "#fff",
+        border: "1px solid var(--ink-200)",
+        borderRadius: 12,
+        overflow: "hidden",
+        userSelect: "none",
+        touchAction: "manipulation",
+        cursor: "crosshair",
+      }}>
+      <img src="/assets/body-diagram.jpeg" alt="Human body diagram"
+        draggable={false}
+        style={{width:"100%", display:"block", pointerEvents:"none"}}/>
+      {markers.map((m, i) => (
+        <div key={i} style={{
+          position: "absolute",
+          left: `${m.x}%`, top: `${m.y}%`,
+          width: 14, height: 14,
+          marginLeft: -7, marginTop: -7,
+          borderRadius: "50%",
+          background: "var(--red)",
+          border: "2px solid #fff",
+          boxShadow: "0 1px 4px rgba(0,0,0,0.35)",
+          pointerEvents: "none",
+        }}/>
+      ))}
+    </div>
   );
 }
 
@@ -3318,12 +3350,9 @@ function OperationalReport() {
 function SettingsPage({ go }) {
   const role = (window.ME && window.ME.role) || "";
   const isAdmin = !role || role === "مدير";
-  // Doctors and therapists may reach Settings *only* to manage/view the
-  // treatment-plan templates library — all other tabs stay admin-only.
-  const canReadTemplates = isAdmin || role === "طبيب" || role === "الأخصائي";
-  const [tab, setTab] = React.useState(isAdmin ? "clinic" : "templates");
+  const [tab, setTab] = React.useState("clinic");
 
-  if (!isAdmin && !canReadTemplates) {
+  if (!isAdmin) {
     return (
       <Page>
         <div className="crumb"><span>الرئيسية</span><I.Chevron size={11}/><span>الإعدادات</span></div>
@@ -3337,23 +3366,12 @@ function SettingsPage({ go }) {
     );
   }
 
-  // Only the "templates" tab is available to non-admin clinical roles.
-  const items = isAdmin
-    ? [
-        { id:"clinic",    l:"بيانات العيادة",       ic:<I.MapPin size={14}/> },
-        { id:"branding",  l:"الهوية البصرية",       ic:<I.Image size={14}/> },
-        // { id:"sections",  l:"أقسام مخصصة",          ic:<I.Layers size={14}/> },
-        { id:"depts",     l:"الأقسام والفريق",       ic:<I.Stethoscope size={14}/> },
-        { id:"users",     l:"المستخدمون والأدوار",    ic:<I.Users size={14}/> },
-        { id:"templates", l:"قوالب خطط العلاج",      ic:<I.FileText size={14}/> },
-        // { id:"billing",   l:"الفوترة",              ic:<I.CreditCard size={14}/> },
-        // { id:"notifs",    l:"الإشعارات",             ic:<I.Bell size={14}/> },
-        // { id:"integ",     l:"التكاملات",             ic:<I.Layers size={14}/> },
-        // { id:"sec",       l:"الأمان",                ic:<I.Lock size={14}/> },
-      ]
-    : [
-        { id:"templates", l:"قوالب خطط العلاج", ic:<I.FileText size={14}/> },
-      ];
+  const items = [
+    { id:"clinic",    l:"بيانات العيادة",       ic:<I.MapPin size={14}/> },
+    { id:"branding",  l:"الهوية البصرية",       ic:<I.Image size={14}/> },
+    { id:"depts",     l:"الأقسام والفريق",       ic:<I.Stethoscope size={14}/> },
+    { id:"users",     l:"المستخدمون والأدوار",    ic:<I.Users size={14}/> },
+  ];
 
   return (
     <Page>
@@ -3374,9 +3392,7 @@ function SettingsPage({ go }) {
           {tab==="depts" && <DeptDoctorsPanel/>}
           {tab==="users" && <UsersPanel/>}
           {tab==="branding" && <BrandingPanel/>}
-          {tab==="sections" && <CustomSectionsPanel/>}
-          {tab==="templates" && <TemplatesSettingsPanel/>}
-          {tab!=="clinic" && tab!=="users" && tab!=="branding" && tab!=="sections" && tab!=="depts" && tab!=="templates" && (
+          {tab!=="clinic" && tab!=="users" && tab!=="branding" && tab!=="depts" && (
             <EmptyState icon={<I.Settings size={22}/>} title="قريبًا" body={`The "${tab}" section is part من the next release. Reach out to support if you need something configured.`}/>
           )}
         </div>
@@ -4935,8 +4951,7 @@ function App() {
     window.scrollTo({top:0, behavior:"smooth"});
   }
   // Expose the router to descendants that can't easily receive `go` via
-  // props (e.g. modals opened deep inside pages that want to redirect
-  // to Settings on "إدارة القوالب").
+  // props (e.g. modals opened deep inside pages).
   React.useEffect(() => { window.navigate = go; }, []);
 
   function handleLogin(u) {
@@ -6567,1087 +6582,3 @@ function PublicBookingScreen({ onBack, onDone }) {
 
 Object.assign(window, { PublicBookingScreen });
 
-// ═══════════════════════════════════════════════════════════════
-// Treatment Plan Templates — library, editor, preview, versions.
-// All data flows through window.Templates (DB when Supabase is on,
-// LS mirror otherwise). Doctors + admins can create/edit/archive/
-// duplicate/delete; therapists can view + apply; receptionists get
-// no access at all.
-// ═══════════════════════════════════════════════════════════════
-function __tplRole() {
-  const r = (window.ME && window.ME.role) || '';
-  return r;
-}
-function __tplPerms() {
-  const r = __tplRole();
-  const isAdmin  = r === 'مدير'   || r === 'admin';
-  const isDoctor = r === 'طبيب'   || r === 'doctor';
-  const isTher   = r === 'أخصائي' || r === 'therapist';
-  return {
-    canEdit:      isAdmin || isDoctor,
-    canDuplicate: isAdmin || isDoctor,
-    canArchive:   isAdmin || isDoctor,
-    canDelete:    isAdmin || isDoctor,
-    canApply:     isAdmin || isDoctor || isTher,
-    canView:      isAdmin || isDoctor || isTher,
-  };
-}
-
-// `pickerOnly` locks the modal into a search + preview + apply flow. All
-// management actions (create/edit/duplicate/archive/delete) are hidden
-// so this same component can back both the Treatment Plan picker and,
-// when embedded without the flag, still work as a fallback library
-// browser. Management now lives in Settings → قوالب خطط العلاج.
-function TemplatesLibraryModal({ onClose, onUse, pickerOnly }) {
-  window.useDataVersion && window.useDataVersion();
-  const rawPerms = __tplPerms();
-  // In picker mode strip every write permission — the sidebar management
-  // page is the only place to create/edit templates now.
-  const perms = pickerOnly
-    ? { canView: rawPerms.canView, canApply: rawPerms.canApply,
-        canEdit: false, canDuplicate: false, canArchive: false, canDelete: false }
-    : rawPerms;
-  const [rows, setRows]         = React.useState([]);
-  const [count, setCount]       = React.useState(0);
-  const [loading, setLoading]   = React.useState(true);
-  const [search, setSearch]     = React.useState('');
-  const [status, setStatus]     = React.useState('active');
-  const [category, setCategory] = React.useState('');
-  const [creatorMe, setCreatorMe] = React.useState(false);
-  const [sort, setSort]         = React.useState('recent');
-  const [editing, setEditing]   = React.useState(null);
-  const [preview, setPreview]   = React.useState(null);
-  const [confirmDel, setConfirmDel] = React.useState(null);
-  const [newOpen, setNewOpen]   = React.useState(false);
-
-  const reload = React.useCallback(async () => {
-    setLoading(true);
-    const meUid = (window.ME && window.ME.uid) || null;
-    const res = await window.Templates.list({
-      search, status, category,
-      creator: creatorMe ? meUid : null,
-      sort, limit: 200, offset: 0,
-    });
-    setRows(res.rows || []); setCount(res.count || 0); setLoading(false);
-  }, [search, status, category, creatorMe, sort]);
-
-  React.useEffect(() => {
-    reload();
-    const onUpd = () => reload();
-    window.addEventListener('kinetic:templates-updated', onUpd);
-    return () => window.removeEventListener('kinetic:templates-updated', onUpd);
-  }, [reload]);
-
-  const categories = React.useMemo(() => {
-    const seen = new Set();
-    for (const r of rows) if (r.category) seen.add(r.category);
-    return Array.from(seen);
-  }, [rows]);
-
-  async function doArchiveToggle(t) {
-    const fn = t.status === 'archived' ? window.Templates.restore : window.Templates.archive;
-    const res = await fn(t.template_id);
-    if (window.showToast) window.showToast(res.ok
-      ? (t.status === 'archived' ? 'تمت الاستعادة' : 'تمت الأرشفة')
-      : (res.error || 'تعذّر التنفيذ'),
-      res.ok ? 'success' : 'error');
-  }
-  async function doDuplicate(t) {
-    const res = await window.Templates.duplicate(t.template_id);
-    if (window.showToast) window.showToast(res.ok ? 'تم إنشاء نسخة' : (res.error || 'تعذّر النسخ'), res.ok ? 'success' : 'error');
-  }
-  async function doDelete(t) {
-    const res = await window.Templates.remove(t.template_id);
-    if (window.showToast) window.showToast(res.ok ? 'تم حذف القالب' : (res.error || 'تعذّر الحذف'), res.ok ? 'success' : 'error');
-    setConfirmDel(null);
-  }
-  function doUse(t) {
-    // Navigation only — the usage row + counter are written by the
-    // create_treatment RPC when the doctor actually SAVES a treatment,
-    // so cancelled forms never inflate the template's usage stats.
-    if (onUse) onUse(t);
-  }
-
-  if (!perms.canView) {
-    return (
-      <Modal open title="قوالب خطط العلاج" onClose={onClose} width={520}>
-        <div className="muted" style={{fontSize:13,padding:14,textAlign:'center'}}>لا تملك صلاحية الاطلاع على قوالب خطط العلاج.</div>
-      </Modal>
-    );
-  }
-
-  return (
-    <>
-      <Modal
-        open onClose={onClose}
-        title={pickerOnly ? "اختيار قالب خطة علاج" : "قوالب خطط العلاج"}
-        width={900}
-        footer={<>
-          <button className="btn btn-ghost" onClick={onClose}>إغلاق</button>
-          {perms.canEdit && !pickerOnly && (
-            <button className="btn btn-blue" onClick={()=>setNewOpen(true)}>
-              <I.Plus size={13}/> قالب جديد
-            </button>
-          )}
-          {pickerOnly && perms.canEdit && (
-            <button className="btn btn-secondary" onClick={()=>{ onClose && onClose(); window.navigate && window.navigate("settings"); }}>
-              <I.Settings size={13}/> إدارة القوالب
-            </button>
-          )}
-        </>}
-      >
-        <div style={{display:'grid',gap:12}}>
-          <div style={{display:'grid',gridTemplateColumns:'1.4fr 1fr 1fr 1fr',gap:8}}>
-            <div style={{position:'relative'}}>
-              <I.Search size={14} style={{position:'absolute',left:11,top:'50%',transform:'translateY(-50%)',color:'var(--ink-400)'}}/>
-              <input className="input" placeholder="ابحث بالاسم/التشخيص/التمرين/الطريقة…" value={search} onChange={e=>setSearch(e.target.value)} style={{paddingLeft:32}}/>
-            </div>
-            <select className="input" value={status} onChange={e=>setStatus(e.target.value)}>
-              <option value="active">النشطة</option>
-              <option value="archived">المؤرشفة</option>
-              <option value="">الكل</option>
-            </select>
-            <select className="input" value={category} onChange={e=>setCategory(e.target.value)}>
-              <option value="">كل الفئات</option>
-              {categories.map(c=><option key={c} value={c}>{c}</option>)}
-            </select>
-            <select className="input" value={sort} onChange={e=>setSort(e.target.value)}>
-              <option value="recent">الأحدث</option>
-              <option value="oldest">الأقدم</option>
-              <option value="usage">الأكثر استخدامًا</option>
-              <option value="name">اسم القالب</option>
-            </select>
-          </div>
-          <label style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:'var(--ink-600)'}}>
-            <input type="checkbox" checked={creatorMe} onChange={e=>setCreatorMe(e.target.checked)}/>
-            قوالبي فقط
-          </label>
-
-          {loading && <div className="muted" style={{fontSize:13,padding:14,textAlign:'center'}}>جارٍ التحميل…</div>}
-          {!loading && rows.length === 0 && (
-            <div style={{padding:24,textAlign:'center',border:'1px dashed var(--ink-200)',borderRadius:12,color:'var(--ink-500)'}}>
-              <I.FileText size={22} style={{opacity:.4}}/>
-              <div style={{marginTop:8,fontSize:13}}>لا يوجد قوالب مطابقة</div>
-              {perms.canEdit && !pickerOnly && (
-                <button className="btn btn-blue" style={{marginTop:12}} onClick={()=>setNewOpen(true)}>
-                  <I.Plus size={13}/> قالب جديد
-                </button>
-              )}
-            </div>
-          )}
-          {!loading && rows.length > 0 && (
-            <div style={{maxHeight:'55vh',overflowY:'auto',border:'1px solid var(--ink-100)',borderRadius:12}}>
-              {rows.map(t => (
-                <TemplateRow
-                  key={t.template_id}
-                  t={t}
-                  perms={perms}
-                  onUse={()=>doUse(t)}
-                  onPreview={()=>setPreview(t.template_id)}
-                  onEdit={()=>setEditing(t.template_id)}
-                  onDuplicate={()=>doDuplicate(t)}
-                  onArchiveToggle={()=>doArchiveToggle(t)}
-                  onDelete={()=>setConfirmDel(t)}
-                />
-              ))}
-            </div>
-          )}
-          <div className="muted" style={{fontSize:11.5}}>الإجمالي: {count}</div>
-        </div>
-      </Modal>
-
-      {newOpen && (
-        <TemplateEditorModal
-          templateId={null}
-          onClose={()=>setNewOpen(false)}
-          onSaved={()=>{ setNewOpen(false); reload(); }}
-        />
-      )}
-      {editing && (
-        <TemplateEditorModal
-          templateId={editing}
-          onClose={()=>setEditing(null)}
-          onSaved={()=>{ setEditing(null); reload(); }}
-        />
-      )}
-      {preview && (
-        <TemplatePreviewModal
-          templateId={preview}
-          onClose={()=>setPreview(null)}
-          onUse={perms.canApply ? (t)=>{ setPreview(null); doUse(t); } : null}
-        />
-      )}
-      {confirmDel && (
-        <Modal open onClose={()=>setConfirmDel(null)} title="تأكيد الحذف" width={440}
-          footer={<>
-            <button className="btn btn-ghost" onClick={()=>setConfirmDel(null)}>إلغاء</button>
-            <button className="btn btn-red" onClick={()=>doDelete(confirmDel)} style={{background:'var(--red)',color:'#fff'}}>حذف نهائي</button>
-          </>}>
-          <div style={{fontSize:13.5}}>هل تريد حذف <strong>{confirmDel.name}</strong> نهائيًا؟ لا يمكن التراجع.</div>
-          {(confirmDel.usage_count || 0) > 0 && (
-            <div style={{marginTop:10,padding:10,background:'#fef2f2',border:'1px solid #fecaca',borderRadius:8,fontSize:12,color:'#991b1b'}}>
-              هذا القالب مستخدم في {confirmDel.usage_count} خطة — سيرفض النظام الحذف. استخدم الأرشفة بدلاً منه.
-            </div>
-          )}
-        </Modal>
-      )}
-    </>
-  );
-}
-
-function TemplateRow({ t, perms, onUse, onPreview, onEdit, onDuplicate, onArchiveToggle, onDelete }) {
-  const archived = t.status === 'archived';
-  return (
-    <div style={{
-      display:'grid',gridTemplateColumns:'1fr auto',gap:10,padding:'12px 14px',
-      borderBottom:'1px solid var(--ink-100)',opacity: archived ? .65 : 1,
-    }}>
-      <div style={{minWidth:0}}>
-        <div style={{display:'flex',alignItems:'center',gap:8}}>
-          <strong style={{fontSize:13.5}}>{t.name}</strong>
-          {archived && <span className="badge b-grey" style={{fontSize:10.5}}>مؤرشف</span>}
-          {(t.usage_count || 0) > 0 && (
-            <span className="badge b-blue" style={{fontSize:10.5}}>{t.usage_count} استخدام</span>
-          )}
-        </div>
-        <div className="muted" style={{fontSize:11.5,marginTop:3}}>
-          {[t.diagnosis, t.category, t.body_part].filter(Boolean).join(' · ') || '—'}
-        </div>
-        <div className="muted" style={{fontSize:11,marginTop:2}}>
-          {(t.exercises?.length || 0)} تمرين · {(t.methods?.length || 0)} طريقة
-          {t.estimated_sessions ? ` · ${t.estimated_sessions} جلسة` : ''}
-        </div>
-      </div>
-      <div style={{display:'flex',flexWrap:'wrap',gap:6,alignItems:'center'}}>
-        <button className="btn btn-secondary" style={{fontSize:11.5,padding:'5px 9px'}} onClick={onPreview}>
-          <I.Eye size={12}/> معاينة
-        </button>
-        {perms.canApply && !archived && (
-          <button className="btn btn-blue" style={{fontSize:11.5,padding:'5px 9px'}} onClick={onUse}>
-            استخدام
-          </button>
-        )}
-        {perms.canEdit && (
-          <button className="btn btn-secondary" style={{fontSize:11.5,padding:'5px 9px'}} onClick={onEdit}>
-            <I.Edit size={12}/> تعديل
-          </button>
-        )}
-        {perms.canDuplicate && (
-          <button className="btn btn-secondary" style={{fontSize:11.5,padding:'5px 9px'}} onClick={onDuplicate}>
-            <I.FileText size={12}/> نسخ
-          </button>
-        )}
-        {perms.canArchive && (
-          <button className="btn btn-secondary" style={{fontSize:11.5,padding:'5px 9px'}} onClick={onArchiveToggle}>
-            {archived ? 'استعادة' : 'أرشفة'}
-          </button>
-        )}
-        {perms.canDelete && (
-          <button className="btn btn-secondary" style={{fontSize:11.5,padding:'5px 9px',color:'var(--red)'}} onClick={onDelete}>
-            <I.Trash size={12}/> حذف
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ── Editor ─────────────────────────────────────────────────────
-function TemplateEditorModal({ templateId, onClose, onSaved }) {
-  window.useDataVersion && window.useDataVersion();
-  const isEdit = !!templateId;
-  const [loading, setLoading]   = React.useState(isEdit);
-  const [saving, setSaving]     = React.useState(false);
-  const [error, setError]       = React.useState('');
-  const [state, setState]       = React.useState({
-    name:'', category:'', diagnosis:'', body_part:'',
-    goals: [''],
-    exercises: [], methods: [],
-    home_instructions:'', notes:'', warnings:'', followup_instructions:'',
-    estimated_sessions:'', weekly_frequency:'', expected_recovery_days:'',
-  });
-  const [changeSummary, setChangeSummary] = React.useState('');
-
-  React.useEffect(() => {
-    if (!isEdit) return;
-    (async () => {
-      const res = await window.Templates.get(templateId);
-      if (res && res.template) {
-        const t = res.template;
-        setState({
-          name: t.name || '',
-          category: t.category || '',
-          diagnosis: t.diagnosis || '',
-          body_part: t.body_part || '',
-          goals: Array.isArray(t.goals) && t.goals.length ? t.goals : [''],
-          exercises: Array.isArray(t.exercises) ? t.exercises : [],
-          methods: Array.isArray(t.methods) ? t.methods : [],
-          home_instructions: t.home_instructions || '',
-          notes: t.notes || '',
-          warnings: t.warnings || '',
-          followup_instructions: t.followup_instructions || '',
-          estimated_sessions: t.estimated_sessions ?? '',
-          weekly_frequency: t.weekly_frequency ?? '',
-          expected_recovery_days: t.expected_recovery_days ?? '',
-        });
-      }
-      setLoading(false);
-    })();
-  }, [isEdit, templateId]);
-
-  React.useEffect(() => {
-    if (window.TxMethods) window.TxMethods.list().catch(()=>{});
-  }, []);
-
-  const libMethods = (DATA.treatmentMethods || []).filter(m => m.status !== 'archived');
-
-  function up(k, v) { setState(s => ({ ...s, [k]: v })); }
-
-  function addGoal() { up('goals', [...state.goals, '']); }
-  function setGoal(i, v) { up('goals', state.goals.map((g,idx)=>idx===i?v:g)); }
-  function removeGoal(i) { up('goals', state.goals.filter((_,idx)=>idx!==i)); }
-
-  function addExercise() {
-    up('exercises', [...state.exercises, {
-      name:'', description:'', sets:'', reps:'', duration:'',
-      hold_time:'', rest_time:'', equipment:'', notes:'',
-    }]);
-  }
-  function setExercise(i, patch) {
-    up('exercises', state.exercises.map((e,idx)=>idx===i?{...e,...patch}:e));
-  }
-  function removeExercise(i) {
-    up('exercises', state.exercises.filter((_,idx)=>idx!==i));
-  }
-  function moveExercise(i, dir) {
-    const arr = state.exercises.slice();
-    const j = i + dir;
-    if (j < 0 || j >= arr.length) return;
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-    up('exercises', arr);
-  }
-
-  function toggleMethod(name) {
-    const has = state.methods.some(m => (m.name || m) === name);
-    if (has) up('methods', state.methods.filter(m => (m.name || m) !== name));
-    else     up('methods', [...state.methods, { name }]);
-  }
-  function addCustomMethod(name) {
-    const n = String(name || '').trim();
-    if (!n) return;
-    if (state.methods.some(m => (m.name || m) === n)) return;
-    up('methods', [...state.methods, { name: n }]);
-  }
-  function removeMethod(name) {
-    up('methods', state.methods.filter(m => (m.name || m) !== name));
-  }
-
-  async function doSave() {
-    setError('');
-    if (!state.name.trim()) { setError('اسم القالب مطلوب'); return; }
-    setSaving(true);
-    const payload = { ...state, goals: state.goals.filter(g => (g||'').trim()) };
-    const res = isEdit
-      ? await window.Templates.update(templateId, payload, changeSummary)
-      : await window.Templates.create(payload);
-    setSaving(false);
-    if (!res.ok) { setError(res.error || 'تعذّر الحفظ'); return; }
-    if (window.showToast) window.showToast(isEdit ? 'تم تحديث القالب' : 'تم إنشاء القالب', 'success');
-    if (onSaved) onSaved(res.template_id);
-  }
-
-  return (
-    <Modal
-      open onClose={onClose}
-      title={isEdit ? 'تعديل قالب' : 'قالب جديد'}
-      width={960}
-      footer={<>
-        <button className="btn btn-ghost" onClick={onClose} disabled={saving}>إلغاء</button>
-        <button className="btn btn-blue" onClick={doSave} disabled={saving || loading}>
-          <I.Check size={13}/> {saving ? 'جارٍ الحفظ…' : 'حفظ'}
-        </button>
-      </>}
-    >
-      {loading ? (
-        <div className="muted" style={{fontSize:13,padding:14,textAlign:'center'}}>جارٍ التحميل…</div>
-      ) : (
-        <div style={{display:'grid',gap:14,maxHeight:'70vh',overflowY:'auto',paddingLeft:4}}>
-          {error && (
-            <div style={{padding:10,background:'#fef2f2',border:'1px solid #fecaca',borderRadius:8,fontSize:12.5,color:'#991b1b'}}>{error}</div>
-          )}
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
-            <Field label="اسم القالب" required>
-              <input className="input" value={state.name} onChange={e=>up('name',e.target.value)}/>
-            </Field>
-            <Field label="الفئة">
-              <CategoryCombobox value={state.category} onChange={v=>up('category',v)}/>
-            </Field>
-            <Field label="التشخيص">
-              <input className="input" value={state.diagnosis} onChange={e=>up('diagnosis',e.target.value)}/>
-            </Field>
-            <Field label="الجزء المستهدف">
-              <input className="input" value={state.body_part} onChange={e=>up('body_part',e.target.value)}/>
-            </Field>
-            <Field label="عدد الجلسات المتوقّع">
-              <input className="input" type="number" value={state.estimated_sessions} onChange={e=>up('estimated_sessions',e.target.value)}/>
-            </Field>
-            <Field label="التكرار الأسبوعي">
-              <input className="input" type="number" value={state.weekly_frequency} onChange={e=>up('weekly_frequency',e.target.value)}/>
-            </Field>
-            <Field label="مدّة التعافي المتوقّعة (أيام)">
-              <input className="input" type="number" value={state.expected_recovery_days} onChange={e=>up('expected_recovery_days',e.target.value)}/>
-            </Field>
-          </div>
-
-          <TemplateGoals goals={state.goals} setGoal={setGoal} addGoal={addGoal} removeGoal={removeGoal}/>
-          <TemplateExercises
-            list={state.exercises}
-            onAdd={addExercise} onChange={setExercise}
-            onRemove={removeExercise} onMove={moveExercise}
-          />
-          <TemplateMethods
-            selected={state.methods}
-            library={libMethods}
-            onToggle={toggleMethod}
-            onAddCustom={addCustomMethod}
-            onRemove={removeMethod}
-          />
-
-          <Field label="تعليمات المريض في المنزل">
-            <textarea className="input" style={{height:70,padding:10}} value={state.home_instructions} onChange={e=>up('home_instructions',e.target.value)}/>
-          </Field>
-          <Field label="ملاحظات داخلية">
-            <textarea className="input" style={{height:70,padding:10}} value={state.notes} onChange={e=>up('notes',e.target.value)}/>
-          </Field>
-          <Field label="تحذيرات">
-            <textarea className="input" style={{height:60,padding:10}} value={state.warnings} onChange={e=>up('warnings',e.target.value)}/>
-          </Field>
-          <Field label="تعليمات المتابعة">
-            <textarea className="input" style={{height:60,padding:10}} value={state.followup_instructions} onChange={e=>up('followup_instructions',e.target.value)}/>
-          </Field>
-
-          {isEdit && (
-            <Field label="ملخّص التغيير (لأرشيف الإصدارات)">
-              <input className="input" value={changeSummary} onChange={e=>setChangeSummary(e.target.value)} placeholder="مثال: أضفت تمرين إطالة"/>
-            </Field>
-          )}
-        </div>
-      )}
-    </Modal>
-  );
-}
-
-function TemplateGoals({ goals, setGoal, addGoal, removeGoal }) {
-  return (
-    <div className="card card-pad" style={{background:'var(--ink-50)'}}>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-        <strong style={{fontSize:13.5}}>الأهداف</strong>
-        <button className="btn btn-secondary" style={{fontSize:11.5,padding:'4px 8px'}} onClick={addGoal}>
-          <I.Plus size={12}/> هدف
-        </button>
-      </div>
-      {goals.map((g,i)=>(
-        <div key={i} style={{display:'flex',gap:6,marginBottom:6}}>
-          <input className="input" value={g} onChange={e=>setGoal(i,e.target.value)} placeholder="اكتب هدف العلاج"/>
-          <button className="btn btn-ghost" style={{padding:'6px 8px',color:'var(--red)'}} onClick={()=>removeGoal(i)}><I.X size={12}/></button>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function TemplateExercises({ list, onAdd, onChange, onRemove, onMove }) {
-  return (
-    <div className="card card-pad" style={{background:'var(--ink-50)'}}>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-        <strong style={{fontSize:13.5}}>التمارين</strong>
-        <button className="btn btn-secondary" style={{fontSize:11.5,padding:'4px 8px'}} onClick={onAdd}>
-          <I.Plus size={12}/> تمرين
-        </button>
-      </div>
-      {list.length === 0 && (
-        <div className="muted" style={{fontSize:12,textAlign:'center',padding:10}}>لا يوجد تمارين بعد</div>
-      )}
-      {list.map((e,i)=>(
-        <div key={i} style={{padding:10,background:'#fff',border:'1px solid var(--ink-200)',borderRadius:10,marginBottom:8}}>
-          <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:6}}>
-            <span className="muted" style={{fontSize:11.5,width:24}}>#{i+1}</span>
-            <input className="input" value={e.name} onChange={ev=>onChange(i,{name:ev.target.value})} placeholder="اسم التمرين" style={{flex:1}}/>
-            <button className="btn btn-ghost" style={{padding:'4px 6px'}} onClick={()=>onMove(i,-1)} disabled={i===0} title="أعلى"><I.Chevron size={12}/></button>
-            <button className="btn btn-ghost" style={{padding:'4px 6px',transform:'rotate(180deg)'}} onClick={()=>onMove(i,+1)} disabled={i===list.length-1} title="أسفل"><I.Chevron size={12}/></button>
-            <button className="btn btn-ghost" style={{padding:'4px 6px',color:'var(--red)'}} onClick={()=>onRemove(i)}><I.Trash size={12}/></button>
-          </div>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(6,1fr)',gap:6}}>
-            <input className="input" style={{fontSize:12}} value={e.sets} onChange={ev=>onChange(i,{sets:ev.target.value})} placeholder="مجموعات"/>
-            <input className="input" style={{fontSize:12}} value={e.reps} onChange={ev=>onChange(i,{reps:ev.target.value})} placeholder="عدّات"/>
-            <input className="input" style={{fontSize:12}} value={e.duration} onChange={ev=>onChange(i,{duration:ev.target.value})} placeholder="مدّة"/>
-            <input className="input" style={{fontSize:12}} value={e.hold_time} onChange={ev=>onChange(i,{hold_time:ev.target.value})} placeholder="ثبات"/>
-            <input className="input" style={{fontSize:12}} value={e.rest_time} onChange={ev=>onChange(i,{rest_time:ev.target.value})} placeholder="راحة"/>
-            <input className="input" style={{fontSize:12}} value={e.equipment} onChange={ev=>onChange(i,{equipment:ev.target.value})} placeholder="أدوات"/>
-          </div>
-          <input className="input" style={{marginTop:6,fontSize:12}} value={e.description} onChange={ev=>onChange(i,{description:ev.target.value})} placeholder="وصف التمرين"/>
-          <input className="input" style={{marginTop:6,fontSize:12}} value={e.notes} onChange={ev=>onChange(i,{notes:ev.target.value})} placeholder="ملاحظات"/>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function TemplateMethods({ selected, library, onToggle, onAddCustom, onRemove }) {
-  const [custom, setCustom] = React.useState('');
-  const activeNames = new Set(selected.map(m => m.name || m));
-  return (
-    <div className="card card-pad" style={{background:'var(--ink-50)'}}>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-        <strong style={{fontSize:13.5}}>طرق العلاج</strong>
-        <span className="muted" style={{fontSize:11}}>{selected.length} محدّدة</span>
-      </div>
-      <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:8}}>
-        {library.map(m => {
-          const on = activeNames.has(m.name);
-          return (
-            <button key={m.method_id || m.id} type="button" onClick={()=>onToggle(m.name)}
-              className="btn btn-secondary"
-              style={{fontSize:12,padding:'5px 9px',background: on?'var(--blue-50)':'#fff',borderColor: on?'var(--blue-500)':'var(--ink-200)',color: on?'var(--blue-900)':'var(--ink-700)'}}>
-              {on ? '✓' : '+'} {m.name}
-            </button>
-          );
-        })}
-      </div>
-      {selected.filter(m => !library.some(lm => lm.name === (m.name || m))).length > 0 && (
-        <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:8}}>
-          {selected.filter(m => !library.some(lm => lm.name === (m.name || m))).map((m,i)=>(
-            <span key={i} style={{fontSize:12,padding:'4px 8px',background:'#fff',border:'1px dashed var(--blue-500)',borderRadius:8,color:'var(--blue-900)',display:'inline-flex',alignItems:'center',gap:6}}>
-              {m.name || m}
-              <button className="btn btn-ghost" style={{padding:'0 2px'}} onClick={()=>onRemove(m.name || m)}><I.X size={10}/></button>
-            </span>
-          ))}
-        </div>
-      )}
-      <div style={{display:'flex',gap:6}}>
-        <input className="input" style={{fontSize:12}} value={custom} onChange={e=>setCustom(e.target.value)} placeholder="أضف طريقة مخصّصة"/>
-        <button className="btn btn-secondary" style={{fontSize:12}} onClick={()=>{ onAddCustom(custom); setCustom(''); }}>
-          <I.Plus size={12}/> إضافة
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ── Preview + Versions ────────────────────────────────────────
-function TemplatePreviewModal({ templateId, onClose, onUse }) {
-  window.useDataVersion && window.useDataVersion();
-  const [loading, setLoading] = React.useState(true);
-  const [data, setData]       = React.useState(null);
-
-  const reload = React.useCallback(async () => {
-    setLoading(true);
-    const res = await window.Templates.get(templateId);
-    setData(res); setLoading(false);
-  }, [templateId]);
-
-  React.useEffect(() => {
-    reload();
-    const onUpd = () => reload();
-    window.addEventListener('kinetic:templates-updated', onUpd);
-    return () => window.removeEventListener('kinetic:templates-updated', onUpd);
-  }, [reload]);
-
-  const t = data && data.template;
-  const stats = data && data.stats || {};
-
-  return (
-    <Modal
-      open onClose={onClose}
-      title={t ? `معاينة — ${t.name}` : 'معاينة القالب'}
-      width={780}
-      footer={<>
-        <button className="btn btn-ghost" onClick={onClose}>إغلاق</button>
-        {onUse && t && t.status !== 'archived' && (
-          <button className="btn btn-blue" onClick={()=>onUse(t)}><I.Check size={13}/> استخدام</button>
-        )}
-      </>}
-    >
-      {loading && <div className="muted" style={{fontSize:13,padding:14,textAlign:'center'}}>جارٍ التحميل…</div>}
-      {!loading && !t && <div className="muted" style={{fontSize:13,padding:14,textAlign:'center'}}>القالب غير موجود</div>}
-      {t && (
-        <div style={{display:'grid',gap:14,maxHeight:'68vh',overflowY:'auto',paddingLeft:4}}>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8}}>
-            <PreviewStat label="عدد الجلسات" value={t.estimated_sessions || '—'}/>
-            <PreviewStat label="التكرار الأسبوعي" value={t.weekly_frequency || '—'}/>
-            <PreviewStat label="مدّة التعافي" value={t.expected_recovery_days ? `${t.expected_recovery_days} يوم` : '—'}/>
-          </div>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:8}}>
-            <PreviewStat label="عدد الاستخدامات" value={stats.usage_count ?? 0}/>
-            <PreviewStat label="نسبة الإكمال" value={`${stats.completion_rate ?? 0}%`}/>
-            <PreviewStat label="متوسّط التعافي" value={stats.avg_recovery ? `${stats.avg_recovery} يوم` : '—'}/>
-            <PreviewStat label="آخر استخدام" value={stats.last_used_at ? new Date(stats.last_used_at).toLocaleDateString('ar-EG') : '—'}/>
-          </div>
-
-          <PreviewSection title="معلومات">
-            <PreviewLine k="التشخيص" v={t.diagnosis}/>
-            <PreviewLine k="الفئة" v={t.category}/>
-            <PreviewLine k="الجزء المستهدف" v={t.body_part}/>
-          </PreviewSection>
-
-          {Array.isArray(t.goals) && t.goals.length > 0 && (
-            <PreviewSection title="الأهداف">
-              <ul style={{margin:0,paddingRight:18,fontSize:13}}>
-                {t.goals.map((g,i)=><li key={i}>{g}</li>)}
-              </ul>
-            </PreviewSection>
-          )}
-
-          {Array.isArray(t.exercises) && t.exercises.length > 0 && (
-            <PreviewSection title={`التمارين (${t.exercises.length})`}>
-              {t.exercises.map((e,i)=>(
-                <div key={i} style={{padding:8,background:'#fff',border:'1px solid var(--ink-200)',borderRadius:8,marginBottom:6,fontSize:12.5}}>
-                  <strong>{i+1}. {e.name}</strong>
-                  {e.description && <div className="muted" style={{fontSize:11.5}}>{e.description}</div>}
-                  <div className="muted" style={{fontSize:11.5,marginTop:2}}>
-                    {[e.sets && `${e.sets} مجموعات`, e.reps && `${e.reps} عدّات`, e.duration && `${e.duration} مدّة`,
-                       e.hold_time && `ثبات ${e.hold_time}`, e.rest_time && `راحة ${e.rest_time}`, e.equipment].filter(Boolean).join(' · ')}
-                  </div>
-                </div>
-              ))}
-            </PreviewSection>
-          )}
-
-          {Array.isArray(t.methods) && t.methods.length > 0 && (
-            <PreviewSection title="طرق العلاج">
-              <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-                {t.methods.map((m,i)=><span key={i} className="badge b-blue" style={{fontSize:11.5}}>{m.name || m}</span>)}
-              </div>
-            </PreviewSection>
-          )}
-          {(t.home_instructions || t.notes || t.warnings || t.followup_instructions) && (
-            <PreviewSection title="ملاحظات وتعليمات">
-              {t.home_instructions && <PreviewLine k="تعليمات المنزل" v={t.home_instructions}/>}
-              {t.followup_instructions && <PreviewLine k="المتابعة" v={t.followup_instructions}/>}
-              {t.notes && <PreviewLine k="ملاحظات" v={t.notes}/>}
-              {t.warnings && <PreviewLine k="تحذيرات" v={t.warnings}/>}
-            </PreviewSection>
-          )}
-          <PreviewSection title="سِجل الإنشاء">
-            <PreviewLine k="أنشأه" v={t.created_by_name}/>
-            <PreviewLine k="تاريخ الإنشاء" v={t.created_at && new Date(t.created_at).toLocaleString('ar-EG')}/>
-            <PreviewLine k="آخر تعديل" v={t.updated_by_name}/>
-            <PreviewLine k="تاريخ التعديل" v={t.updated_at && new Date(t.updated_at).toLocaleString('ar-EG')}/>
-          </PreviewSection>
-
-        </div>
-      )}
-    </Modal>
-  );
-}
-
-function PreviewStat({ label, value }) {
-  return (
-    <div style={{padding:10,background:'#fff',border:'1px solid var(--ink-200)',borderRadius:10}}>
-      <div className="muted" style={{fontSize:11}}>{label}</div>
-      <div style={{fontSize:14,fontWeight:600,marginTop:2}}>{value}</div>
-    </div>
-  );
-}
-function PreviewSection({ title, children }) {
-  return (
-    <div>
-      <div style={{fontSize:12,fontWeight:600,color:'var(--ink-700)',marginBottom:6}}>{title}</div>
-      {children}
-    </div>
-  );
-}
-function PreviewLine({ k, v }) {
-  if (!v) return null;
-  return (
-    <div style={{display:'flex',gap:8,fontSize:12.5,padding:'3px 0'}}>
-      <span className="muted" style={{minWidth:120}}>{k}</span>
-      <span style={{flex:1}}>{v}</span>
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════
-// TemplatesSettingsPanel — Settings → قوالب خطط العلاج
-// Page-level manager: stats, filters, list with all CRUD buttons,
-// categories management, "قالب جديد". Same DB + events as the
-// picker modal, so any change refreshes the picker too via
-// `kinetic:templates-updated` and `kinetic:tpl-categories-updated`.
-// ═══════════════════════════════════════════════════════════════
-function TemplatesSettingsPanel() {
-  window.useDataVersion && window.useDataVersion();
-  const perms = __tplPerms();
-  const [rows, setRows]         = React.useState([]);
-  const [count, setCount]       = React.useState(0);
-  const [loading, setLoading]   = React.useState(true);
-  const [search, setSearch]     = React.useState('');
-  const [status, setStatus]     = React.useState('');       // '' = all in Settings
-  const [category, setCategory] = React.useState('');
-  const [sort, setSort]         = React.useState('recent');
-  const [editing, setEditing]   = React.useState(null);
-  const [newOpen, setNewOpen]   = React.useState(false);
-  const [preview, setPreview]   = React.useState(null);
-  const [confirmDel, setConfirmDel] = React.useState(null);
-  const [catsOpen, setCatsOpen] = React.useState(false);
-  const [cats, setCats]         = React.useState([]);
-
-  const reload = React.useCallback(async () => {
-    if (!window.Templates) return;
-    setLoading(true);
-    const res = await window.Templates.list({
-      search, status, category, sort, limit: 500, offset: 0,
-    });
-    setRows(res.rows || []); setCount(res.count || 0); setLoading(false);
-  }, [search, status, category, sort]);
-
-  const reloadCats = React.useCallback(async () => {
-    if (!window.TplCategories) return;
-    const res = await window.TplCategories.list(true);
-    setCats(res.rows || []);
-  }, []);
-
-  React.useEffect(() => {
-    reload();
-    const onT = () => reload();
-    const onC = () => { reload(); reloadCats(); };
-    window.addEventListener('kinetic:templates-updated', onT);
-    window.addEventListener('kinetic:tpl-categories-updated', onC);
-    return () => {
-      window.removeEventListener('kinetic:templates-updated', onT);
-      window.removeEventListener('kinetic:tpl-categories-updated', onC);
-    };
-  }, [reload, reloadCats]);
-
-  React.useEffect(() => { reloadCats(); }, [reloadCats]);
-
-  // Derive stats live from the current filtered rowset so they always
-  // reflect what's on screen. Total count comes from the RPC response.
-  const stats = React.useMemo(() => {
-    const active   = rows.filter(r => r.status !== 'archived').length;
-    const archived = rows.filter(r => r.status === 'archived').length;
-    return { total: count, active, archived };
-  }, [rows, count]);
-
-  const activeCats = React.useMemo(() =>
-    cats.filter(c => c.status !== 'archived'), [cats]);
-
-  async function doArchiveToggle(t) {
-    const fn = t.status === 'archived' ? window.Templates.restore : window.Templates.archive;
-    const res = await fn(t.template_id);
-    if (window.showToast) window.showToast(res.ok
-      ? (t.status === 'archived' ? 'تمت الاستعادة' : 'تمت الأرشفة')
-      : (res.error || 'تعذّر التنفيذ'),
-      res.ok ? 'success' : 'error');
-  }
-  async function doDuplicate(t) {
-    const res = await window.Templates.duplicate(t.template_id);
-    if (window.showToast) window.showToast(
-      res.ok ? 'تم إنشاء نسخة' : (res.error || 'تعذّر النسخ'),
-      res.ok ? 'success' : 'error');
-  }
-  async function doDelete(t) {
-    const res = await window.Templates.remove(t.template_id);
-    if (window.showToast) window.showToast(
-      res.ok ? 'تم حذف القالب' : (res.error || 'تعذّر الحذف'),
-      res.ok ? 'success' : 'error');
-    setConfirmDel(null);
-  }
-
-  if (!perms.canView) {
-    return (
-      <div style={{padding:24,textAlign:'center'}}>
-        <I.Lock size={30} style={{color:'var(--ink-400)',marginBottom:8}}/>
-        <div className="h3" style={{marginBottom:6}}>الوصول مقيّد</div>
-        <div className="muted" style={{fontSize:12.5}}>لا تملك صلاحية إدارة قوالب خطط العلاج.</div>
-      </div>
-    );
-  }
-
-  return (
-    <div>
-      {/* Header */}
-      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,flexWrap:'wrap',marginBottom:14}}>
-        <div>
-          <div className="h2">قوالب خطط العلاج</div>
-          <div className="muted" style={{fontSize:12.5,marginTop:2}}>
-            المركز الوحيد لإدارة القوالب. الأطباء يستخدمون هذه القوالب من صفحة خطط العلاج.
-          </div>
-        </div>
-        <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-          <button className="btn btn-secondary" onClick={()=>setCatsOpen(true)}>
-            <I.Layers size={13}/> إدارة الفئات
-          </button>
-          {perms.canEdit && (
-            <button className="btn btn-blue" onClick={()=>setNewOpen(true)}>
-              <I.Plus size={13}/> قالب جديد
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Stats */}
-      <div className="rgrid c-sm" style={{"--gtc":"repeat(3, 1fr)",gap:10,marginBottom:14}}>
-        <TplStatCard label="إجمالي القوالب" value={stats.total} accent="var(--blue-500)"/>
-        <TplStatCard label="نشطة"           value={stats.active} accent="var(--green)"/>
-        <TplStatCard label="مؤرشفة"         value={stats.archived} accent="var(--ink-400)"/>
-      </div>
-
-      {/* Filters */}
-      <div style={{display:'grid',gridTemplateColumns:'1.4fr 1fr 1fr 1fr',gap:8,marginBottom:12}}>
-        <div style={{position:'relative'}}>
-          <I.Search size={14} style={{position:'absolute',left:11,top:'50%',transform:'translateY(-50%)',color:'var(--ink-400)'}}/>
-          <input className="input" placeholder="ابحث بالاسم/التشخيص/التمرين/الطريقة…" value={search} onChange={e=>setSearch(e.target.value)} style={{paddingLeft:32}}/>
-        </div>
-        <select className="input" value={category} onChange={e=>setCategory(e.target.value)}>
-          <option value="">كل الفئات</option>
-          {activeCats.map(c=><option key={c.category_id} value={c.name}>{c.name}</option>)}
-        </select>
-        <select className="input" value={status} onChange={e=>setStatus(e.target.value)}>
-          <option value="">كل الحالات</option>
-          <option value="active">النشطة</option>
-          <option value="archived">المؤرشفة</option>
-        </select>
-        <select className="input" value={sort} onChange={e=>setSort(e.target.value)}>
-          <option value="recent">الأحدث</option>
-          <option value="oldest">الأقدم</option>
-          <option value="usage">الأكثر استخدامًا</option>
-          <option value="name">أبجدي</option>
-        </select>
-      </div>
-
-      {/* List */}
-      {loading && <div className="muted" style={{fontSize:13,padding:14,textAlign:'center'}}>جارٍ التحميل…</div>}
-      {!loading && rows.length === 0 && (
-        <div style={{padding:24,textAlign:'center',border:'1px dashed var(--ink-200)',borderRadius:12,color:'var(--ink-500)'}}>
-          <I.FileText size={22} style={{opacity:.4}}/>
-          <div style={{marginTop:8,fontSize:13}}>لا يوجد قوالب مطابقة</div>
-          {perms.canEdit && (
-            <button className="btn btn-blue" style={{marginTop:12}} onClick={()=>setNewOpen(true)}>
-              <I.Plus size={13}/> قالب جديد
-            </button>
-          )}
-        </div>
-      )}
-      {!loading && rows.length > 0 && (
-        <div style={{border:'1px solid var(--ink-100)',borderRadius:12,overflow:'hidden'}}>
-          {rows.map(t => (
-            <TemplateRow
-              key={t.template_id}
-              t={t}
-              perms={perms}
-              onUse={()=>{
-                // From Settings we can still apply — but only if a picker/target
-                // makes sense. Here we just preview so admins get a peek.
-                setPreview(t.template_id);
-              }}
-              onPreview={()=>setPreview(t.template_id)}
-              onEdit={()=>setEditing(t.template_id)}
-              onDuplicate={()=>doDuplicate(t)}
-              onArchiveToggle={()=>doArchiveToggle(t)}
-              onDelete={()=>setConfirmDel(t)}
-            />
-          ))}
-        </div>
-      )}
-      <div className="muted" style={{fontSize:11.5,marginTop:8}}>الإجمالي: {count}</div>
-
-      {/* Modals */}
-      {newOpen && (
-        <TemplateEditorModal
-          templateId={null}
-          onClose={()=>setNewOpen(false)}
-          onSaved={()=>{ setNewOpen(false); reload(); }}
-        />
-      )}
-      {editing && (
-        <TemplateEditorModal
-          templateId={editing}
-          onClose={()=>setEditing(null)}
-          onSaved={()=>{ setEditing(null); reload(); }}
-        />
-      )}
-      {preview && (
-        <TemplatePreviewModal
-          templateId={preview}
-          onClose={()=>setPreview(null)}
-          onUse={null}
-        />
-      )}
-      {confirmDel && (
-        <Modal open onClose={()=>setConfirmDel(null)} title="تأكيد الحذف" width={440}
-          footer={<>
-            <button className="btn btn-ghost" onClick={()=>setConfirmDel(null)}>إلغاء</button>
-            <button className="btn btn-red" onClick={()=>doDelete(confirmDel)} style={{background:'var(--red)',color:'#fff'}}>حذف نهائي</button>
-          </>}>
-          <div style={{fontSize:13.5}}>هل تريد حذف <strong>{confirmDel.name}</strong> نهائيًا؟ لا يمكن التراجع.</div>
-          {(confirmDel.usage_count || 0) > 0 && (
-            <div style={{marginTop:10,padding:10,background:'#fef2f2',border:'1px solid #fecaca',borderRadius:8,fontSize:12,color:'#991b1b'}}>
-              هذا القالب مستخدم في {confirmDel.usage_count} خطة — سيرفض النظام الحذف. استخدم الأرشفة بدلاً منه.
-            </div>
-          )}
-        </Modal>
-      )}
-      {catsOpen && (
-        <TemplateCategoriesModal
-          cats={cats}
-          perms={perms}
-          onClose={()=>setCatsOpen(false)}
-        />
-      )}
-    </div>
-  );
-}
-
-function TplStatCard({ label, value, accent }) {
-  return (
-    <div className="card" style={{padding:14,borderRight:`3px solid ${accent}`,display:'flex',flexDirection:'column',gap:4}}>
-      <div className="muted" style={{fontSize:11.5}}>{label}</div>
-      <div style={{fontSize:22,fontWeight:600}}>{value}</div>
-    </div>
-  );
-}
-
-// ── Category manager ────────────────────────────────────────────
-function TemplateCategoriesModal({ cats, perms, onClose }) {
-  const [name, setName]           = React.useState('');
-  const [description, setDescription] = React.useState('');
-  const [sortOrder, setSortOrder] = React.useState('');
-  const [editingId, setEditingId] = React.useState(null);
-  const [saving, setSaving]       = React.useState(false);
-  const [error, setError]         = React.useState('');
-  const [showArchived, setShowArchived] = React.useState(false);
-  const canWrite = perms.canEdit;
-
-  function resetForm() {
-    setEditingId(null); setName(''); setDescription(''); setSortOrder(''); setError('');
-  }
-  function loadIntoForm(c) {
-    setEditingId(c.category_id);
-    setName(c.name || '');
-    setDescription(c.description || '');
-    setSortOrder(c.sort_order != null ? String(c.sort_order) : '');
-    setError('');
-  }
-  async function doSave() {
-    setError('');
-    const trimmed = name.trim();
-    if (!trimmed) { setError('الاسم مطلوب'); return; }
-    setSaving(true);
-    const payload = {
-      name: trimmed,
-      description: description.trim() || null,
-      sort_order: sortOrder === '' ? null : Number(sortOrder),
-    };
-    const res = editingId
-      ? await window.TplCategories.update(editingId, payload)
-      : await window.TplCategories.create(payload);
-    setSaving(false);
-    if (!res.ok) { setError(res.error || 'تعذّر الحفظ'); return; }
-    if (window.showToast) window.showToast(editingId ? 'تم تحديث الفئة' : 'تمت إضافة الفئة', 'success');
-    resetForm();
-  }
-  async function doArchiveToggle(c) {
-    const next = c.status === 'archived' ? 'active' : 'archived';
-    const fn   = next === 'archived' ? window.TplCategories.archive : window.TplCategories.restore;
-    const res  = await fn(c.category_id);
-    if (window.showToast) window.showToast(res.ok
-      ? (next === 'archived' ? 'تم الأرشفة' : 'تمت الاستعادة')
-      : (res.error || 'تعذّر التنفيذ'),
-      res.ok ? 'success' : 'error');
-  }
-  const [deletingId, setDeletingId] = React.useState(null);   // two-step delete confirm
-  async function doDelete(c) {
-    const res = await window.TplCategories.remove(c.category_id);
-    if (res.ok) {
-      if (window.showToast) window.showToast('تم حذف الفئة', 'success');
-      if (editingId === c.category_id) resetForm();
-    } else if (window.showToast) {
-      // Usually "in use" — surface the server's explanation verbatim.
-      window.showToast(res.error || 'تعذّر الحذف', 'error');
-    }
-    setDeletingId(null);
-  }
-
-  const visible = showArchived ? cats : cats.filter(c => c.status !== 'archived');
-
-  return (
-    <Modal open onClose={onClose} title="فئات القوالب" width={620}
-      footer={<button className="btn btn-ghost" onClick={onClose}>إغلاق</button>}>
-      <div style={{display:'grid',gap:14}}>
-        <div style={{maxHeight:220,overflowY:'auto',border:'1px solid var(--ink-100)',borderRadius:10}}>
-          {visible.length === 0 && (
-            <div className="muted" style={{padding:16,textAlign:'center',fontSize:12.5}}>لا توجد فئات بعد</div>
-          )}
-          {visible.map(c => {
-            const archived = c.status === 'archived';
-            return (
-              <div key={c.category_id} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 12px',borderBottom:'1px solid var(--ink-100)',opacity: archived ? .6 : 1}}>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:13,fontWeight:500}}>
-                    {c.name}
-                    {archived && <span className="badge b-grey" style={{marginRight:8,fontSize:10.5}}>مؤرشف</span>}
-                  </div>
-                  {c.description && <div className="muted" style={{fontSize:11.5}}>{c.description}</div>}
-                </div>
-                {canWrite && (
-                  <>
-                    <button className="btn btn-ghost" style={{fontSize:11.5,padding:'4px 8px'}} onClick={()=>loadIntoForm(c)}>تعديل</button>
-                    <button className="btn btn-ghost" style={{fontSize:11.5,padding:'4px 8px',color: archived ? 'var(--green)' : 'var(--amber-700, #b45309)'}} onClick={()=>doArchiveToggle(c)}>
-                      {archived ? 'استعادة' : 'أرشفة'}
-                    </button>
-                    {deletingId === c.category_id ? (
-                      <>
-                        <button className="btn btn-ghost" style={{fontSize:11.5,padding:'4px 8px',color:'var(--red)',fontWeight:600}} onClick={()=>doDelete(c)}>تأكيد</button>
-                        <button className="btn btn-ghost" style={{fontSize:11.5,padding:'4px 8px'}} onClick={()=>setDeletingId(null)}>إلغاء</button>
-                      </>
-                    ) : (
-                      <button className="btn btn-ghost" style={{fontSize:11.5,padding:'4px 8px',color:'var(--red)'}} onClick={()=>setDeletingId(c.category_id)}>حذف</button>
-                    )}
-                  </>
-                )}
-              </div>
-            );
-          })}
-        </div>
-        <label style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:'var(--ink-600)'}}>
-          <input type="checkbox" checked={showArchived} onChange={e=>setShowArchived(e.target.checked)}/>
-          عرض المؤرشفة
-        </label>
-
-        {canWrite && (
-          <div className="rgrid c-sm" style={{"--gtc":"1fr 1fr 100px",gap:10,alignItems:'end'}}>
-            <Field label="اسم الفئة" required>
-              <input className="input" value={name} onChange={e=>setName(e.target.value)} placeholder="مثال: تأهيل الركبة"/>
-            </Field>
-            <Field label="الوصف">
-              <input className="input" value={description} onChange={e=>setDescription(e.target.value)} placeholder="اختياري"/>
-            </Field>
-            <Field label="الترتيب">
-              <input className="input" type="number" value={sortOrder} onChange={e=>setSortOrder(e.target.value)}/>
-            </Field>
-          </div>
-        )}
-        {canWrite && (
-          <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
-            {editingId && (
-              <button className="btn btn-ghost" onClick={resetForm} disabled={saving}>إلغاء التعديل</button>
-            )}
-            <button className="btn btn-blue" onClick={doSave} disabled={saving}>
-              <I.Check size={13}/> {saving ? 'جارٍ الحفظ…' : (editingId ? 'حفظ التعديل' : 'إضافة الفئة')}
-            </button>
-          </div>
-        )}
-        {error && (
-          <div style={{padding:'10px 12px',background:'#fef2f2',border:'1px solid #fecaca',borderRadius:10,color:'#b91c1c',fontSize:12.5}}>
-            {error}
-          </div>
-        )}
-      </div>
-    </Modal>
-  );
-}
-
-Object.assign(window, {
-  TemplatesLibraryModal, TemplateEditorModal, TemplatePreviewModal,
-  TemplatesSettingsPanel, TemplateCategoriesModal,
-});

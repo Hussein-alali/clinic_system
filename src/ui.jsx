@@ -1086,6 +1086,233 @@ function CategoryCombobox({ value, onChange, placeholder, disabled }) {
 }
 window.CategoryCombobox = CategoryCombobox;
 
+// ── Diagnosis dictionary + inline autocomplete ─────────────────
+// Editable per-category dictionary. Add new terms by editing the arrays.
+window.DIAGNOSIS_DICT = {
+  shoulder: [
+    "Postoperative",
+    "Rotator Cuff",
+    "Tendinitis",
+    "Tear",
+    "Dislocation",
+    "Supraspinatus",
+    "Infraspinatus",
+    "Adhesive capsulitis",
+    "Full thickness",
+    "Partial thickness",
+    "Biceptal tendnitis",
+    "Hypertrophy",
+    "AC arthritis",
+    "Bursitis",
+  ],
+  spine: [
+    "Lumber spondylosis",
+    "Cervical spondylosis",
+    "Disc bulge",
+    "Disc protrusion",
+    "Disc prolapse",
+    "Sciatica",
+    "Numbness",
+    "Femoralgia",
+    "Spondylolythesis",
+    "Retrolythesis",
+    "Broadbase",
+    "Postrolat",
+    "Paracentral",
+    "Central",
+    "LBP",
+    "Muscle spasm",
+    "Mechanical pain",
+    "Sacroiliatis",
+    "Hip impingement",
+    "Post cervical fixation",
+    "Post lumber fixation",
+    "C-scoliosis",
+    "S-scoliosis",
+    "Kyphosis",
+    "Sacral neutation",
+    "Flat curve",
+    "Piriform's syndrome",
+    "ITB syndrome",
+    "Peronial pain & numbness",
+    "Facet's arthropathy",
+    "Muscle strain",
+    "Ankylosing spondylitis",
+    "Sacral displacement",
+    "Pars fracture",
+    "Radiculopathy",
+  ],
+};
+window.DIAGNOSIS_TERMS = Object.values(window.DIAGNOSIS_DICT).flat();
+
+function DiagnosisAutocomplete({ value, onChange, multiline, placeholder, style, dict, ...rest }) {
+  const terms = React.useMemo(() => dict || window.DIAGNOSIS_TERMS || [], [dict]);
+  const ref = React.useRef(null);
+  const mirrorRef = React.useRef(null);
+  const [dismissedToken, setDismissedToken] = React.useState(null);
+  const [caretAtEnd, setCaretAtEnd] = React.useState(true);
+
+  const v = value || "";
+
+  // Current token = text after the last separator (space / comma / newline / tab).
+  // This resets the matcher for every new term the user types.
+  let lastSep = -1;
+  for (let i = v.length - 1; i >= 0; i--) {
+    const ch = v.charCodeAt(i);
+    // space=32, tab=9, LF=10, CR=13, comma=44
+    if (ch === 32 || ch === 9 || ch === 10 || ch === 13 || ch === 44) { lastSep = i; break; }
+  }
+  const token = lastSep === -1 ? v : v.slice(lastSep + 1);
+
+  let ghost = "";
+  if (caretAtEnd && token.length > 0) {
+    const q = token.toLowerCase();
+    const m = terms.find(t => t.toLowerCase().startsWith(q) && t.length > token.length);
+    if (m) ghost = m.slice(token.length);
+  }
+  if (dismissedToken !== null && dismissedToken === token) ghost = "";
+
+  const checkCaret = () => {
+    const el = ref.current;
+    if (!el) return;
+    const atEnd = el.selectionStart === el.selectionEnd && el.selectionEnd === (el.value || "").length;
+    if (atEnd !== caretAtEnd) setCaretAtEnd(atEnd);
+  };
+
+  const accept = () => {
+    if (!ghost) return false;
+    const newVal = v + ghost;
+    onChange({ target: { value: newVal } });
+    // Keep caret at end after React commits; don't call focus() unless lost —
+    // calling focus() on an already-focused element is a no-op but can scroll.
+    requestAnimationFrame(() => {
+      const el = ref.current;
+      if (!el) return;
+      if (document.activeElement !== el) {
+        try { el.focus({ preventScroll: true }); } catch (_) { el.focus(); }
+      }
+      try { el.setSelectionRange(newVal.length, newVal.length); } catch (_) {}
+    });
+    return true;
+  };
+
+  const handleKey = (e) => {
+    // Ghost active → Tab/Enter accept and stay in field.
+    if (ghost && (e.key === "Tab" || e.key === "Enter")) {
+      e.preventDefault();
+      e.stopPropagation();
+      accept();
+      return;
+    }
+    if (ghost && e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      setDismissedToken(token);
+      return;
+    }
+    // No ghost + single-line Enter → swallow to prevent accidental form submit.
+    // (Multiline textarea Enter falls through to insert a newline naturally.)
+    if (!ghost && e.key === "Enter" && !multiline) {
+      e.preventDefault();
+    }
+    if (dismissedToken !== null) setDismissedToken(null);
+    if (rest.onKeyDown) rest.onKeyDown(e);
+  };
+
+  const handleChange = (e) => {
+    if (dismissedToken !== null) setDismissedToken(null);
+    onChange(e);
+    // After the input event, caret is at the end of the user's typing.
+    setTimeout(checkCaret, 0);
+  };
+
+  const handleScroll = () => {
+    const el = ref.current, m = mirrorRef.current;
+    if (el && m) {
+      m.scrollTop = el.scrollTop;
+      m.scrollLeft = el.scrollLeft;
+    }
+  };
+
+  const base = {
+    boxSizing: "border-box",
+    width: "100%",
+    padding: 10,
+    border: "1px solid var(--ink-200)",
+    borderRadius: 10,
+    background: "#fff",
+    fontFamily: "inherit",
+    fontSize: 13,
+    lineHeight: 1.5,
+    direction: "ltr",
+    textAlign: "left",
+    whiteSpace: multiline ? "pre-wrap" : "pre",
+    wordBreak: "break-word",
+    overflowWrap: "break-word",
+    margin: 0,
+  };
+
+  const inputStyle = {
+    ...base,
+    position: "relative",
+    color: "var(--ink-900, #111)",
+    background: "transparent",
+    outline: "none",
+    resize: multiline ? "vertical" : "none",
+    minHeight: multiline ? ((style && style.minHeight) || 70) : undefined,
+    overflow: multiline ? "auto" : "hidden",
+    ...(style || {}),
+  };
+
+  const mirrorStyle = {
+    ...base,
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    pointerEvents: "none",
+    color: "transparent",
+    userSelect: "none",
+    background: "#fff",
+    borderColor: "transparent",
+    overflow: "hidden",
+    minHeight: multiline ? ((style && style.minHeight) || 70) : undefined,
+    ...(style || {}),
+    borderColor: "transparent",
+  };
+
+  const InputTag = multiline ? "textarea" : "input";
+  const { onKeyDown: _ignored, ...passRest } = rest;
+
+  return (
+    <div style={{ position: "relative", width: "100%" }}>
+      <div ref={mirrorRef} aria-hidden="true" style={mirrorStyle}>
+        <span>{v}</span>
+        {ghost ? <span style={{ color: "#9CA3AF" }}>{ghost}</span> : null}
+        {multiline ? "\u200B" : null}
+      </div>
+      <InputTag
+        ref={ref}
+        value={v}
+        onChange={handleChange}
+        onKeyDown={handleKey}
+        onKeyUp={checkCaret}
+        onSelect={checkCaret}
+        onClick={checkCaret}
+        onFocus={checkCaret}
+        onScroll={handleScroll}
+        placeholder={placeholder}
+        spellCheck={false}
+        autoComplete="off"
+        style={inputStyle}
+        {...passRest}
+      />
+    </div>
+  );
+}
+window.DiagnosisAutocomplete = DiagnosisAutocomplete;
+
 // ── Stat card ──────────────────────────────────────────────────
 function StatCard({ label, value, delta, deltaKind, icon, accent="#7BBDE8", spark }) {
   const up = deltaKind === "up";
