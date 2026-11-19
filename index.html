@@ -505,7 +505,23 @@
 <body>
   <div id="root"></div>
 
+  <!-- ── File-storage backend config ──────────────────────────────────
+       The app uses Supabase Storage by default. To cut over to Cloudflare
+       R2 (after the r2-storage Edge Function is deployed AND all files are
+       migrated + verified), set R2_ENABLED to true below. Setting it back
+       to false is the instant rollback. No credentials ever live here —
+       the R2 keys stay in the Edge Function. See R2_MIGRATION.md. -->
+  <script>
+    // window.R2_ENABLED = true;
+    // Optional override; defaults to `${SUPABASE_URL}/functions/v1/r2-storage`.
+    // window.R2_GATEWAY_URL = "https://iwqnhajzjudmhseurwmh.functions.supabase.co/r2-storage";
+  </script>
+
   <script type="text/babel" src="src/supabase.jsx"></script>
+  <!-- Centralized storage gateway client. Loads right after supabase.jsx so
+       it can read window.SB / window.SUPABASE_URL. All storage ops flow
+       through window.StorageService. -->
+  <script type="text/babel" src="src/services/storage/storage.service.jsx"></script>
   <script type="text/babel" src="src/core.jsx"></script>
   <script type="text/babel" src="src/ui.jsx"></script>
   <script type="text/babel" src="src/screens1.jsx"></script>

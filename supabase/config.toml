@@ -21,3 +21,7 @@ verify_jwt = false
 verify_jwt = false
 [functions.admin-set-status]
 verify_jwt = false
+# The R2 storage gateway validates the caller's JWT + staff role itself
+# (and must answer CORS preflights), so the platform-level check is off.
+[functions.r2-storage]
+verify_jwt = false
