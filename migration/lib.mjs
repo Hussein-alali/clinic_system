@@ -8,10 +8,37 @@
 // ═══════════════════════════════════════════════════════════════════════
 
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { createClient } from "@supabase/supabase-js";
 import {
   S3Client, HeadObjectCommand, PutObjectCommand, HeadBucketCommand,
 } from "@aws-sdk/client-s3";
+
+// ── Auto-load migration/.env (zero-dependency) ───────────────────────────
+// So `node migrate.mjs` just works on any OS / Node version without needing
+// `set -a && . ./.env` or --env-file. Values already in the real environment
+// win; .env only fills what is missing. Runs once on import.
+(function loadDotEnv() {
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const file = path.join(here, ".env");
+    if (!fs.existsSync(file)) return;
+    for (const raw of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line || line.startsWith("#")) continue;
+      const eq = line.indexOf("=");
+      if (eq < 0) continue;
+      const key = line.slice(0, eq).trim();
+      let val = line.slice(eq + 1).trim();
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1);
+      }
+      if (key && process.env[key] === undefined) process.env[key] = val;
+    }
+  } catch { /* best effort — ignore a malformed .env */ }
+})();
 
 export function env(name, fallback) {
   const v = process.env[name];
