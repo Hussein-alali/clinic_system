@@ -93,9 +93,16 @@ export async function withRetry(fn, { tries = 5, baseMs = 400, label = "op" } = 
       await sleep(wait);
     }
   }
-  const err = new Error(`${label} failed after retries: ${lastErr && lastErr.message}`);
-  err.cause = lastErr;
-  throw err;
+  // Rethrow the ORIGINAL error so callers can still inspect S3 metadata
+  // (e.g. a 404 NotFound on HeadObject) and the error name. Wrapping it in a
+  // generic Error here would strip `$metadata`/`name`, which made r2Head
+  // miscount every missing object as a failure. Prefix the label for context
+  // without discarding those fields.
+  if (lastErr && typeof lastErr === "object") {
+    try { lastErr.message = `${label} failed: ${lastErr.message}`; } catch { /* frozen */ }
+    throw lastErr;
+  }
+  throw new Error(`${label} failed`);
 }
 
 function isRetryable(e) {
