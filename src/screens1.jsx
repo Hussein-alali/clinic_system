@@ -1770,6 +1770,34 @@ function ModalityAdder({ onAdd }) {
 
 // Patient documents — backed by the normalized `patient_files` table via
 // window.listPatientFiles / uploadPatientFile (Supabase Storage + LS fallback).
+// Image thumbnail for a patient file. Resolves a short-lived signed URL
+// through window.getPatientFileUrl (R2 gateway, or Supabase signed URL in
+// legacy mode) instead of relying on a raw public `file_url` — which is now
+// dead on the private bucket. Clickability keys off storage_path||file_url.
+function FileThumb({ f, isImage, kindLabel, onOpen }) {
+  const [url, setUrl] = React.useState("");
+  const clickable = !!(f.storage_path || f.file_url);
+  React.useEffect(() => {
+    let alive = true;
+    if (!isImage(f)) { setUrl(""); return; }
+    (async () => {
+      try {
+        const u = window.getPatientFileUrl ? await window.getPatientFileUrl(f) : (f.file_url || "");
+        if (alive) setUrl(u || "");
+      } catch { if (alive) setUrl(""); }
+    })();
+    return () => { alive = false; };
+  }, [f.file_id, f.storage_path, f.file_url]);
+  return (
+    <div className="ph" style={{ height: 120, borderRadius: 0, borderBottom: "1px solid var(--blue-100)", cursor: clickable ? "pointer" : "default", padding: 0, overflow: "hidden" }}
+      onClick={() => clickable && onOpen(f)}>
+      {isImage(f) && url
+        ? <img src={url} alt={f.file_name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+        : `${kindLabel(f)} preview`}
+    </div>
+  );
+}
+
 function PatientFiles({ p }) {
   const pid = (p && (p.patient_id || p.id)) || null;
   const fileRef = React.useRef(null);
@@ -1898,12 +1926,7 @@ function PatientFiles({ p }) {
         <div className="grid-3">
           {files.map((f) => (
             <div key={f.file_id} className="card" style={{ padding: 0, overflow: "hidden" }}>
-              <div className="ph" style={{ height: 120, borderRadius: 0, borderBottom: "1px solid var(--blue-100)", cursor: f.file_url ? "pointer" : "default", padding: 0, overflow: "hidden" }}
-                onClick={() => f.file_url && openFile(f)}>
-                {isImage(f) && f.file_url
-                  ? <img src={f.file_url} alt={f.file_name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                  : `${kindLabel(f)} preview`}
-              </div>
+              <FileThumb f={f} isImage={isImage} kindLabel={kindLabel} onOpen={openFile} />
               <div style={{ padding: 12, display: "flex", alignItems: "center", gap: 10 }}>
                 <div style={{ width: 32, height: 32, borderRadius: 8, background: "var(--blue-100)", color: "var(--blue-700)", display: "flex", alignItems: "center", justifyContent: "center" }}>
                   <I.FileText size={15} />

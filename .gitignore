@@ -2,6 +2,13 @@ node_modules/
 *.log
 .DS_Store
 
+# Secrets / local env — never commit
+.env
+.env.*
+!.env.example
+migration/.env
+migration/reports/
+
 # Python
 __pycache__/
 *.pyc

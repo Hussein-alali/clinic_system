@@ -22,6 +22,11 @@ if (SUPABASE_URL && SUPABASE_ANON_KEY && window.supabase && window.supabase.crea
   sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 }
 window.SB = sb;
+// Expose config so the centralized StorageService (loaded right after this
+// file) can reach the r2-storage Edge Function and read the session token
+// without re-declaring the URL / anon key.
+window.SUPABASE_URL = SUPABASE_URL;
+window.SUPABASE_ANON_KEY = SUPABASE_ANON_KEY;
 // Demo mode removed — all data flows through PostgreSQL. IS_DEMO is
 // kept as a stable `false` so any lingering call sites become no-ops.
 window.IS_DEMO = false;
@@ -1821,9 +1826,15 @@ function __receiptValid(file) {
 // Upload one receipt file → Supabase Storage. Returns
 // { storage_path, file_url } on success, or throws with a clear message.
 async function __uploadReceiptFile(patientId, receiptId, file) {
-  if (!sb) throw new Error("لم يتم تكوين قاعدة البيانات");
   const safe = sanitizeFileName(file.name);
   const path = `receipts/${patientId}/${receiptId}-${safe}`;
+  // R2 mode: upload via the centralized StorageService (same key/prefix).
+  if (window.StorageService && window.StorageService.isEnabled()) {
+    const up = await window.StorageService.uploadFile(path, file, { contentType: file.type });
+    if (!up || !up.ok) throw new Error((up && up.error) || "تعذّر رفع الإيصال");
+    return { storage_path: path, file_url: "" };
+  }
+  if (!sb) throw new Error("لم يتم تكوين قاعدة البيانات");
   const { error: upErr } = await sb.storage.from(PATIENT_FILES_BUCKET)
     .upload(path, file, { cacheControl: "3600", upsert: false, contentType: file.type || undefined });
   if (upErr) throw new Error(upErr.message || "تعذّر رفع الإيصال");
@@ -1832,9 +1843,14 @@ async function __uploadReceiptFile(patientId, receiptId, file) {
 }
 
 async function __removeReceiptFile(storage_path) {
-  if (!sb || !storage_path) return;
-  try { await sb.storage.from(PATIENT_FILES_BUCKET).remove([storage_path]); }
-  catch (e) { console.warn("cleanup receipt file failed", e); }
+  if (!storage_path) return;
+  try {
+    if (window.StorageService && window.StorageService.isEnabled()) {
+      await window.StorageService.remove(storage_path);
+    } else if (sb) {
+      await sb.storage.from(PATIENT_FILES_BUCKET).remove([storage_path]);
+    }
+  } catch (e) { console.warn("cleanup receipt file failed", e); }
 }
 
 async function __insertReceiptRow(row) {
@@ -2125,16 +2141,33 @@ async function uploadPatientFile(patientId, file, onProgress) {
   const uploader = currentUploader();
   try { onProgress && onProgress(5); } catch {}
 
-  const { error: upErr } = await sb.storage.from(PATIENT_FILES_BUCKET)
-    .upload(path, file, { cacheControl: "3600", upsert: false, contentType: file.type || undefined });
-  if (upErr) {
-    const msg = upErr.message || "تعذّر رفع الملف إلى التخزين";
-    console.warn("uploadPatientFile storage failed", msg);
-    return { ok: false, error: msg };
+  // Route the binary through the centralized StorageService when R2 is
+  // enabled; otherwise keep the original Supabase-direct upload. Same key
+  // (`path`) either way, so object keys are preserved across backends.
+  const useR2 = !!(window.StorageService && window.StorageService.isEnabled());
+  let publicUrl = "";
+  if (useR2) {
+    const up = await window.StorageService.uploadFile(path, file, { onProgress });
+    if (!up || !up.ok) {
+      const msg = (up && up.error) || "تعذّر رفع الملف إلى التخزين";
+      console.warn("uploadPatientFile R2 failed", msg);
+      return { ok: false, error: msg };
+    }
+    // Private R2 bucket → no stable public URL. `storage_path` (the key) is
+    // the source of truth; the viewer resolves a short-lived signed URL via
+    // getPatientFileUrl(). We never persist a signed URL (it expires).
+    publicUrl = "";
+  } else {
+    const { error: upErr } = await sb.storage.from(PATIENT_FILES_BUCKET)
+      .upload(path, file, { cacheControl: "3600", upsert: false, contentType: file.type || undefined });
+    if (upErr) {
+      const msg = upErr.message || "تعذّر رفع الملف إلى التخزين";
+      console.warn("uploadPatientFile storage failed", msg);
+      return { ok: false, error: msg };
+    }
+    const { data: pub } = sb.storage.from(PATIENT_FILES_BUCKET).getPublicUrl(path);
+    publicUrl = (pub && pub.publicUrl) || "";
   }
-
-  const { data: pub } = sb.storage.from(PATIENT_FILES_BUCKET).getPublicUrl(path);
-  const publicUrl = (pub && pub.publicUrl) || "";
   const row = {
     file_id:          fileId,
     patient_id:       patientId,
@@ -2152,9 +2185,12 @@ async function uploadPatientFile(patientId, file, onProgress) {
 
   const { data: inserted, error: insErr } = await sb.from("patient_files").insert(row).select().single();
   if (insErr) {
-    // Compensating rollback — delete the storage object we just uploaded.
-    try { await sb.storage.from(PATIENT_FILES_BUCKET).remove([path]); }
-    catch (e) { console.warn("uploadPatientFile rollback failed", e); }
+    // Compensating rollback — delete the storage object we just uploaded,
+    // on whichever backend it landed.
+    try {
+      if (useR2) await window.StorageService.remove(path);
+      else await sb.storage.from(PATIENT_FILES_BUCKET).remove([path]);
+    } catch (e) { console.warn("uploadPatientFile rollback failed", e); }
     const msg = insErr.message || "تعذّر حفظ بيانات الملف";
     console.warn("uploadPatientFile insert failed", msg);
     return { ok: false, error: msg };
@@ -2201,8 +2237,17 @@ async function removePatientFile(fileId) {
 
   const path = existing && existing.storage_path;
   if (path) {
-    const { error: sErr } = await sb.storage.from(PATIENT_FILES_BUCKET).remove([path]);
-    if (sErr) console.warn("removePatientFile storage delete failed", sErr.message || sErr);
+    if (window.StorageService && window.StorageService.isEnabled()) {
+      // Delete the R2 object only. The legacy Supabase copy is intentionally
+      // preserved as a backup (project rule: never auto-delete source files).
+      // The UI never requests this key again because its DB row is now gone,
+      // so the read fallback cannot resurrect it.
+      const r = await window.StorageService.remove(path);
+      if (!r || !r.ok) console.warn("removePatientFile R2 delete failed", r && r.error);
+    } else {
+      const { error: sErr } = await sb.storage.from(PATIENT_FILES_BUCKET).remove([path]);
+      if (sErr) console.warn("removePatientFile storage delete failed", sErr.message || sErr);
+    }
   }
 
   console.info("patient file deleted", { file_id: fileId });
@@ -2212,12 +2257,23 @@ async function removePatientFile(fileId) {
 
 // Signed URL for private buckets (falls back to whatever file_url already
 // holds, which is a public URL when the bucket is public).
-async function getPatientFileUrl(row, expiresSeconds = 3600) {
+async function getPatientFileUrl(row, expiresSeconds = 300) {
   if (!row) return "";
-  if (!sb || !row.storage_path) return row.file_url || "";
+  const key = row.storage_path || "";
+  // R2 mode: resolve through the gateway (R2 first, Supabase fallback).
+  if (window.StorageService && window.StorageService.isEnabled() && key) {
+    try {
+      const url = await window.StorageService.getUrl(key, expiresSeconds);
+      if (url) return url;
+    } catch (e) { console.warn("getPatientFileUrl R2 failed", e); }
+    return row.file_url || "";
+  }
+  // Legacy mode: Supabase signed URL (works whether the bucket is public or
+  // private), falling back to any stored URL.
+  if (!sb || !key) return row.file_url || "";
   try {
     const { data, error } = await sb.storage.from(PATIENT_FILES_BUCKET)
-      .createSignedUrl(row.storage_path, expiresSeconds);
+      .createSignedUrl(key, expiresSeconds);
     if (error) { console.warn("createSignedUrl failed", error.message || error); return row.file_url || ""; }
     return (data && data.signedUrl) || row.file_url || "";
   } catch (e) { console.warn("createSignedUrl failed", e); return row.file_url || ""; }
