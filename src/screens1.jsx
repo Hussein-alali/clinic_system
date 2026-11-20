@@ -1178,7 +1178,7 @@ function PatientDetail({ p: pIn, onBack, go }) {
           {/* tabs */}
           <div className="card" style={{padding:0,overflow:"hidden"}}>
             <div className="stepper" style={{borderBottom:"1px solid var(--ink-200)",padding:"0 18px",gap:4}}>
-              {["نظرة عامة","السجل","خطة العلاج","الجلسات","الملفات","الفواتير"].map(t=>(
+              {["نظرة عامة","السجل","خطة العلاج","التشخيص","الجلسات","الملفات","الفواتير"].map(t=>(
                 <button key={t} onClick={()=>setTab(t)} style={{
                   border:"none",background:"transparent",padding:"14px 12px",
                   fontSize:13,fontWeight:500,whiteSpace:"nowrap",flexShrink:0,
@@ -1193,6 +1193,7 @@ function PatientDetail({ p: pIn, onBack, go }) {
               {tab==="نظرة عامة" && <PatientOverview p={p}/>}
               {tab==="السجل" && <PatientHistory p={p}/>}
               {tab==="خطة العلاج" && <PatientTreatmentPlan p={p}/>}
+              {tab==="التشخيص" && <PatientDiagnoses p={p}/>}
               {tab==="الجلسات" && <SessionTimeline mini p={p}/>}
               {tab==="الملفات" && <PatientFiles p={p}/>}
               {tab==="الفواتير" && <PatientInvoices p={p}/>}
@@ -1770,6 +1771,126 @@ function ModalityAdder({ onAdd }) {
 
 // Patient documents — backed by the normalized `patient_files` table via
 // window.listPatientFiles / uploadPatientFile (Supabase Storage + LS fallback).
+// ── Patient diagnoses ────────────────────────────────────────────────
+// Read-only view of the saved physio_sessions for this patient, shown as a
+// "التشخيص" section inside the patient's profile: the doctor's fields plus
+// the body-diagram image with the exact saved coordinates.
+function BodyDiagramReadOnly({ markers }) {
+  const list = Array.isArray(markers) ? markers : [];
+  return (
+    <div style={{ position: "relative", width: "100%", maxWidth: 520, margin: "0 auto", background: "#fff", border: "1px solid var(--ink-200)", borderRadius: 12, overflow: "hidden" }}>
+      <img src="/assets/body-diagram.jpeg" alt="Body diagram" draggable={false}
+        style={{ width: "100%", display: "block", pointerEvents: "none" }} />
+      {list.map((m, i) => (
+        <div key={i} style={{
+          position: "absolute", left: `${m.x}%`, top: `${m.y}%`,
+          width: 14, height: 14, marginLeft: -7, marginTop: -7, borderRadius: "50%",
+          background: "var(--red)", border: "2px solid #fff",
+          boxShadow: "0 1px 4px rgba(0,0,0,0.35)", pointerEvents: "none",
+        }} />
+      ))}
+    </div>
+  );
+}
+
+// Turn a saved physio form snapshot into [label, value] rows, skipping blanks.
+function diagnosisFieldRows(d) {
+  const rows = [];
+  const push = (label, val) => { if (val !== undefined && val !== null && val !== "" && val !== false) rows.push([label, String(val)]); };
+  const tr = (key, label) => { const r = d[key]; if (r && r.on) push(label, r.mode ? `نعم — ${r.mode}` : "نعم"); };
+  push("التشخيص", d.diagnosis);
+  tr("cervical", "Cervical"); tr("thll", "Th L/L"); tr("thpl", "Th P/L");
+  if (d.shortWave) push("Short Wave", "نعم");
+  push("ملاحظات الشد", d.tractionNotes);
+  const mods = d.modalities ? Object.keys(d.modalities).filter(k => d.modalities[k]) : [];
+  if (mods.length) push("الوسائل العلاجية", mods.join("، "));
+  push("ملاحظات الوسائل", d.modalitiesNotes);
+  if (d.nGlide) push("N. Glide", d.nGlideNotes ? `نعم — ${d.nGlideNotes}` : "نعم");
+  push("Ms Release", d.msRelease);
+  push("Positioning", d.positioning);
+  push("التمارين", d.exercises);
+  push("ملاحظات التقنيات اليدوية", d.manualNotes);
+  return rows;
+}
+
+function PatientDiagnoses({ p }) {
+  const pid = (p && (p.patient_id || p.id)) || null;
+  const [rows, setRows] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+
+  const reload = React.useCallback(async () => {
+    if (!pid || !window.PhysioSessions) { setRows([]); setLoading(false); return; }
+    setLoading(true);
+    try { setRows(await window.PhysioSessions.list(pid)); }
+    catch (e) { console.warn("load diagnoses failed", e); setRows([]); }
+    finally { setLoading(false); }
+  }, [pid]);
+
+  React.useEffect(() => { reload(); }, [reload]);
+  React.useEffect(() => {
+    const h = () => reload();
+    window.addEventListener("kinetic:physio-updated", h);
+    return () => window.removeEventListener("kinetic:physio-updated", h);
+  }, [reload]);
+
+  const therapistName = (id) => {
+    const t = (DATA.therapists || []).find(x => (x.staff_id || x.id) === id);
+    return t ? (t.name || "") : "";
+  };
+
+  if (loading) return <div className="muted" style={{ padding: 8 }}>جارٍ التحميل…</div>;
+  if (!rows.length) return <EmptyState icon={<I.Stethoscope size={22} />} title="لا توجد تشخيصات بعد" body="تظهر هنا تشخيصات الدكتور المحفوظة مع الصورة والإحداثيات." />;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {rows.map((h) => {
+        const d = h.data || {};
+        const fields = diagnosisFieldRows(d);
+        const when = String(h.created_at || "").replace("T", " ").slice(0, 16);
+        const tName = therapistName(h.therapist_id);
+        const markers = Array.isArray(d.markers) ? d.markers : [];
+        return (
+          <div key={h.id} className="card" style={{ padding: 18 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+              <div style={{ width: 34, height: 34, borderRadius: 9, background: "var(--blue-100)", color: "var(--blue-700)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <I.Stethoscope size={16} />
+              </div>
+              <div style={{ flex: 1, textAlign: "right", minWidth: 0 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "var(--ink-900)" }}>
+                  {d.diagnosis ? d.diagnosis : "تشخيص"}
+                </div>
+                <div className="muted mono" style={{ fontSize: 11 }}>
+                  {when}{tName ? ` · ${tName}` : (h.created_by_name ? ` · ${h.created_by_name}` : "")} · {markers.length} علامة
+                </div>
+              </div>
+            </div>
+
+            {fields.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: markers.length ? 16 : 0 }}>
+                {fields.map(([label, val], i) => (
+                  <div key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", flexDirection: "row-reverse", borderBottom: "1px solid var(--ink-100)", paddingBottom: 8 }}>
+                    <div style={{ minWidth: 140, fontSize: 12.5, fontWeight: 600, color: "var(--ink-500)", textAlign: "right" }}>{label}</div>
+                    <div style={{ flex: 1, fontSize: 13, color: "var(--ink-900)", textAlign: "right", whiteSpace: "pre-wrap" }}>{val}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {markers.length > 0 && (
+              <div>
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink-500)", textAlign: "right", marginBottom: 8 }}>
+                  مواضع الإصابة على الجسم ({markers.length})
+                </div>
+                <BodyDiagramReadOnly markers={markers} />
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // Image thumbnail for a patient file. Resolves a short-lived signed URL
 // through window.getPatientFileUrl (R2 gateway, or Supabase signed URL in
 // legacy mode) instead of relying on a raw public `file_url` — which is now
