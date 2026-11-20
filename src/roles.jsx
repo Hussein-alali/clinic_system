@@ -281,7 +281,7 @@ function DoctorDashboard({ go, user }){
         title={<>أهلاً، {user.name} <span style={{display:"inline-block",transform:"translateY(-2px)"}}>🩺</span></>}
         sub={`${todayLabelAr()} — لديك ${myAppts.length} مواعيد و${active.length} مريض نشط تحت رعايتك.`}
         right={<>
-          <button className="btn btn-secondary" onClick={()=>go("treatments")}><I.Clipboard size={14}/> خطط العلاج</button>
+          <button className="btn btn-secondary" onClick={()=>go("treatments")}><I.Clipboard size={14}/> التشخيص</button>
           <button className="btn btn-blue" onClick={()=>go("patients")}><I.Users size={14}/> مرضاي</button>
         </>}
       />

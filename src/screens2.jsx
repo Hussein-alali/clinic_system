@@ -219,8 +219,8 @@ function Treatments({ go }) {
     <Page>
       <div className="page-head">
         <div>
-          <div className="crumb"><span>الرئيسية</span><I.Chevron size={11}/><span>خطط العلاج</span></div>
-          <div className="h1">خطط العلاج</div>
+          <div className="crumb"><span>الرئيسية</span><I.Chevron size={11}/><span>التشخيص</span></div>
+          <div className="h1">التشخيص</div>
           <div className="muted" style={{fontSize:13.5,marginTop:4}}>{planStats.active} نشط · {planStats.drafts} مسودات · متوسط التقدم {avgProgress}%</div>
         </div>
         <div className="page-actions">
@@ -229,8 +229,8 @@ function Treatments({ go }) {
       </div>
 
       <div className="grid-3" style={{marginBottom:18}}>
-        <StatCard label="خطط نشطة" value={planStats.active} accent="#7BBDE8" icon={<I.Clipboard size={15}/>}/>
-        <StatCard label="خطط مكتملة" value={String(planStats.done)} accent="#3FA984" icon={<I.Check size={15}/>}/>
+        <StatCard label="تشخيصات نشطة" value={planStats.active} accent="#7BBDE8" icon={<I.Clipboard size={15}/>}/>
+        <StatCard label="تشخيصات مكتملة" value={String(planStats.done)} accent="#3FA984" icon={<I.Check size={15}/>}/>
         <StatCard label="متوسط التقدّم" value={`${avgProgress}%`} accent="#7E6BD3" icon={<I.Activity size={15}/>}/>
       </div>
 
@@ -240,7 +240,7 @@ function Treatments({ go }) {
           <thead><tr><th>الخطة</th><th>المريض</th><th>التشخيص</th><th>الأخصائي</th><th>التقدّم</th><th>الجلسات</th><th>الحالة</th><th>آخر تحديث</th>{canDelete && <th></th>}</tr></thead>
           <tbody>
             {plans.length===0 && !loadingRecords && (
-              <tr><td colSpan={canDelete?9:8}><EmptyState icon={<I.Clipboard size={22}/>} title="لا خطط علاج بعد" body="ستظهر خطط العلاج هنا بعد إنشائها."/></td></tr>
+              <tr><td colSpan={canDelete?9:8}><EmptyState icon={<I.Clipboard size={22}/>} title="لا تشخيصات بعد" body="ستظهر التشخيصات هنا بعد إنشائها."/></td></tr>
             )}
             {plans.map(p=>(
               <tr key={p.id} data-clickable="true" tabIndex={0} onClick={()=>{setSelected(p);setView("detail")}} onKeyDown={e=>{ if(e.key==="Enter"||e.key===" "){e.preventDefault();setSelected(p);setView("detail");} }}>
@@ -287,7 +287,7 @@ function TreatmentPlanDetail({ plan, onBack, canDelete, onDelete }) {
   // CREATE form and produced duplicate plans.
   return (
     <Page>
-      <div className="crumb" style={{cursor:"pointer"}} onClick={onBack}><span>خطط العلاج</span><I.Chevron size={11}/><span style={{color:"var(--ink-700)"}}>{plan.id}</span></div>
+      <div className="crumb" style={{cursor:"pointer"}} onClick={onBack}><span>التشخيص</span><I.Chevron size={11}/><span style={{color:"var(--ink-700)"}}>{plan.id}</span></div>
       <div className="page-head" style={{alignItems:"flex-start"}}>
         <div>
           <div className="h1">{plan.diag}</div>
@@ -521,7 +521,7 @@ function PhysioSessionForm({ onBack }) {
   return (
     <Page>
       <div className="crumb" style={{cursor:"pointer"}} onClick={onBack}>
-        <span>خطط العلاج</span><I.Chevron size={11}/>
+        <span>التشخيص</span><I.Chevron size={11}/>
         <span style={{color:"var(--ink-700)"}}>تشخيص</span>
       </div>
       <div className="page-head">
@@ -624,8 +624,8 @@ function PhysioSessionForm({ onBack }) {
           <PhysioTA value={form.manualNotes} onChange={e=>update({manualNotes:e.target.value})}/>
         </PhysioCard>
 
-        {/* 6. Treatment Plans — Interactive Body Diagram */}
-        <PhysioCard title="Treatment Plans">
+        {/* 6. Diagnosis image — Interactive Body Diagram */}
+        <PhysioCard title="صورة التشخيص">
           <div style={{fontSize:12.5, color:"var(--ink-500)", textAlign:"right", marginBottom:10}}>
             اضغط على أي موضع لإضافة علامة. اضغط على علامة موجودة لإزالتها.
           </div>
@@ -5081,7 +5081,7 @@ function App() {
     dashboard:    { title:"لوحة التحكم",            crumb:["الرئيسية","لوحة التحكم"] },
     patients:     { title:"المرضى",             crumb:["الرئيسية","المرضى"] },
     appointments: { title:"المواعيد",         crumb:["الرئيسية","Appointments"] },
-    treatments:   { title:"خطط العلاج",      crumb:["الرئيسية","خطط العلاج"] },
+    treatments:   { title:"التشخيص",         crumb:["الرئيسية","التشخيص"] },
     sessions:     { title:"جلسات العلاج",     crumb:["الرئيسية","جلسات العلاج"] },
     payments:     { title:"المدفوعات والفواتير",  crumb:["الرئيسية","Finance","Payments"] },
     packages:     { title:"الباقات",             crumb:["الرئيسية","Finance","Packages"] },

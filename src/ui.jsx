@@ -252,7 +252,7 @@ function Sidebar({ active, onNav, role, user, isOpen }) {
     { title: "الرعاية", items: [
       { id:"patients",    label:"المرضى",        icon: <I.Users size={17}/>, badge: pCount },
       { id:"appointments",label:"المواعيد",    icon: <I.Calendar size={17}/>, badge: aCount, badgeKind:"blue" },
-      { id:"treatments",  label:"خطط العلاج", icon: <I.Clipboard size={17}/> },
+      { id:"treatments",  label:"التشخيص", icon: <I.Clipboard size={17}/> },
       { id:"sessions",    label:"جلسات العلاج",icon: <I.Activity size={17}/> },
     ]},
     { title: "المالية", items: [
