@@ -8,10 +8,37 @@
 // ═══════════════════════════════════════════════════════════════════════
 
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { createClient } from "@supabase/supabase-js";
 import {
   S3Client, HeadObjectCommand, PutObjectCommand, HeadBucketCommand,
 } from "@aws-sdk/client-s3";
+
+// ── Auto-load migration/.env (zero-dependency) ───────────────────────────
+// So `node migrate.mjs` just works on any OS / Node version without needing
+// `set -a && . ./.env` or --env-file. Values already in the real environment
+// win; .env only fills what is missing. Runs once on import.
+(function loadDotEnv() {
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const file = path.join(here, ".env");
+    if (!fs.existsSync(file)) return;
+    for (const raw of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line || line.startsWith("#")) continue;
+      const eq = line.indexOf("=");
+      if (eq < 0) continue;
+      const key = line.slice(0, eq).trim();
+      let val = line.slice(eq + 1).trim();
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1);
+      }
+      if (key && process.env[key] === undefined) process.env[key] = val;
+    }
+  } catch { /* best effort — ignore a malformed .env */ }
+})();
 
 export function env(name, fallback) {
   const v = process.env[name];
@@ -66,9 +93,16 @@ export async function withRetry(fn, { tries = 5, baseMs = 400, label = "op" } = 
       await sleep(wait);
     }
   }
-  const err = new Error(`${label} failed after retries: ${lastErr && lastErr.message}`);
-  err.cause = lastErr;
-  throw err;
+  // Rethrow the ORIGINAL error so callers can still inspect S3 metadata
+  // (e.g. a 404 NotFound on HeadObject) and the error name. Wrapping it in a
+  // generic Error here would strip `$metadata`/`name`, which made r2Head
+  // miscount every missing object as a failure. Prefix the label for context
+  // without discarding those fields.
+  if (lastErr && typeof lastErr === "object") {
+    try { lastErr.message = `${label} failed: ${lastErr.message}`; } catch { /* frozen */ }
+    throw lastErr;
+  }
+  throw new Error(`${label} failed`);
 }
 
 function isRetryable(e) {

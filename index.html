@@ -512,7 +512,12 @@
        to false is the instant rollback. No credentials ever live here —
        the R2 keys stay in the Edge Function. See R2_MIGRATION.md. -->
   <script>
-    // window.R2_ENABLED = true;
+    // Cutover ON: files now live in Cloudflare R2 (migrated + verified
+    // 2026-11-20, 910 objects). Reads hit R2 first and fall back to Supabase
+    // for anything not found. Set this to false (or remove it) for an instant
+    // rollback to Supabase-direct. The R2 credentials live only in the
+    // r2-storage Edge Function — never here. See R2_MIGRATION.md.
+    window.R2_ENABLED = true;
     // Optional override; defaults to `${SUPABASE_URL}/functions/v1/r2-storage`.
     // window.R2_GATEWAY_URL = "https://iwqnhajzjudmhseurwmh.functions.supabase.co/r2-storage";
   </script>

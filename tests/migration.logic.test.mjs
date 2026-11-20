@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { planAction } from "../migration/lib.mjs";
+import { planAction, withRetry, r2Head } from "../migration/lib.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url)) + "/..";
 
@@ -25,6 +25,32 @@ test("planAction: present with different size => conflict, never overwrite", () 
 
 test("planAction: unknown source size, object present => treated as present", () => {
   assert.equal(planAction({ size: null }, { exists: true, size: 123 }), "skip-verified");
+});
+
+// ── Regression: withRetry must preserve the original error so r2Head can
+//    recognize a 404 (missing object) instead of miscounting it a failure.
+test("withRetry rethrows the ORIGINAL error (keeps name + $metadata)", async () => {
+  const orig = Object.assign(new Error("boom"), { name: "NotFound", $metadata: { httpStatusCode: 404 } });
+  let calls = 0;
+  await assert.rejects(
+    () => withRetry(() => { calls++; return Promise.reject(orig); }, { tries: 3, label: "head" }),
+    (e) => e.name === "NotFound" && e.$metadata && e.$metadata.httpStatusCode === 404 && /head failed/.test(e.message),
+  );
+  assert.equal(calls, 1); // 404 is non-retryable → exactly one attempt
+});
+
+test("r2Head treats a 404 as not-found, not a failure", async () => {
+  const r2 = { send: async () => { throw Object.assign(new Error("nf"), { name: "NotFound", $metadata: { httpStatusCode: 404 } }); } };
+  assert.deepEqual(await r2Head(r2, "patient-files", "missing/key.jpg"), { exists: false });
+});
+
+test("r2Head returns size/type/etag on success", async () => {
+  const r2 = { send: async () => ({ ContentLength: 123, ContentType: "image/jpeg", ETag: '"abc"' }) };
+  const res = await r2Head(r2, "patient-files", "P-1/f.jpg");
+  assert.equal(res.exists, true);
+  assert.equal(res.size, 123);
+  assert.equal(res.contentType, "image/jpeg");
+  assert.equal(res.etag, "abc");
 });
 
 // ── Non-destructive invariant (scenario: migration never deletes source) ──
