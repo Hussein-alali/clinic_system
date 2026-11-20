@@ -5,10 +5,14 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "build": "node build.mjs",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "engines": {
     "node": ">=18"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.2"
   },
   "repository": {
     "type": "git",

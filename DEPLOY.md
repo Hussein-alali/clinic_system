@@ -1,8 +1,15 @@
 # Deploying Kinetic (clinksys)
 
-The app is fully static (React + Babel Standalone in the browser). `server.js`
-is a zero-dependency Node static server so any Node host — including Railway —
-can run it with `npm start`.
+The app is static (plain React, served as files). `server.js` is a
+zero-dependency Node static server so any Node host can run it with `npm start`.
+
+The browser loads a **precompiled bundle** `dist/app.min.js` (built from
+`src/*.jsx`) plus production React — no in-browser Babel, for a fast first
+load. `dist/app.min.js` is committed, so a plain `git pull` / cPanel deploy
+serves it with no build on the server. **After editing any `src/*.jsx`, run
+`npm run build` and commit the updated `dist/app.min.js`** (needs the dev
+dependency esbuild: `npm install`). To roll back to the old in-browser-Babel
+setup, restore the previous `index.html`.
 
 ## 1. Prepare Supabase (once)
 

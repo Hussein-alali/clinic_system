@@ -492,9 +492,11 @@
   }
 </style>
 
-<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<!-- React production builds (smaller + faster than development). The app's
+     own code is precompiled into dist/app.min.js, so Babel-Standalone is no
+     longer loaded in the browser. -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <!-- SheetJS (xlsx-js-style fork) — styled Excel export for Reports.
      Community SheetJS can't write cell styles; this fork adds bold
@@ -522,19 +524,10 @@
     // window.R2_GATEWAY_URL = "https://iwqnhajzjudmhseurwmh.functions.supabase.co/r2-storage";
   </script>
 
-  <script type="text/babel" src="src/supabase.jsx"></script>
-  <!-- Centralized storage gateway client. Loads right after supabase.jsx so
-       it can read window.SB / window.SUPABASE_URL. All storage ops flow
-       through window.StorageService. -->
-  <script type="text/babel" src="src/services/storage/storage.service.jsx"></script>
-  <script type="text/babel" src="src/core.jsx"></script>
-  <script type="text/babel" src="src/ui.jsx"></script>
-  <script type="text/babel" src="src/screens1.jsx"></script>
-  <script type="text/babel" src="src/roles.jsx"></script>
-  <script type="text/babel" src="src/multisession.jsx"></script>
-  <!-- TEMPORARY: historical patient import page (?import=1). Remove this line
-       and src/import.jsx after the paper-record migration is complete. -->
-  <script type="text/babel" src="src/import.jsx"></script>
-  <script type="text/babel" src="src/screens2.jsx"></script>
+  <!-- Precompiled application bundle, built from src/*.jsx by `npm run build`
+       (see build.mjs). This replaces the per-file in-browser Babel compilation
+       for a much faster first load. After editing any src/*.jsx, run
+       `npm run build` and commit the updated dist/app.min.js. -->
+  <script src="dist/app.min.js"></script>
 </body>
 </html>
