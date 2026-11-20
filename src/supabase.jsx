@@ -2280,6 +2280,62 @@ async function getPatientFileUrl(row, expiresSeconds = 300) {
 }
 
 // ══════════════════════════════════════════════════════════════
+// Physio diagnosis sessions — `physio_sessions` table. Each saved
+// diagnosis is ONE history row per patient, holding the full form
+// snapshot (diagnosis text, modalities, and the body-diagram markers
+// [{view,x,y}]). This replaces the old localStorage-only persistence
+// so coordinates become part of the permanent, cross-device record.
+// ══════════════════════════════════════════════════════════════
+function __physioId() {
+  return "ps_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+
+// Insert a new diagnosis history row. Returns { ok, row?, error? }.
+async function savePhysioSession(patientId, therapistId, formData) {
+  if (!patientId) return { ok: false, error: "معرّف المريض غير محدد" };
+  if (!sb) return { ok: false, error: "لم يتم تكوين قاعدة البيانات" };
+  const uploader = currentUploader();
+  const row = {
+    id:              __physioId(),
+    patient_id:      patientId,
+    therapist_id:    therapistId || null,
+    data:            formData || {},
+    created_by:      uploader.id,
+    created_by_name: uploader.name,
+    created_at:      new Date().toISOString(),
+  };
+  const { data, error } = await sb.from("physio_sessions").insert(row).select().single();
+  if (error) {
+    console.warn("savePhysioSession failed", error.message || error);
+    return { ok: false, error: error.message || "تعذّر حفظ التشخيص" };
+  }
+  window.dispatchEvent(new CustomEvent("kinetic:physio-updated", { detail: { patientId } }));
+  return { ok: true, row: data || row };
+}
+
+// Full diagnosis history for a patient, newest first.
+async function listPhysioSessions(patientId) {
+  if (!patientId || !sb) return [];
+  const { data, error } = await sb.from("physio_sessions")
+    .select("*").eq("patient_id", patientId).order("created_at", { ascending: false });
+  if (error) { console.warn("listPhysioSessions failed", error.message || error); return []; }
+  return Array.isArray(data) ? data : [];
+}
+
+// Most recent diagnosis (used to prefill the form when reopened).
+async function latestPhysioSession(patientId) {
+  const rows = await listPhysioSessions(patientId);
+  return rows[0] || null;
+}
+
+const PhysioSessions = {
+  save:   savePhysioSession,
+  list:   listPhysioSessions,
+  latest: latestPhysioSession,
+};
+window.PhysioSessions = PhysioSessions;
+
+// ══════════════════════════════════════════════════════════════
 // Treatment Plan Templates API
 // Reads / writes public.treatment_templates via RPCs. In demo/LS
 // mode, mirrors state under `kinetic.treatment_templates.v1` so

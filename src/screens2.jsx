@@ -424,20 +424,42 @@ function PhysioSessionForm({ onBack }) {
   const [patientId, setPatientId]     = React.useState("");
   const [therapistId, setTherapistId] = React.useState("");
   const [form, setForm] = React.useState(PHYSIO_EMPTY);
+  const [saving, setSaving]   = React.useState(false);
+  const [history, setHistory] = React.useState([]);
 
-  // Load any previously-saved session for this patient (markers +
-  // everything else). Blank patient falls back to a shared draft slot.
-  React.useEffect(() => {
-    try {
-      const raw = localStorage.getItem(physioStoreKey(patientId));
-      if (raw) {
-        const saved = JSON.parse(raw);
-        setForm({ ...PHYSIO_EMPTY, ...saved });
-        return;
-      }
-    } catch (_) {}
-    setForm(PHYSIO_EMPTY);
+  // Load the patient's saved diagnosis history from the database.
+  const loadHistory = React.useCallback(async () => {
+    if (!patientId || !window.PhysioSessions) { setHistory([]); return; }
+    try { setHistory(await window.PhysioSessions.list(patientId)); }
+    catch (e) { console.warn("load physio history failed", e); setHistory([]); }
   }, [patientId]);
+
+  // Prefill the form from the most recent SAVED diagnosis in the database
+  // (cross-device, permanent). Fall back to a local draft only if the DB has
+  // nothing yet (e.g. offline or never saved).
+  React.useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        if (patientId && window.PhysioSessions) {
+          const latest = await window.PhysioSessions.latest(patientId);
+          if (alive && latest && latest.data) {
+            setForm({ ...PHYSIO_EMPTY, ...latest.data });
+            if (latest.therapist_id) setTherapistId(latest.therapist_id);
+            return;
+          }
+        }
+      } catch (e) { console.warn("load physio from DB failed", e); }
+      try {
+        const raw = localStorage.getItem(physioStoreKey(patientId));
+        if (raw && alive) { setForm({ ...PHYSIO_EMPTY, ...JSON.parse(raw) }); return; }
+      } catch (_) {}
+      if (alive) setForm(PHYSIO_EMPTY);
+    })();
+    return () => { alive = false; };
+  }, [patientId]);
+
+  React.useEffect(() => { loadHistory(); }, [loadHistory]);
 
   const update = (patch) => setForm(f => ({ ...f, ...patch }));
 
@@ -453,15 +475,32 @@ function PhysioSessionForm({ onBack }) {
     setForm(f => ({ ...f, [key]: { ...f[key], ...patch } }));
   }
 
-  function save() {
+  async function save() {
     if (!therapistId) { window.showToast && window.showToast("اختر الأخصائي المسؤول", "error"); return; }
     if (!patientId)   { window.showToast && window.showToast("اختر المريض", "error"); return; }
+    if (saving) return;
+    setSaving(true);
+    // Keep a local draft too (offline resilience / instant reopen).
+    try { localStorage.setItem(physioStoreKey(patientId), JSON.stringify(form)); } catch (_) {}
     try {
-      localStorage.setItem(physioStoreKey(patientId), JSON.stringify(form));
-      window.showToast && window.showToast("تم حفظ نموذج الجلسة", "success");
-    } catch (_) {
-      window.showToast && window.showToast("تعذّر الحفظ محليًا", "error");
-    }
+      const res = window.PhysioSessions
+        ? await window.PhysioSessions.save(patientId, therapistId, form)
+        : { ok: false, error: "غير متاح" };
+      if (res && res.ok) {
+        window.showToast && window.showToast("تم حفظ التشخيص في سجل المريض", "success");
+        await loadHistory();
+      } else {
+        window.showToast && window.showToast((res && res.error) || "تعذّر الحفظ في قاعدة البيانات (حُفظ محليًا فقط)", "error");
+      }
+    } finally { setSaving(false); }
+  }
+
+  // Load a past diagnosis from history back into the form (read/continue).
+  function openHistoryEntry(entry) {
+    if (!entry || !entry.data) return;
+    setForm({ ...PHYSIO_EMPTY, ...entry.data });
+    if (entry.therapist_id) setTherapistId(entry.therapist_id);
+    window.showToast && window.showToast("تم فتح تشخيص سابق", "success");
   }
 
   const tractionRow = (key, label, options) => {
@@ -489,7 +528,7 @@ function PhysioSessionForm({ onBack }) {
         <div className="h1">تشخيص</div>
         <div className="page-actions">
           <button className="btn btn-ghost" onClick={onBack}>رجوع</button>
-          <button className="btn btn-blue" onClick={save}><I.Check size={13}/> حفظ الجلسة</button>
+          <button className="btn btn-blue" onClick={save} disabled={saving}><I.Check size={13}/> {saving ? "جارٍ الحفظ…" : "حفظ التشخيص"}</button>
         </div>
       </div>
 
@@ -598,6 +637,38 @@ function PhysioSessionForm({ onBack }) {
             المواضع المحددة: {form.markers.length}
           </div>
         </PhysioCard>
+
+        {/* 7. Saved diagnosis history (permanent, cross-device record) */}
+        {patientId ? (
+          <PhysioCard title={`التشخيصات السابقة (${history.length})`}>
+            {history.length === 0 ? (
+              <div style={{fontSize:12.5, color:"var(--ink-500)", textAlign:"right"}}>
+                لا توجد تشخيصات محفوظة بعد لهذا المريض.
+              </div>
+            ) : (
+              <div style={{display:"flex", flexDirection:"column", gap:8}}>
+                {history.map((h) => {
+                  const d = h.data || {};
+                  const markers = Array.isArray(d.markers) ? d.markers.length : 0;
+                  const when = String(h.created_at || "").replace("T", " ").slice(0, 16);
+                  return (
+                    <div key={h.id} style={{display:"flex", alignItems:"center", gap:10, padding:"10px 12px", border:"1px solid var(--ink-200)", borderRadius:10, background:"#fff"}}>
+                      <button type="button" className="btn btn-secondary" onClick={() => openHistoryEntry(h)}>فتح</button>
+                      <div style={{flex:1, textAlign:"right", minWidth:0}}>
+                        <div style={{fontSize:13, fontWeight:600, color:"var(--ink-900)", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>
+                          {d.diagnosis ? d.diagnosis : "تشخيص بدون عنوان"}
+                        </div>
+                        <div className="muted" style={{fontSize:11}}>
+                          {when}{h.created_by_name ? ` · ${h.created_by_name}` : ""} · {markers} علامة
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </PhysioCard>
+        ) : null}
 
       </div>
     </Page>
