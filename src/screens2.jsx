@@ -624,8 +624,8 @@ function PhysioSessionForm({ onBack }) {
           <PhysioTA value={form.manualNotes} onChange={e=>update({manualNotes:e.target.value})}/>
         </PhysioCard>
 
-        {/* 6. Treatment Plans — Interactive Body Diagram */}
-        <PhysioCard title="Treatment Plans">
+        {/* 6. Diagnosis image — Interactive Body Diagram */}
+        <PhysioCard title="صورة التشخيص">
           <div style={{fontSize:12.5, color:"var(--ink-500)", textAlign:"right", marginBottom:10}}>
             اضغط على أي موضع لإضافة علامة. اضغط على علامة موجودة لإزالتها.
           </div>

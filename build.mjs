@@ -46,6 +46,7 @@ for (const rel of FILES) {
     minifySyntax: true,
     minifyIdentifiers: false,  // keep global names so cross-file refs survive
     legalComments: "none",
+    charset: "utf8",           // keep Arabic/UTF-8 literals readable (not \u escaped)
     sourcefile: rel,
   });
   parts.push(`/* ${rel} */\n${out.code}`);

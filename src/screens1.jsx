@@ -1178,7 +1178,7 @@ function PatientDetail({ p: pIn, onBack, go }) {
           {/* tabs */}
           <div className="card" style={{padding:0,overflow:"hidden"}}>
             <div className="stepper" style={{borderBottom:"1px solid var(--ink-200)",padding:"0 18px",gap:4}}>
-              {["نظرة عامة","السجل","خطة العلاج","التشخيص","الجلسات","الملفات","الفواتير"].map(t=>(
+              {["نظرة عامة","السجل","التشخيص","الجلسات","الملفات","الفواتير"].map(t=>(
                 <button key={t} onClick={()=>setTab(t)} style={{
                   border:"none",background:"transparent",padding:"14px 12px",
                   fontSize:13,fontWeight:500,whiteSpace:"nowrap",flexShrink:0,
@@ -1192,7 +1192,6 @@ function PatientDetail({ p: pIn, onBack, go }) {
             <div style={{padding:22}}>
               {tab==="نظرة عامة" && <PatientOverview p={p}/>}
               {tab==="السجل" && <PatientHistory p={p}/>}
-              {tab==="خطة العلاج" && <PatientTreatmentPlan p={p}/>}
               {tab==="التشخيص" && <PatientDiagnoses p={p}/>}
               {tab==="الجلسات" && <SessionTimeline mini p={p}/>}
               {tab==="الملفات" && <PatientFiles p={p}/>}
