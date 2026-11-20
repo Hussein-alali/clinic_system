@@ -2358,8 +2358,11 @@ function FormReview({ form }) {
   );
 }
 
-Object.assign(window, { Patients, PatientDetail, SessionTimeline: null });
-// SessionTimeline gets defined in treatments.jsx
+Object.assign(window, { Patients, PatientDetail });
+// NOTE: do NOT add `SessionTimeline: null` here. It is defined later (in
+// screens2.jsx) as a hoisted global; a `= null` placeholder that runs after
+// hoisting would null it out once everything is concatenated into one bundle
+// (dist/app.min.js), breaking the patient "الجلسات" tab with React error #130.
 
 
 // ===== src/appointments.jsx =====
