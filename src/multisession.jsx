@@ -489,7 +489,7 @@ function SessionDetail({ s, elapsed, update, onEnd, onTogglePause }){
         ) : (
           <div className="card card-pad" style={{background:"var(--ink-50)"}}>
             <div style={{fontSize:12.5,color:"var(--ink-500)",lineHeight:1.6}}>
-              لا توجد خطة علاج نشطة لهذا المريض — أنشئ خطة من شاشة «خطط العلاج» لتُحمَّل الأهداف والتمارين تلقائيًا في الجلسات القادمة.
+              لا توجد خطة علاج نشطة لهذا المريض — أنشئ خطة من شاشة «التشخيص» لتُحمَّل الأهداف والتمارين تلقائيًا في الجلسات القادمة.
             </div>
           </div>
         )}
